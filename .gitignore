@@ -1,0 +1,3 @@
+dist/
+*.pak
+__pycache__/
