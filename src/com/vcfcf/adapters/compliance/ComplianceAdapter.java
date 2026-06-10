@@ -66,11 +66,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile String previousProfileName;
 
 	public ComplianceAdapter() {
-		super();
+		super(ADAPTER_KIND);
 	}
 
 	public ComplianceAdapter(String adapterDir, Integer adapterInstanceId) {
-		super(adapterDir, adapterInstanceId);
+		super(ADAPTER_KIND, adapterDir, adapterInstanceId);
 	}
 
 	@Override
@@ -79,11 +79,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	// -----------------------------------------------------------------------
-	// onDescribe — provided by the framework base (VcfCfAdapter, commit
-	// 750e0ee). The default resolves getAdapterDescribeFile(getAdapterKind(),
-	// "describe.xml") and AdapterDescribe.make(is) — byte-for-byte the behavior
-	// this adapter used to override, so the explicit override was removed in
-	// build 44 (less code to maintain; getAdapterKind() == "vcfcf_compliance").
+	// onDescribe — provided by the framework base (VcfCfAdapter). The default
+	// resolves the kind from the constructor-stored adapterKindKey
+	// (super(ADAPTER_KIND)) — NOT getAdapterKind(), which is null during the
+	// controller's bare describe phase at install time (build 44 root cause:
+	// controller-side bare instantiation, no platform injection). The
+	// constructor-stored key makes getAdapterDescribeFile(ADAPTER_KIND,
+	// "describe.xml") resolve correctly in both controller and collector
+	// contexts. See lessons/controller-describe-bare-instantiation.md.
 	// -----------------------------------------------------------------------
 
 	// -----------------------------------------------------------------------
