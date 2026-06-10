@@ -401,6 +401,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ "and Summary|hosts_below_threshold so the scoreboard "
 					+ "reads 'no data' rather than a sentinel value");
 		}
+		// Build 50 (review W1): first-class world-level staleness visibility.
+		// Count of hosts whose avg_host_score contribution came from the
+		// last-known cache this cycle (channel-unreadable but folded their
+		// last-known score). 0 when every averaged host was read live. Pushed
+		// EVERY cycle so an operator can see "N of M averaged hosts are stale"
+		// rather than inferring it from an indirect control count.
+		pushWorldMetric(out, "Summary|hosts_scored_stale",
+				(double) hostStats.staleScored, ts);
 
 		pushWorldMetric(out, "Summary|total_vms", (double) vmStats.total, ts);
 		if (vmStats.scored > 0) {
@@ -707,7 +715,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				// Task #16: remember this host's score so a future cycle in
 				// which the host is unreadable can still contribute it to the
 				// world average. Keyed by stable MOID.
-				lastKnownHostScore.put(hostId, cr.score);
+				// Build 50 (review W2): null-guard the write to match the read
+				// side (applyLastKnownForUnreadableHost). ConcurrentHashMap.put
+				// throws NPE on a null key; the per-host loop has no per-host
+				// try/catch and collectHosts propagates, so an unguarded put on
+				// a (theoretical) null MOID would abort the whole cycle.
+				if (hostId != null) {
+					lastKnownHostScore.put(hostId, cr.score);
+				}
 			}
 
 			logInfo("Host " + hostName + ": score="
@@ -723,7 +738,39 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				}
 			}
 		}
+		// Build 50 (review N1): evict last-known-score entries for hosts no
+		// longer in the current inventory, so the cache cannot grow unboundedly
+		// across host churn (a removed host would otherwise linger forever).
+		// The current getHosts() set is authoritative for "what exists"; a host
+		// absent this cycle because it is merely unreadable is NOT removed —
+		// getHosts() still enumerates it (the connectionState/flap branches keep
+		// it in `hosts`), so only genuinely de-inventoried hosts are pruned.
+		evictAbsentHostScores(hosts);
 		return stats;
+	}
+
+	/**
+	 * Build 50 (review N1) — prune {@link #lastKnownHostScore} keys not present
+	 * in the current inventory set. Keeps the map bounded by the live host count
+	 * across long-running collectors with host churn. A host that is unreadable
+	 * this cycle still appears in {@code hosts} (it is enumerated, just not
+	 * scored), so its cached score survives; only hosts removed from vCenter
+	 * entirely are evicted.
+	 */
+	private void evictAbsentHostScores(
+			java.util.List<VSphereClient.HostInfo> hosts) {
+		java.util.Set<String> live = new java.util.HashSet<>();
+		for (VSphereClient.HostInfo h : hosts) {
+			if (h.moid != null) live.add(h.moid);
+		}
+		int before = lastKnownHostScore.size();
+		lastKnownHostScore.keySet().retainAll(live);
+		int evicted = before - lastKnownHostScore.size();
+		if (evicted > 0) {
+			logInfo("Evicted " + evicted + " last-known host score(s) for "
+					+ "host(s) no longer in inventory (cache now "
+					+ lastKnownHostScore.size() + " entries)");
+		}
 	}
 
 	/**
@@ -748,6 +795,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		stats.scored++;
+		stats.staleScored++;
 		stats.scoreSum += last;
 		if (last < 95.0) stats.belowThreshold++;
 		logInfo("Host " + hostName + ": unreadable this cycle — contributing "
@@ -1294,6 +1342,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private static final class HostStats {
 		int total; int scored; double scoreSum; int belowThreshold;
 		int unreadable;
+		// Build 50 (review W1): count of hosts whose contribution to
+		// avg_host_score came from lastKnownHostScore this cycle (i.e. the host
+		// was channel-unreadable but folded its last-known score). 0 when every
+		// scored host was read live this cycle. Subset of `scored`.
+		int staleScored;
 	}
 
 	private static final class VmStats {

@@ -33,7 +33,7 @@
       <ResourceIdentifier key="custom_profile_path" nameKey="8" type="string"
                           required="false" dispOrder="3" default=""/>
       <ResourceIdentifier key="allowInsecure" nameKey="9" type="string"
-                          required="false" dispOrder="4" default="true"/>
+                          required="false" dispOrder="4" default="false"/>
     </ResourceKind>
 
     <ResourceKind key="ComplianceWorld" nameKey="20" type="1">
@@ -47,6 +47,9 @@
                            dataType="float" isProperty="false"
                            defaultMonitored="true" unit="%"/>
         <ResourceAttribute key="hosts_below_threshold" nameKey="25"
+                           dataType="float" isProperty="false"
+                           defaultMonitored="true"/>
+        <ResourceAttribute key="hosts_scored_stale" nameKey="28"
                            dataType="float" isProperty="false"
                            defaultMonitored="true"/>
         <ResourceAttribute key="profile_name" nameKey="26"
