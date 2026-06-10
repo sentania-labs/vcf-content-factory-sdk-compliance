@@ -9,7 +9,6 @@ import com.vcfcf.adapter.spi.VcfCfTester;
 import com.vcfcf.adapter.stitch.SuiteApiStitcher;
 
 import com.integrien.alive.common.adapter3.AdapterBase;
-import com.integrien.alive.common.adapter3.Logger;
 import com.integrien.alive.common.adapter3.MetricData;
 import com.integrien.alive.common.adapter3.MetricKey;
 import com.integrien.alive.common.adapter3.ResourceKey;
@@ -65,6 +64,25 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// first post-restart cycle.
 	private volatile String previousProfileName;
 
+	// Task #16 — last-known per-host compliance score, keyed by the stable host
+	// MOID (hostInfo.moid), NOT the display name (a host can be renamed). Scott's
+	// decision: the world avg_host_score should use a host's LAST-KNOWN score
+	// when the host is channel-unreadable THIS cycle, so an unreadable host does
+	// not silently shrink the denominator and flatter the average. A host with NO
+	// last-known score (never successfully read since this collector process
+	// started) stays excluded entirely.
+	//
+	// IN-MEMORY ONLY — survives across collect cycles within one collector
+	// process but does NOT survive a collector restart. COLLECTOR-RESTART CAVEAT:
+	// after a restart the cache is empty, so the first cycle(s) average only the
+	// hosts readable that cycle (readable-only), exactly as build 48 did, until
+	// every host has been read at least once and the cache re-warms. This is the
+	// honest degraded behavior — we never invent a score we have never observed.
+	// Concurrent-collect safe: collect() runs once per cycle for the single
+	// ComplianceWorld resource, but use a ConcurrentHashMap defensively.
+	private final java.util.concurrent.ConcurrentHashMap<String, Double>
+			lastKnownHostScore = new java.util.concurrent.ConcurrentHashMap<>();
+
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
 	}
@@ -113,7 +131,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
-				adapterLogger());
+				sslSocketFactoryFor(config),
+				componentLogger(VSphereClient.class),
+				config.allowInsecure);
 
 		this.benchmarkLoader = new BenchmarkLoader();
 
@@ -124,9 +144,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// disabled for the cycle and the collect path logs the gap rather
 		// than aborting.
 		try {
-			this.suiteStitcher = SuiteApiStitcher.create(this, adapterLogger());
+			this.suiteStitcher = SuiteApiStitcher.create(
+					this, componentLogger(SuiteApiStitcher.class));
 			this.stitcher = new ComplianceStitcher(
-					this.suiteStitcher, adapterLogger());
+					this.suiteStitcher,
+					componentLogger(ComplianceStitcher.class));
 		} catch (RuntimeException e) {
 			this.suiteStitcher = null;
 			this.stitcher = null;
@@ -137,36 +159,53 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
 				+ " profile=" + config.benchmarkProfile
+				+ " allowInsecure=" + config.allowInsecure
 				+ " stitcher=" + (stitcher != null));
 	}
 
 	/**
-	 * Expose a WORKING instance logger to the adapter's helper classes
-	 * ({@link VSphereClient}, {@link EsxcliSoapClient}, {@link ComplianceStitcher},
-	 * {@link SuiteApiStitcher}) — all of which take a {@link Logger} at
-	 * construction.
+	 * Task #12 — pick the SSL socket factory for the raw-SOAP
+	 * {@link VSphereClient} connection in line with the framework SSL
+	 * convention (migration guide §16 / {@code HttpClientBuilder}):
 	 *
-	 * <p><b>Build 46 dead-logger fix (root cause).</b> A bare
-	 * {@code getAdapterLoggerFactory().getLogger(getClass())} returns a logger
-	 * whose effective level sits BELOW INFO, so every {@code log.info(...)}
-	 * breadcrumb emitted from inside {@link VSphereClient}/{@link EsxcliSoapClient}
-	 * (e.g. "vSphere SOAP: N hosts", "listView(...): RetrieveProperties -> N
-	 * objectContent") was silently filtered out on devel — zero lines despite
-	 * INFO being enabled and the strings being present in the shipped jar. The
-	 * adapter's OWN breadcrumbs still appeared because {@code logInfo()} routes
-	 * through the framework base's private {@code adapterLogger()}, which caches
-	 * a SEPARATE logger handle and explicitly raises it to INFO
-	 * ({@code logger.setLevel(CustomLevel.INFO)}). The handle handed to the
-	 * helper clients never got that {@code setLevel} call, so it logged nothing.
+	 * <ul>
+	 *   <li><b>platform trust by default</b> — {@link #getPlatformSslContext()}
+	 *       (the same SSLContext {@code HttpClientBuilder.platformSsl(this)}
+	 *       installs) so the vCenter certificate is validated against the VCF
+	 *       Ops platform trust store. This is the secure default.</li>
+	 *   <li><b>{@code allowInsecure} per-adapter-config opt-out</b> — only when
+	 *       the instance's {@code allowInsecure} identifier is set does the
+	 *       client fall back to {@link #insecureSslContext()} (trust-all),
+	 *       exactly as {@code HttpClientBuilder.allowInsecure(true)} does. This
+	 *       is the documented lab opt-out, surfaced in the log line above.</li>
+	 * </ul>
 	 *
-	 * <p>This accessor now mirrors the base exactly: raise the returned logger
-	 * to INFO before handing it out, so the injected logger is the working,
-	 * level-configured one. The helpers' breadcrumbs now reach the collector log.
+	 * <p>Returns the {@link javax.net.ssl.SSLSocketFactory} of the chosen
+	 * context. If the platform context cannot be obtained (e.g. a standalone
+	 * collector with no platform trust store) the JDK default factory is used
+	 * — never a silent fall-through to trust-all. The chosen factory is handed
+	 * into {@link VSphereClient}, which threads it through to its per-cycle
+	 * {@link EsxcliSoapClient} so the esxcli slice honours the same trust
+	 * decision.
 	 */
-	private Logger adapterLogger() {
-		Logger logger = getAdapterLoggerFactory().getLogger(getClass());
-		logger.setLevel(Logger.CustomLevel.INFO);
-		return logger;
+	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor(
+			ComplianceConfig cfg) {
+		if (cfg.allowInsecure) {
+			logWarn("allowInsecure=true — vCenter SOAP TLS certificate "
+					+ "validation is DISABLED for this instance (lab opt-out). "
+					+ "Set allowInsecure=false to validate against the platform "
+					+ "trust store.");
+			return insecureSslContext().getSocketFactory();
+		}
+		javax.net.ssl.SSLContext platform = getPlatformSslContext();
+		if (platform != null) {
+			return platform.getSocketFactory();
+		}
+		logWarn("Platform SSL context unavailable and allowInsecure=false — "
+				+ "using the JDK default trust store for the vCenter SOAP "
+				+ "connection.");
+		return (javax.net.ssl.SSLSocketFactory)
+				javax.net.ssl.SSLSocketFactory.getDefault();
 	}
 
 	// -----------------------------------------------------------------------
@@ -240,15 +279,39 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	// -----------------------------------------------------------------------
-	// getDiscoverer — the single synthetic ComplianceWorld resource
+	// Resource discovery — the single synthetic ComplianceWorld resource
+	//
+	// Task #19 — collect-path discovery (framework v2 §22). VCF Ops 9.0.2 never
+	// invokes onDiscover() for adapter3-path collectors, so a FRESH instance
+	// would heartbeat GREEN yet sit at zero resources forever. discoverOnCollect()
+	// returning true makes the framework call enumerateResources(sink) at the top
+	// of every collect cycle (registering via registerNewResource), so the
+	// ComplianceWorld appears from the first cycle without depending on
+	// onDiscover() ever firing. getDiscoverer() is deleted: the framework default
+	// onDiscover() path also calls enumerateResources(dr::addResource), so both
+	// paths share this one enumeration body.
+	//
+	// Resource-key STABILITY (required for idempotent re-registration): the key
+	// emitted here — kind "ComplianceWorld", adapterKind ADAPTER_KIND, single
+	// identifier ("world_id" = "compliance_world", isUnique=true) — is byte-for-
+	// byte the same ResourceConfig the deleted getDiscoverer() emitted (it called
+	// the SAME worldResourceConfig() helper). registerNewResource is idempotent on
+	// the identifying-identifier set, so enumerating every cycle re-registers the
+	// already-known world rather than duplicating it. The key is a constant (no
+	// host/inventory input), so it cannot drift between cycles.
 	// -----------------------------------------------------------------------
 
 	@Override
-	protected VcfCfDiscoverer<ComplianceConfig> getDiscoverer() {
-		return (cfg, http, param, dr) -> {
-			logInfo("ComplianceAdapter discover: creating ComplianceWorld");
-			dr.addResource(worldResourceConfig());
-		};
+	protected boolean discoverOnCollect() {
+		return true;
+	}
+
+	@Override
+	protected void enumerateResources(
+			com.vcfcf.adapter.spi.ResourceSink sink)
+			throws InterruptedException, Exception {
+		logInfo("ComplianceAdapter enumerate: registering ComplianceWorld");
+		sink.accept(worldResourceConfig());
 	}
 
 	private ResourceConfig worldResourceConfig() {
@@ -552,6 +615,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						mergeResults(advUnread, vimUnread);
 				stats.unreadable += cr.unreadableCount;
 				stats.total++;  // total attempted; not scored (totalCount==0)
+				// Task #16: fold this host's LAST-KNOWN score into the world
+				// average so an unreadable host keeps the denominator full
+				// (never a flattering shrink). No-op when the host was never
+				// read since process start.
+				applyLastKnownForUnreadableHost(hostId, hostName, stats);
 
 				logInfo("Host " + hostName + ": UNREADABLE (connectionState='"
 						+ connState + "', " + cr.unreadableCount
@@ -595,6 +663,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						mergeResults(advUnread, vimUnread);
 				stats.unreadable += cr.unreadableCount;
 				stats.total++;  // total attempted; not scored (totalCount==0)
+				// Task #16: fold this host's last-known score into the world
+				// average (see connection-state branch above).
+				applyLastKnownForUnreadableHost(hostId, hostName, stats);
 
 				logInfo("Host " + hostName + ": UNREADABLE (adv-settings flap, "
 						+ cr.unreadableCount + " controls)");
@@ -633,6 +704,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				stats.scored++;
 				stats.scoreSum += cr.score;
 				if (cr.score < 95.0) stats.belowThreshold++;
+				// Task #16: remember this host's score so a future cycle in
+				// which the host is unreadable can still contribute it to the
+				// world average. Keyed by stable MOID.
+				lastKnownHostScore.put(hostId, cr.score);
 			}
 
 			logInfo("Host " + hostName + ": score="
@@ -649,6 +724,35 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 		}
 		return stats;
+	}
+
+	/**
+	 * Task #16 — when a host is channel-unreadable this cycle, fold its
+	 * last-known score (if any) into the world {@code avg_host_score} so the
+	 * denominator stays full and an unreadable host does not silently flatter
+	 * the fleet average. A host with no last-known score (never read since
+	 * process start) is left excluded — we never invent a score we have not
+	 * observed. Mutates {@code stats.scored} / {@code stats.scoreSum} /
+	 * {@code stats.belowThreshold} (the world-rollup inputs) only; it does NOT
+	 * touch {@code stats.total} (already incremented by the caller) and does NOT
+	 * change the per-host wire push, which stays build-48 (no score stat pushed
+	 * for a totalCount==0 host).
+	 */
+	private void applyLastKnownForUnreadableHost(String hostId, String hostName,
+			HostStats stats) {
+		Double last = (hostId == null) ? null : lastKnownHostScore.get(hostId);
+		if (last == null) {
+			logInfo("Host " + hostName + ": unreadable and no last-known score "
+					+ "(never read since collector start) — excluded from the "
+					+ "world avg_host_score this cycle");
+			return;
+		}
+		stats.scored++;
+		stats.scoreSum += last;
+		if (last < 95.0) stats.belowThreshold++;
+		logInfo("Host " + hostName + ": unreadable this cycle — contributing "
+				+ "last-known score " + String.format("%.1f", last)
+				+ "% to the world avg_host_score (denominator kept full)");
 	}
 
 	private VmStats collectVms(BenchmarkProfile profile) {
@@ -1121,8 +1225,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * Publish first-class rollups + per-control raw onto a matched VMWARE
-	 * resource. Key set and value semantics are byte-identical to v1 (the
-	 * golden-comparison contract).
+	 * resource. Key set and value semantics match v1 (the golden-comparison
+	 * contract) for every resource that evaluated at least one control
+	 * ({@code totalCount > 0}).
+	 *
+	 * <p><b>Build 48 score gate (deviation from byte-identical v1).</b> When
+	 * {@code totalCount == 0} — every control unreadable, or a profile slice
+	 * with zero evaluable controls — {@code score} / {@code pass_count} /
+	 * {@code fail_count} are OMITTED rather than pushed as the zero-divisor
+	 * sentinel {@code score=100}. Only {@code total_count=0} +
+	 * {@code unreadable_count} are pushed, so the per-host compliance symptoms
+	 * see "no data" rather than a flattering green sentinel (the cardinal
+	 * "unreadable is NOT compliant" rule). This is intentionally NOT
+	 * byte-identical to v1 for the {@code totalCount == 0} corner; v1 emitted
+	 * the sentinel. No shipped profile produces a healthy host/VM with zero
+	 * evaluable controls (every resource carries many advanced_setting + vim
+	 * controls), so on real data this gate only ever fires for genuinely
+	 * unreadable resources.
 	 */
 	private void pushComplianceViaClient(String resourceId,
 			ControlEvaluator.ComplianceResult cr, String profileName) {

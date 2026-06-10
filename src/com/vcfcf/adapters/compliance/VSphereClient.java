@@ -84,21 +84,44 @@ public final class VSphereClient {
 	// command cache. Lazily used on first esxcli recipe read.
 	private volatile EsxcliSoapClient esxcli;
 
+	private final boolean trustAll;       // true only on the explicit lab opt-out
+
 	public VSphereClient(String vcenterHost, String username, String password) {
-		this(vcenterHost, username, password, null);
+		// Standalone / test convenience: no platform context available, so fall
+		// back to the trust-all factory (lab posture). Production code paths use
+		// the SSLSocketFactory-injecting constructor below.
+		this(vcenterHost, username, password, trustAllSslFactory(), null, true);
 	}
 
 	/**
-	 * @param log adapter logger for SOAP-walk breadcrumbs (response-shape per
-	 *            RetrieveProperties, inventory counts). May be null (standalone
-	 *            / test use), in which case the client logs nothing.
+	 * Task #12 — platform-trust-by-default constructor. The
+	 * {@link SSLSocketFactory} is chosen by the adapter
+	 * ({@code ComplianceAdapter.sslSocketFactoryFor}) in line with the framework
+	 * SSL convention: platform trust store by default,
+	 * {@code allowInsecure=true} as the documented per-adapter-config opt-out.
+	 * This client no longer hard-codes a trust-all factory — it honours whatever
+	 * trust decision the adapter made, and threads the same factory into the
+	 * per-cycle {@link EsxcliSoapClient} so the esxcli slice validates
+	 * identically.
+	 *
+	 * @param sslFactory the socket factory to use for the HTTPS SOAP
+	 *                    connection. Must not be null on the production path.
+	 * @param log        adapter logger for SOAP-walk breadcrumbs (response-shape
+	 *                   per RetrieveProperties, inventory counts). May be null
+	 *                   (standalone / test use), in which case the client logs
+	 *                   nothing.
+	 * @param trustAll   true only when the adapter selected the
+	 *                   {@code allowInsecure} opt-out; controls whether hostname
+	 *                   verification is bypassed. When false the JDK default
+	 *                   hostname verifier validates the certificate's hostname.
 	 */
 	public VSphereClient(String vcenterHost, String username, String password,
-			Logger log) {
+			SSLSocketFactory sslFactory, Logger log, boolean trustAll) {
 		this.vcenterUrl = "https://" + vcenterHost + "/sdk";
 		this.username = username;
 		this.password = password;
-		this.sslFactory = trustAllSslFactory();
+		this.sslFactory = sslFactory;
+		this.trustAll = trustAll;
 		this.log = log;
 	}
 
@@ -1090,7 +1113,13 @@ public final class VSphereClient {
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 		if (conn instanceof HttpsURLConnection && sslFactory != null) {
 			((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
-			((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
+			// Task #12: only bypass hostname verification on the explicit
+			// allowInsecure lab opt-out. On the platform-trust path the JDK
+			// default verifier validates the certificate hostname — leaving the
+			// verifier untouched preserves that default.
+			if (trustAll) {
+				((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
+			}
 		}
 		conn.setRequestMethod("POST");
 		conn.setDoOutput(true);
