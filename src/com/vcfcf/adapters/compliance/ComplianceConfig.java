@@ -18,7 +18,13 @@ public final class ComplianceConfig {
 		this.benchmarkProfile = (benchmarkProfile != null && !benchmarkProfile.isEmpty())
 				? benchmarkProfile : "VMware_SCG_8.0";
 		this.customProfilePath = (customProfilePath != null) ? customProfilePath.trim() : "";
-		this.allowInsecure = !"false".equalsIgnoreCase(allowInsecure);
+		// Strict-by-default (build 50, review B1): only the explicit literal
+		// "true" opts into trust-all. null / blank / absent / any other value
+		// parses to false -> platform trust store validation. This makes the
+		// secure default actually engage for every existing and freshly-created
+		// instance (which have no allowInsecure field), matching describe.xml
+		// default="false" and the documented "platform trust by default".
+		this.allowInsecure = "true".equalsIgnoreCase(allowInsecure);
 	}
 
 	public String baseUrl() {
