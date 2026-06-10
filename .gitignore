@@ -1,3 +1,4 @@
 dist/
 *.pak
 __pycache__/
+*.generated.md
