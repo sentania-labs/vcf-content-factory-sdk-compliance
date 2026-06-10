@@ -13,6 +13,15 @@ description: >
 released: false
 version: "1.0.0"
 
+# Pak-shipped MP dashboards ship hidden; the pak install path activates them.
+# The renderer no longer defaults hidden=true (reverted in factory 00d3382),
+# so this YAML now carries it explicitly.
+hidden: true
+
+# NOTE: widget coords are 1-based (platform/gridster convention). The renderer
+# passes coords through verbatim as of factory 00d3382 (the old +1 shift was
+# deleted), so the top-left widget is authored at (x:1, y:1).
+
 widgets:
 
   # ── Row 1: Fleet KPIs  (y:0, h:3)  ──────────────────────────────────────────
@@ -24,7 +33,7 @@ widgets:
   - id: hosts_scanned
     type: Scoreboard
     title: "Hosts Scanned"
-    coords: {x: 0, y: 0, w: 3, h: 3}
+    coords: {x: 1, y: 1, w: 3, h: 3}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -41,7 +50,7 @@ widgets:
   - id: avg_score
     type: Scoreboard
     title: "Average Score"
-    coords: {x: 3, y: 0, w: 3, h: 3}
+    coords: {x: 4, y: 1, w: 3, h: 3}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -63,7 +72,7 @@ widgets:
   - id: below_threshold
     type: Scoreboard
     title: "Below Threshold"
-    coords: {x: 6, y: 0, w: 3, h: 3}
+    coords: {x: 7, y: 1, w: 3, h: 3}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -84,7 +93,7 @@ widgets:
   - id: active_profile
     type: Scoreboard
     title: "Active Profile"
-    coords: {x: 9, y: 0, w: 3, h: 3}
+    coords: {x: 10, y: 1, w: 3, h: 3}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -107,7 +116,7 @@ widgets:
   - id: score_heatmap
     type: Heatmap
     title: "Compliance Score by Host"
-    coords: {x: 0, y: 3, w: 5, h: 8}
+    coords: {x: 1, y: 4, w: 5, h: 8}
     self_provider: true
     pin:
       adapter_kind: VMWARE
@@ -133,7 +142,7 @@ widgets:
   - id: host_overview_view
     type: View
     title: "Compliance Host Overview"
-    coords: {x: 5, y: 3, w: 7, h: 8}
+    coords: {x: 6, y: 4, w: 7, h: 8}
     self_provider: true
     pin:
       adapter_kind: VMWARE
@@ -148,7 +157,7 @@ widgets:
   - id: fleet_trend
     type: MetricChart
     title: "Fleet Compliance Trend"
-    coords: {x: 0, y: 11, w: 6, h: 7}
+    coords: {x: 1, y: 12, w: 6, h: 7}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -168,7 +177,7 @@ widgets:
   - id: fleet_alerts
     type: AlertList
     title: "Fleet Compliance Alerts"
-    coords: {x: 6, y: 11, w: 6, h: 7}
+    coords: {x: 7, y: 12, w: 6, h: 7}
     self_provider: true
     pin_to_world: true
     pin:

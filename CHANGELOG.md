@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- fix(content): dashboard YAML now self-describes coords + hidden after factory 00d3382 reverted the two compliance-specific renderer compensations (the global `hidden:true` default and the `_gridster_coords` +1 shift, both introduced in build 26). `dashboards/compliance-overview.yaml` now carries `hidden: true` at the dashboard level explicitly, and every widget's `coords.x`/`coords.y` are bumped +1 to 1-based (gridster convention) so the renderer's new pass-through matches the previously deployed output. No Java/source change, no `build_number` bump, no pak cut. Rendered-output equivalence verified: rendering the edited YAML through the current (post-00d3382) renderer is byte-identical to rendering the old YAML through the pre-00d3382 renderer — `hidden:true`, top-left widget at (x:1,y:1), all eight widgets unchanged. Will fold into the next build's `## 1.0.0.<n>` entry when the adapter is next built/tagged.
+
 ## 1.0.0.50 (2026-06-10)
 
 - fix(adapter): build 50 — close the build-49 review (context/reviews/compliance-build-49.md: 1 BLOCKING + 2 WARNING + 1 NIT). All four findings fixed; healthy-host *scoring* unchanged (only the SSL default, a new world metric, a null-guard, and cache eviction). Numbered:
