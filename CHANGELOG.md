@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0.43 (2026-06-09)
+
+- feat(adapter): build 43 — framework v2 migration. Re-homed onto VcfCfAdapter + com.vcfcf.adapter.spi (VcfCfCollector/VcfCfDiscoverer/VcfCfTester); dropped aria-ops-core. Replaced the vim25/JAX-WS SOAP path with hand-built raw SOAP over HttpURLConnection + JDK DOM (fixes the prod 9.1 javax/jakarta JAX-WS Provider collision — compliance had never collected on 9.1); lib/ now ships only vcfcf-adapter-base.jar (C2). Rewired stitching onto the framework SuiteApiStitcher (ambient maintenanceAdmin credentials); deleted dead-code SuiteApiPropertyPusher. Property/stat keys, value semantics, and MOID stitching identity preserved for golden comparison vs build 41.
+
 ## 1.0.0.41 (2026-06-03)
 
 - feat(adapter): build 41 — VAMI appliance REST reader (vami_api kind) for vCenter SSH/password-policy controls; failed/non-200/absent-field reads fold to UNREADABLE

@@ -1,514 +1,443 @@
 package com.vcfcf.adapters.compliance;
 
-import com.vmware.vim25.*;
-
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import javax.xml.ws.BindingProvider;
-import javax.xml.ws.handler.MessageContext;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+/**
+ * Raw-SOAP vSphere (vim25) client — build 43 rewrite.
+ *
+ * <p><b>Why raw SOAP, not JAX-WS.</b> The previous implementation built
+ * vim25 SOAP stubs through JAX-WS ({@code VimService} / {@code
+ * javax.xml.ws.Service}). On VCF Ops 9.1 the platform pairs a javax
+ * {@code jaxws-api-2.3.1} with a jakarta {@code jaxws-rt-4.0.3}; parent-first
+ * delegation resolves {@code com.sun.xml.ws.spi.ProviderImpl} to the jakarta
+ * class, which does not extend the javax {@code Provider} the lookup expects
+ * → {@code "Error while searching for service [javax.xml.ws.spi.Provider]"}
+ * every cycle (the adapter has NEVER collected on 9.1). See
+ * {@code context/investigations/prod_91_jaxws_provider_failure.md}.
+ *
+ * <p>This rewrite removes JAX-WS entirely: every vim25 operation is a
+ * hand-built SOAP 1.1 envelope POSTed to the vCenter {@code /sdk} over
+ * {@link HttpURLConnection}, parsed with JDK-built-in JAXP DOM (the collision
+ * was JAX-WS service discovery, NOT JAXP — DOM/SAX are safe). It drops
+ * {@code vim25.jar}, {@code vim-vmodl-bindings-8.0.2.jar}, {@code
+ * jaxws-api-2.1.jar}, {@code jaxws-rt-2.3.1.jar}, {@code
+ * javax.xml.soap-api-1.4.0.jar} from {@code lib/}. The proven
+ * {@link EsxcliSoapClient} (already raw SOAP since build 36) is the template
+ * and is reused unchanged for the esxcli slice.
+ *
+ * <p><b>Value semantics preserved.</b> The public method surface, the
+ * {@link #UNREADABLE} sentinel, the recipe grammar, and every style's
+ * compliant/non-compliant/unreadable outcome are byte-for-byte identical to
+ * the JAX-WS implementation (golden comparison gate vs build 41). Where the
+ * old code walked vim25 binding objects with reflective getters, this code
+ * walks the response DOM by element local-name — the same node, the same
+ * value, no concrete-type casts (the "reflection-tolerant / never cast"
+ * posture carries over: a missing element is null/skip, never an exception
+ * and never a sentinel pass).
+ *
+ * <p><b>The MOID / type discipline.</b> {@link MoRef} carries the
+ * managed-object {@code type} + {@code value} pair exactly as vim25's
+ * {@code ManagedObjectReference} did. PropertyCollector requests carry the
+ * object's {@code type} so the server resolves the right property set.
+ */
 public final class VSphereClient {
 
-	private final String vcenterUrl;
+	private final String vcenterUrl;       // https://<host>/sdk
 	private final String username;
 	private final String password;
+	private final SSLSocketFactory sslFactory;
 
-	private volatile VimPortType vimPort;
-	private volatile ServiceContent serviceContent;
-	private volatile ManagedObjectReference rootFolder;
+	// SOAP session state.
+	private volatile String sessionCookie;     // vmware_soap_session=...
+	private volatile MoRef propertyCollector;
+	private volatile MoRef viewManager;
+	private volatile MoRef rootFolder;
+	private volatile MoRef sessionManager;
+	private volatile MoRef settingOptionMgr;   // ServiceContent.setting
+	private volatile String aboutInstanceUuid;
+	private volatile String aboutFullName;
 
-	// esxcli reader (build 36) — rides THIS vCenter session (no host
-	// credentials). Rebuilt on every (re)connect so it carries the live
-	// session cookie and so its per-cycle command cache is fresh each
-	// collection cycle. Lazily constructed on first esxcli recipe read.
+	// esxcli reader (build 36) — rides THIS vCenter session. Rebuilt on
+	// every (re)connect so it carries the live cookie and a fresh per-cycle
+	// command cache. Lazily used on first esxcli recipe read.
 	private volatile EsxcliSoapClient esxcli;
-	private volatile String sessionCookie;
 
 	public VSphereClient(String vcenterHost, String username, String password) {
 		this.vcenterUrl = "https://" + vcenterHost + "/sdk";
 		this.username = username;
 		this.password = password;
+		this.sslFactory = trustAllSslFactory();
 	}
+
+	// -----------------------------------------------------------------------
+	// Session lifecycle
+	// -----------------------------------------------------------------------
 
 	public void connect() throws Exception {
-		VimService vimService = new VimService();
-		vimPort = vimService.getVimPort();
-
-		Map<String, Object> ctx =
-				((BindingProvider) vimPort).getRequestContext();
-		ctx.put(BindingProvider.ENDPOINT_ADDRESS_PROPERTY, vcenterUrl);
-		ctx.put(BindingProvider.SESSION_MAINTAIN_PROPERTY, true);
-		ctx.put("com.sun.xml.internal.ws.transport.https.client.SSLSocketFactory",
-				trustAllSslFactory());
-		ctx.put("com.sun.xml.ws.transport.https.client.SSLSocketFactory",
-				trustAllSslFactory());
-
-		ManagedObjectReference siRef = new ManagedObjectReference();
-		siRef.setType("ServiceInstance");
-		siRef.setValue("ServiceInstance");
-
-		serviceContent = vimPort.retrieveServiceContent(siRef);
-		vimPort.login(serviceContent.getSessionManager(),
-				username, password, null);
-		rootFolder = serviceContent.getRootFolder();
-
-		// Capture the live vCenter session cookie so the raw-SOAP esxcli
-		// reader (which bypasses JAX-WS for the reflect/dynamic types not
-		// in the bindings) rides the SAME authenticated session. Rebuild
-		// the esxcli client on every (re)connect: it gets the fresh
-		// cookie AND a fresh per-cycle command cache.
-		this.sessionCookie = captureSessionCookie();
-		this.esxcli = new EsxcliSoapClient(vcenterUrl, sessionCookie,
-				trustAllSslFactory());
-	}
-
-	/**
-	 * Extract the {@code vmware_soap_session} cookie the JAX-WS runtime
-	 * just established (via {@code SESSION_MAINTAIN_PROPERTY}) from the
-	 * login response headers, so the raw-SOAP esxcli reader can present
-	 * the same session. Returns the {@code Set-Cookie} value verbatim
-	 * (suitable as a {@code Cookie:} request header) or null if the
-	 * runtime did not surface it — in which case the esxcli reader still
-	 * works only if the cookie reaches it another way (it does not today,
-	 * so a null cookie -> esxcli reads return command-failed/UNREADABLE,
-	 * never a false pass).
-	 */
-	private String captureSessionCookie() {
-		try {
-			Map<String, Object> respCtx =
-					((BindingProvider) vimPort).getResponseContext();
-			Object headersObj =
-					respCtx.get(MessageContext.HTTP_RESPONSE_HEADERS);
-			if (!(headersObj instanceof Map)) return null;
-			@SuppressWarnings("unchecked")
-			Map<String, List<String>> headers =
-					(Map<String, List<String>>) headersObj;
-			for (Map.Entry<String, List<String>> e : headers.entrySet()) {
-				if (e.getKey() == null) continue;
-				if (!"Set-Cookie".equalsIgnoreCase(e.getKey())) continue;
-				List<String> vals = e.getValue();
-				if (vals == null) continue;
-				for (String v : vals) {
-					if (v == null) continue;
-					// Take the cookie name=value pair (up to the first ';',
-					// dropping Path/Secure/HttpOnly attributes) for the
-					// vmware_soap_session cookie.
-					String pair = v;
-					int semi = pair.indexOf(';');
-					if (semi >= 0) pair = pair.substring(0, semi);
-					if (pair.startsWith("vmware_soap_session")) {
-						return pair.trim();
-					}
-				}
-			}
-		} catch (Exception ignored) {
-			// Cookie capture is best-effort; a failure surfaces downstream
-			// as UNREADABLE on esxcli controls, never a false pass.
+		// RetrieveServiceContent does not require a session cookie.
+		String body =
+				"<RetrieveServiceContent xmlns=\"urn:vim25\">"
+				+ "<_this type=\"ServiceInstance\">ServiceInstance</_this>"
+				+ "</RetrieveServiceContent>";
+		Document resp = post(body, "urn:vim25/RetrieveServiceContent", false);
+		if (resp == null) {
+			throw new Exception("RetrieveServiceContent failed (no response)");
 		}
-		return null;
+		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
+		if (rv == null) {
+			throw new Exception("RetrieveServiceContent: no returnval");
+		}
+		this.propertyCollector = moRefOf(rv, "propertyCollector");
+		this.viewManager = moRefOf(rv, "viewManager");
+		this.rootFolder = moRefOf(rv, "rootFolder");
+		this.sessionManager = moRefOf(rv, "sessionManager");
+		this.settingOptionMgr = moRefOf(rv, "setting");
+		Element about = firstDirectChild(rv, "about");
+		if (about != null) {
+			this.aboutInstanceUuid = childText(about, "instanceUuid");
+			this.aboutFullName = childText(about, "fullName");
+		}
+		if (sessionManager == null || propertyCollector == null
+				|| rootFolder == null) {
+			throw new Exception("RetrieveServiceContent: incomplete content "
+					+ "(sessionManager/propertyCollector/rootFolder missing)");
+		}
+
+		// Login — establishes the vmware_soap_session cookie.
+		String loginBody =
+				"<Login xmlns=\"urn:vim25\">"
+				+ "<_this type=\"SessionManager\">"
+				+ xmlEscape(sessionManager.value) + "</_this>"
+				+ "<userName>" + xmlEscape(username) + "</userName>"
+				+ "<password>" + xmlEscape(password) + "</password>"
+				+ "</Login>";
+		Document loginResp = post(loginBody, "urn:vim25/Login", false);
+		if (loginResp == null) {
+			throw new Exception("Login failed (no response / SOAP fault)");
+		}
+		if (sessionCookie == null) {
+			throw new Exception("Login succeeded but no session cookie was "
+					+ "returned");
+		}
+
+		// esxcli reader rides this session cookie; fresh per-cycle cache.
+		this.esxcli = new EsxcliSoapClient(vcenterUrl, sessionCookie,
+				sslFactory);
 	}
 
 	public void disconnect() {
-		if (vimPort != null && serviceContent != null) {
+		if (sessionManager != null && sessionCookie != null) {
 			try {
-				vimPort.logout(serviceContent.getSessionManager());
+				String body =
+						"<Logout xmlns=\"urn:vim25\">"
+						+ "<_this type=\"SessionManager\">"
+						+ xmlEscape(sessionManager.value) + "</_this>"
+						+ "</Logout>";
+				post(body, "urn:vim25/Logout", true);
 			} catch (Exception ignored) {}
 		}
-		vimPort = null;
-		serviceContent = null;
-		esxcli = null;
 		sessionCookie = null;
+		propertyCollector = null;
+		viewManager = null;
+		rootFolder = null;
+		sessionManager = null;
+		settingOptionMgr = null;
+		aboutInstanceUuid = null;
+		aboutFullName = null;
+		esxcli = null;
 	}
 
 	public void ensureConnected() throws Exception {
-		if (vimPort == null) {
+		if (sessionCookie == null || propertyCollector == null) {
 			connect();
 			return;
 		}
+		// Keepalive: CurrentTime is a cheap call that fails if the session
+		// lapsed. On any failure, reconnect.
 		try {
-			vimPort.currentTime(createSiRef());
+			String body =
+					"<CurrentTime xmlns=\"urn:vim25\">"
+					+ "<_this type=\"ServiceInstance\">ServiceInstance</_this>"
+					+ "</CurrentTime>";
+			Document resp = post(body, "urn:vim25/CurrentTime", true);
+			if (resp == null
+					|| firstByLocalName(resp.getDocumentElement(),
+							"returnval") == null) {
+				disconnect();
+				connect();
+			}
 		} catch (Exception e) {
 			disconnect();
 			connect();
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Inventory walkers (HostSystem / VM / DVS / DVPG / Cluster)
+	// -----------------------------------------------------------------------
+
 	public List<HostInfo> getHosts() throws Exception {
 		ensureConnected();
 		List<HostInfo> result = new ArrayList<>();
-
-		ManagedObjectReference viewMgr = serviceContent.getViewManager();
-		ManagedObjectReference containerView = vimPort.createContainerView(
-				viewMgr, rootFolder,
-				java.util.Arrays.asList("HostSystem"), true);
-
-		try {
-			List<ManagedObjectReference> hostRefs =
-					getViewMembers(containerView);
-
-			for (ManagedObjectReference hostRef : hostRefs) {
-				String name = getProperty(hostRef, "name");
-				if (name != null) {
-					result.add(new HostInfo(hostRef, name, hostRef.getValue()));
-				}
-			}
-		} finally {
-			destroyViewQuietly(containerView);
+		for (MoRef ref : listView("HostSystem")) {
+			String name = getStringProperty(ref, "name");
+			if (name != null) result.add(new HostInfo(ref, name, ref.value));
 		}
 		return result;
 	}
 
-	public Map<String, String> getAdvancedSettings(ManagedObjectReference hostRef)
-			throws Exception {
-		ensureConnected();
-		Map<String, String> result = new HashMap<>();
-
-		ManagedObjectReference configMgr = getMoRef(hostRef,
-				"configManager.advancedOption");
-		if (configMgr == null) return result;
-
-		List<OptionValue> options = vimPort.queryOptions(configMgr, null);
-		if (options != null) {
-			for (OptionValue ov : options) {
-				if (ov.getKey() != null && ov.getValue() != null) {
-					result.put(ov.getKey(), String.valueOf(ov.getValue()));
-				}
-			}
-		}
-
-		return result;
-	}
-
-	/**
-	 * Walks every VirtualMachine in the inventory. Mirrors
-	 * {@link #getHosts()} structurally but builds a typed
-	 * {@link ManagedObjectReference} container view of "VirtualMachine".
-	 */
 	public List<VmInfo> getVms() throws Exception {
 		ensureConnected();
 		List<VmInfo> result = new ArrayList<>();
-
-		ManagedObjectReference viewMgr = serviceContent.getViewManager();
-		ManagedObjectReference containerView = vimPort.createContainerView(
-				viewMgr, rootFolder,
-				java.util.Arrays.asList("VirtualMachine"), true);
-
-		try {
-			List<ManagedObjectReference> refs = getViewMembersTyped(
-					containerView, "VirtualMachine");
-
-			for (ManagedObjectReference vmRef : refs) {
-				String name = getProperty(vmRef, "name");
-				if (name != null) {
-					result.add(new VmInfo(vmRef, name, vmRef.getValue()));
-				}
-			}
-		} finally {
-			destroyViewQuietly(containerView);
+		for (MoRef ref : listView("VirtualMachine")) {
+			String name = getStringProperty(ref, "name");
+			if (name != null) result.add(new VmInfo(ref, name, ref.value));
 		}
 		return result;
 	}
 
 	/**
-	 * Reads {@code VirtualMachine.config.extraConfig}, a list of
-	 * {@code OptionValue} entries that hold the VMX advanced settings
-	 * (isolation.tools.*, mks.enable3d, RemoteDisplay.maxConnections,
-	 * etc.). Each entry's value is stringified — boolean settings come
-	 * back as "TRUE"/"FALSE", integers as their decimal representation.
-	 * Returns an empty map if the VM has no extraConfig entries (a
-	 * brand-new VM has none until features set them).
-	 */
-	public Map<String, String> getVmExtraConfig(ManagedObjectReference vmRef)
-			throws Exception {
-		ensureConnected();
-		Map<String, String> result = new HashMap<>();
-
-		Object raw = getRawProperty(vmRef, "config.extraConfig");
-		if (raw == null) return result;
-
-		// extraConfig deserializes as ArrayOfOptionValue in vim25; the
-		// JAX-WS binding exposes it as a List<OptionValue> via
-		// getOptionValue(). Reflect to stay tolerant of slight binding
-		// differences between vim25 versions.
-		try {
-			java.lang.reflect.Method getter = raw.getClass()
-					.getMethod("getOptionValue");
-			Object list = getter.invoke(raw);
-			if (list instanceof List) {
-				for (Object item : (List<?>) list) {
-					if (item instanceof OptionValue) {
-						OptionValue ov = (OptionValue) item;
-						if (ov.getKey() != null && ov.getValue() != null) {
-							result.put(ov.getKey(),
-									String.valueOf(ov.getValue()));
-						}
-					}
-				}
-				return result;
-			}
-		} catch (NoSuchMethodException ignored) {
-			// fall through — the property may already be a List
-		}
-		if (raw instanceof List) {
-			for (Object item : (List<?>) raw) {
-				if (item instanceof OptionValue) {
-					OptionValue ov = (OptionValue) item;
-					if (ov.getKey() != null && ov.getValue() != null) {
-						result.put(ov.getKey(),
-								String.valueOf(ov.getValue()));
-					}
-				}
-			}
-		}
-		return result;
-	}
-
-	/**
-	 * Reads vCenter-level advanced settings via the vCenter
-	 * OptionManager — same {@code queryOptions} contract as the
-	 * per-host AdvancedOption manager, just rooted at
-	 * {@code ServiceContent.setting}. The result is the full key/value
-	 * map of every {@code vpxd.*}, {@code config.*}, {@code mail.*},
-	 * etc. setting exposed to a connected vCenter session.
-	 */
-	public Map<String, String> getVCenterAdvancedSettings() throws Exception {
-		ensureConnected();
-		Map<String, String> result = new HashMap<>();
-
-		ManagedObjectReference optionMgr = serviceContent.getSetting();
-		if (optionMgr == null) return result;
-
-		List<OptionValue> options = vimPort.queryOptions(optionMgr, null);
-		if (options != null) {
-			for (OptionValue ov : options) {
-				if (ov.getKey() != null && ov.getValue() != null) {
-					result.put(ov.getKey(), String.valueOf(ov.getValue()));
-				}
-			}
-		}
-
-		return result;
-	}
-
-	/**
-	 * Enumerates VmwareDistributedVirtualSwitch inventory entries.
-	 * Returns an empty list when the container view yields nothing —
-	 * the surrounding adapter loop treats that as "no DVS in this
-	 * vCenter" rather than an error. The DVS PowerCLI-only controls
-	 * cannot be evaluated against these MoRefs from Java today — see
-	 * the TODO in ComplianceAdapter#evaluateDvsCompliance — so this
-	 * method exists primarily so the stitcher can find DVS resources
-	 * by name/moid for the property push.
+	 * Enumerate distributed virtual switches. Some environments expose only
+	 * the base {@code DistributedVirtualSwitch} type; we ask for the Vmware
+	 * subtype first and fall back to the base, mirroring the v1 behaviour.
 	 */
 	public List<DvsInfo> getDvSwitches() throws Exception {
 		ensureConnected();
 		List<DvsInfo> result = new ArrayList<>();
-
-		ManagedObjectReference viewMgr = serviceContent.getViewManager();
-		ManagedObjectReference containerView;
-		try {
-			containerView = vimPort.createContainerView(
-					viewMgr, rootFolder,
-					java.util.Arrays.asList("VmwareDistributedVirtualSwitch"),
-					true);
-		} catch (Exception e) {
-			// Some environments expose only the base
-			// "DistributedVirtualSwitch" type; retry with that.
-			containerView = vimPort.createContainerView(
-					viewMgr, rootFolder,
-					java.util.Arrays.asList("DistributedVirtualSwitch"),
-					true);
+		List<MoRef> refs = listView("VmwareDistributedVirtualSwitch");
+		if (refs.isEmpty()) {
+			refs = listView("DistributedVirtualSwitch");
 		}
-
-		try {
-			List<ManagedObjectReference> refs = getViewMembersTyped(
-					containerView, "VmwareDistributedVirtualSwitch");
-			if (refs.isEmpty()) {
-				refs = getViewMembersTyped(containerView,
-						"DistributedVirtualSwitch");
-			}
-
-			for (ManagedObjectReference ref : refs) {
-				String name = getProperty(ref, "name");
-				if (name != null) {
-					result.add(new DvsInfo(ref, name, ref.getValue()));
-				}
-			}
-		} finally {
-			destroyViewQuietly(containerView);
+		for (MoRef ref : refs) {
+			String name = getStringProperty(ref, "name");
+			if (name != null) result.add(new DvsInfo(ref, name, ref.value));
 		}
 		return result;
 	}
 
-	/**
-	 * Enumerates ClusterComputeResource inventory entries. Phase 3 (vSAN)
-	 * stitches a small subset of vSAN-related controls onto the matched
-	 * cluster, so the adapter must first walk cluster inventory the same
-	 * way it walks Host / VM / DVS / DVPG. Identical container-view
-	 * pattern; the {@code ClusterComputeResource} type filter is the
-	 * vim25 supertype that covers both regular clusters and the
-	 * {@code VsanClusterComputeResource} subtype (older bindings, rare).
-	 */
+	public List<DvpgInfo> getDvPortgroups() throws Exception {
+		ensureConnected();
+		List<DvpgInfo> result = new ArrayList<>();
+		for (MoRef ref : listView("DistributedVirtualPortgroup")) {
+			String name = getStringProperty(ref, "name");
+			if (name != null) result.add(new DvpgInfo(ref, name, ref.value));
+		}
+		return result;
+	}
+
 	public List<ClusterInfo> getClusters() throws Exception {
 		ensureConnected();
 		List<ClusterInfo> result = new ArrayList<>();
-
-		ManagedObjectReference viewMgr = serviceContent.getViewManager();
-		ManagedObjectReference containerView = vimPort.createContainerView(
-				viewMgr, rootFolder,
-				java.util.Arrays.asList("ClusterComputeResource"), true);
-
-		try {
-			List<ManagedObjectReference> refs = getViewMembersTyped(
-					containerView, "ClusterComputeResource");
-
-			for (ManagedObjectReference ref : refs) {
-				String name = getProperty(ref, "name");
-				if (name != null) {
-					result.add(new ClusterInfo(ref, name, ref.getValue()));
-				}
-			}
-		} finally {
-			destroyViewQuietly(containerView);
+		for (MoRef ref : listView("ClusterComputeResource")) {
+			String name = getStringProperty(ref, "name");
+			if (name != null) result.add(new ClusterInfo(ref, name, ref.value));
 		}
 		return result;
 	}
 
+	// -----------------------------------------------------------------------
+	// Advanced settings (OptionManager.QueryOptions)
+	// -----------------------------------------------------------------------
+
 	/**
-	 * Generic, recipe-driven vim_property reader (canonical column 13).
-	 *
-	 * <p>This is the data-driven replacement for the three bespoke
-	 * readers ({@code readSecurityPolicy}, {@code getClusterVsanConfig}).
-	 * Given a resource MoRef and a list of that resource's vim_property
-	 * controls (each carrying a {@code read_recipe} of the form
-	 * {@code <style>:<vim_path>}), it returns a map keyed by the
-	 * control's canonical {@code parameter} -> the typed value read from
-	 * vim25 (or {@link #UNREADABLE} when the recipe resolved to nothing
-	 * or its style was unknown).
-	 *
-	 * <p>Contract — three result states per control, mirroring the
-	 * "unreadable is not compliant" rule:
-	 * <ul>
-	 *   <li>recipe resolves to a typed value -> that value (Boolean /
-	 *       String / Number) is placed in the map under the parameter
-	 *       key. The evaluator compares it.</li>
-	 *   <li>recipe present + evaluable but the read found null / the
-	 *       style could not extract / the style is unknown -> the
-	 *       sentinel {@link #UNREADABLE} object is placed in the map.
-	 *       The evaluator counts it as unreadable (excluded from
-	 *       pass/fail/denominator), NEVER as a pass.</li>
-	 *   <li>recipe empty / control not vim_property -> the key is absent
-	 *       from the map (the control is non-evaluable; the evaluator
-	 *       skips it entirely).</li>
-	 * </ul>
-	 *
-	 * <p>Reflection-tolerant throughout — never casts to a concrete
-	 * vim25 subclass. A missing accessor anywhere in the walk yields
-	 * null, which surfaces as {@link #UNREADABLE}, never an exception.
+	 * Host advanced settings via {@code configManager.advancedOption} ->
+	 * {@code QueryOptions(null)}. Returns the full key/value map; values are
+	 * stringified exactly as {@code String.valueOf(OptionValue.value)} did
+	 * (the SOAP {@code <value>} text content).
 	 */
-	public Map<String, Object> readVimProperties(
-			ManagedObjectReference moRef,
-			List<BenchmarkProfile.Control> controls) throws Exception {
+	public Map<String, String> getAdvancedSettings(MoRef hostRef)
+			throws Exception {
 		ensureConnected();
-		Map<String, Object> result = new HashMap<>();
-		if (moRef == null || controls == null) return result;
+		Map<String, String> result = new HashMap<>();
+		MoRef optMgr = getMoRefProperty(hostRef,
+				"configManager.advancedOption");
+		if (optMgr == null) return result;
+		return queryOptions(optMgr);
+	}
 
-		for (BenchmarkProfile.Control c : controls) {
-			// Recipe-driven kinds: vim_property (vim25 PropertyCollector +
-			// reflective walk) and esxcli (ExecuteSoap over the vCenter
-			// session, build 36). Both consume the read_recipe column via
-			// readByRecipe; the recipe's style prefix selects the reader.
-			if (!"vim_property".equals(c.parameterKind)
-					&& !"esxcli".equals(c.parameterKind)) {
-				continue;
+	/**
+	 * VM advanced settings via {@code config.extraConfig} — the VMX
+	 * OptionValue list. Returned as a key/value map with the same
+	 * stringification the v1 reader produced.
+	 */
+	public Map<String, String> getVmExtraConfig(MoRef vmRef) throws Exception {
+		ensureConnected();
+		Map<String, String> result = new HashMap<>();
+		Element val = getRawPropertyElement(vmRef, "config.extraConfig");
+		if (val == null) return result;
+		// extraConfig is an array of OptionValue; each child element carries
+		// <key> and <value>.
+		for (Element item : childElements(val)) {
+			String key = childText(item, "key");
+			String value = childText(item, "value");
+			if (key != null && value != null) {
+				result.put(key, value);
 			}
-			String recipe = c.readRecipe;
-			if (recipe == null || recipe.trim().isEmpty()) {
-				// Non-evaluable vim_property control (no recipe) — leave
-				// the key absent so the evaluator skips it. Not an
-				// unreadable: we never declared we could read it.
-				continue;
-			}
-			Object value;
-			try {
-				value = readByRecipe(moRef, recipe.trim());
-			} catch (Exception e) {
-				// Defensive — readByRecipe is already null-on-miss, but
-				// any unexpected reflective failure becomes unreadable,
-				// never a throw that aborts the whole collection cycle.
-				value = null;
-			}
-			result.put(c.parameter,
-					value != null ? value : UNREADABLE);
 		}
 		return result;
 	}
 
 	/**
-	 * Sentinel placed in the {@link #readVimProperties} result map when
-	 * a control declared a recipe but the read could not produce a
-	 * value. Distinct from "key absent" (non-evaluable, no recipe) and
-	 * from a real {@code Boolean.FALSE}. The evaluator treats this as
-	 * the explicit {@code unreadable} outcome.
+	 * vCenter-level advanced settings via {@code ServiceContent.setting} ->
+	 * {@code QueryOptions(null)}.
+	 */
+	public Map<String, String> getVCenterAdvancedSettings() throws Exception {
+		ensureConnected();
+		if (settingOptionMgr == null) return new HashMap<>();
+		return queryOptions(settingOptionMgr);
+	}
+
+	private Map<String, String> queryOptions(MoRef optionMgr) throws Exception {
+		Map<String, String> result = new HashMap<>();
+		String body =
+				"<QueryOptions xmlns=\"urn:vim25\">"
+				+ "<_this type=\"" + xmlEscape(optionMgr.type) + "\">"
+				+ xmlEscape(optionMgr.value) + "</_this>"
+				+ "</QueryOptions>";
+		Document resp = post(body, "urn:vim25/QueryOptions", true);
+		if (resp == null) return result;
+		// Each <returnval> is an OptionValue with <key> and <value>.
+		for (Element rv : childrenByLocalName(resp.getDocumentElement(),
+				"returnval")) {
+			String key = childText(rv, "key");
+			String value = childText(rv, "value");
+			if (key != null && value != null) {
+				result.put(key, value);
+			}
+		}
+		return result;
+	}
+
+	// -----------------------------------------------------------------------
+	// vCenter "about" info
+	// -----------------------------------------------------------------------
+
+	public String getVCenterInstanceUuid() throws Exception {
+		ensureConnected();
+		return aboutInstanceUuid;
+	}
+
+	public String getVCenterDisplayName() throws Exception {
+		ensureConnected();
+		return aboutFullName;
+	}
+
+	// -----------------------------------------------------------------------
+	// vSAN presence probe (ClusterComputeResource.configurationEx)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Whether a cluster has a vSAN config object at all. Distinguishes a
+	 * NON-vSAN cluster (vSAN controls genuinely N/A → skip silently) from a
+	 * vSAN cluster where a field read back null (a real coverage gap →
+	 * unreadable). Returns false when {@code configurationEx} or its
+	 * {@code vsanConfigInfo} child is absent. DOM walk; never casts.
+	 */
+	public boolean hasVsanConfig(MoRef clusterRef) throws Exception {
+		ensureConnected();
+		if (clusterRef == null) return false;
+		Element configEx = getRawPropertyElement(clusterRef, "configurationEx");
+		if (configEx == null) return false;
+		Element vsanCfg = firstDirectChild(configEx, "vsanConfigInfo");
+		return vsanCfg != null;
+	}
+
+	// -----------------------------------------------------------------------
+	// Generic recipe-driven vim_property reader (canonical column 13)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Sentinel placed in the result map when a control declared a recipe but
+	 * the read could not produce a value. Distinct from "key absent"
+	 * (non-evaluable, no recipe) and from a real {@code Boolean.FALSE}. The
+	 * evaluator treats this as the explicit {@code unreadable} outcome —
+	 * never a pass.
 	 */
 	public static final Object UNREADABLE = new Object() {
 		@Override public String toString() { return "(unreadable)"; }
 	};
 
 	/**
-	 * Read one recipe ({@code <style>:<vim_path>}) against a resource
-	 * MoRef and return the typed value, or null when the read finds
-	 * nothing / the style is unknown.
-	 *
-	 * <p>The walk reproduces exactly what the retired bespoke readers
-	 * did, generically:
-	 * <ol>
-	 *   <li>PropertyCollector resolves the longest leading prefix of the
-	 *       path it can ({@link #getRawPropertyLongestPrefix}). For the
-	 *       security-policy recipe this resolves
-	 *       {@code config.defaultPortConfig}; for the vSAN recipe,
-	 *       {@code configurationEx}.</li>
-	 *   <li>Remaining segments are walked with reflective zero-arg
-	 *       {@code get<Segment>()} getters
-	 *       ({@link #invokeGetter}).</li>
-	 *   <li>The {@code <style>} extractor is applied to the final node:
-	 *       {@code bool_policy} unwraps a BoolPolicy {@code .value};
-	 *       {@code bool} reads {@code is<Seg>()/get<Seg>()};
-	 *       {@code scalar} returns the node as-is; {@code string_list_join}
-	 *       joins a {@code List} on ",".</li>
-	 * </ol>
+	 * Generic, recipe-driven reader. Same contract as the JAX-WS version:
+	 * <ul>
+	 *   <li>recipe resolves to a typed value -> that value (Boolean / String /
+	 *       Number) under the control's {@code parameter} key.</li>
+	 *   <li>recipe present + evaluable but read found null / unknown style ->
+	 *       {@link #UNREADABLE} (counted as unreadable, NEVER a pass).</li>
+	 *   <li>recipe empty / not a recipe kind -> key absent (skipped).</li>
+	 * </ul>
 	 */
-	Object readByRecipe(ManagedObjectReference moRef, String recipe)
-			throws Exception {
+	public Map<String, Object> readVimProperties(
+			MoRef moRef,
+			List<BenchmarkProfile.Control> controls) throws Exception {
+		ensureConnected();
+		Map<String, Object> result = new HashMap<>();
+		if (moRef == null || controls == null) return result;
+
+		for (BenchmarkProfile.Control c : controls) {
+			if (!"vim_property".equals(c.parameterKind)
+					&& !"esxcli".equals(c.parameterKind)) {
+				continue;
+			}
+			String recipe = c.readRecipe;
+			if (recipe == null || recipe.trim().isEmpty()) {
+				continue;
+			}
+			Object value;
+			try {
+				value = readByRecipe(moRef, recipe.trim());
+			} catch (Exception e) {
+				value = null;
+			}
+			result.put(c.parameter, value != null ? value : UNREADABLE);
+		}
+		return result;
+	}
+
+	/**
+	 * Read one recipe ({@code <style>:<vim_path>}) against a resource MoRef.
+	 * Returns the typed value or null (-> UNREADABLE). The grammar and the
+	 * per-style outcomes are identical to the JAX-WS implementation; the only
+	 * change is the walk substrate (DOM elements instead of binding objects).
+	 */
+	Object readByRecipe(MoRef moRef, String recipe) throws Exception {
 		int colon = recipe.indexOf(':');
 		if (colon <= 0 || colon >= recipe.length() - 1) {
-			// Malformed recipe (no style or no path) — unknown style,
-			// treat as unreadable rather than guessing.
 			return null;
 		}
 		String style = recipe.substring(0, colon).trim();
 		String path = recipe.substring(colon + 1).trim();
 		if (path.isEmpty()) return null;
 
-		// esxcli style has a THREE-part grammar
-		// (esxcli:<namespace.command>:<ResultField>) so its `path` itself
-		// carries a colon. Handle it before the generic dotted-path split.
+		// esxcli and service_state carry a three-part grammar; handle before
+		// the generic dotted-path split.
 		if ("esxcli".equals(style)) {
 			return readEsxcliRecipe(moRef, path);
 		}
-
-		// service_state style also has a THREE-part grammar
-		// (service_state:<service_key>:<field>) — the `path` carries the
-		// service key, then a colon, then the field (running|policy).
-		// Handle it before the generic dotted-path split.
 		if ("service_state".equals(style)) {
 			return readServiceStateRecipe(moRef, path);
 		}
 
 		String[] segments = path.split("\\.");
-
 		switch (style) {
 			case "scalar":
 				return readScalarRecipe(moRef, segments);
@@ -525,54 +454,27 @@ public final class VSphereClient {
 			case "vlan_id_not":
 				return readVlanIdNotRecipe(moRef, segments);
 			default:
-				// Unknown style — never guess. Null -> UNREADABLE.
-				return null;
+				return null;   // unknown style -> UNREADABLE, never a guess
 		}
 	}
 
-	/**
-	 * esxcli style — {@code esxcli:<namespace.command>:<ResultField>}.
-	 * Reads a PascalCase result field from an esxcli {@code get} command
-	 * over the existing vCenter session (no host credentials) via
-	 * {@link EsxcliSoapClient}. The host moid is {@code moRef.getValue()}
-	 * (this style is HostSystem-only; on any other resource the
-	 * RetrieveManagedMethodExecuter call fails and we return null ->
-	 * UNREADABLE).
-	 *
-	 * <p>Typing: a value of {@code "true"}/{@code "false"} (case-
-	 * insensitive) is returned as a {@link Boolean} so the evaluator's
-	 * boolean compare path handles it (e.g.
-	 * {@code LocalLogOutputIsPersistent}); anything else is returned as a
-	 * String. A command-failure / absent-field / parse-failure returns
-	 * {@code null} — which {@link #readVimProperties} folds to the
-	 * UNREADABLE sentinel (loud, never a false pass — the build-35
-	 * contract).
-	 */
-	private Object readEsxcliRecipe(ManagedObjectReference moRef, String path)
-			throws Exception {
+	// ----- esxcli style (delegates to the proven raw-SOAP esxcli client) ---
+
+	private Object readEsxcliRecipe(MoRef moRef, String path) throws Exception {
 		if (esxcli == null) {
-			// Not connected / no session cookie captured — cannot read.
-			// Null -> UNREADABLE upstream, never a default.
 			return null;
 		}
 		int sep = path.lastIndexOf(':');
 		if (sep <= 0 || sep >= path.length() - 1) {
-			// Missing the :<ResultField> segment — malformed, unreadable.
 			return null;
 		}
 		String namespaceCommand = path.substring(0, sep).trim();
 		String fieldSpec = path.substring(sep + 1).trim();
 		if (namespaceCommand.isEmpty() || fieldSpec.isEmpty()) return null;
 
-		String hostMoid = moRef != null ? moRef.getValue() : null;
+		String hostMoid = moRef != null ? moRef.value : null;
 		if (hostMoid == null || hostMoid.isEmpty()) return null;
 
-		// Build 37 — row-selector grammar for `list` commands:
-		//   <ResultField>[<SelectorField>=<SelectorValue>]
-		// e.g. Value[Key=ciphers] (ssh server config list) or
-		//      Shellaccess[UserID=dcui] (account list). A field with no
-		//      bracket is a plain `get`-struct field (build-36 behavior,
-		//      unchanged).
 		String value;
 		int lb = fieldSpec.indexOf('[');
 		if (lb > 0 && fieldSpec.endsWith("]")) {
@@ -581,8 +483,6 @@ public final class VSphereClient {
 					fieldSpec.length() - 1).trim();
 			int eq = selector.indexOf('=');
 			if (eq <= 0 || eq >= selector.length() - 1) {
-				// Malformed selector (no field=value) — unreadable, never
-				// a guess.
 				return null;
 			}
 			String selectorField = selector.substring(0, eq).trim();
@@ -598,8 +498,6 @@ public final class VSphereClient {
 		}
 		if (value == null
 				|| EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
-			// Field/row absent, or the command call itself failed. All are
-			// UNREADABLE — never a sentinel pass.
 			return null;
 		}
 		String trimmed = value.trim();
@@ -608,459 +506,271 @@ public final class VSphereClient {
 		return trimmed;
 	}
 
+	// ----- service_state style ---------------------------------------------
+
 	/**
-	 * service_state style — {@code service_state:<service_key>:<field>}.
-	 * Reads the host's service list ({@code config.service.service}, a
-	 * {@code List<HostService>} hung off the {@code HostServiceInfo} at
-	 * {@code config.service}), finds the entry whose {@code key} matches
-	 * {@code <service_key>} (e.g. {@code TSM}, {@code TSM-SSH}, {@code ntpd}),
-	 * and returns the requested {@code <field>}:
-	 * <ul>
-	 *   <li>{@code running} -> the service's {@code running} boolean
-	 *       (vim25 {@code HostService.isRunning()} / {@code getRunning()})
-	 *       as a {@link Boolean}, so the evaluator's boolean compare path
-	 *       (Running/Stopped, true/false) handles it.</li>
-	 *   <li>{@code policy} -> the service's {@code policy} String
-	 *       ({@code on} / {@code off} / {@code automatic}) returned as-is.</li>
-	 * </ul>
-	 *
-	 * <p>Reflection-tolerant and unreadable-safe throughout. A null returned
-	 * here folds to the {@code UNREADABLE} sentinel upstream — NEVER a
-	 * sentinel pass. Specifically returns null (-> UNREADABLE) when:
-	 * <ul>
-	 *   <li>the service list cannot be read (PropertyCollector / reflective
-	 *       walk found nothing),</li>
-	 *   <li>no service entry matches {@code <service_key>} — a missing
-	 *       service is NOT treated as "stopped/compliant"; it is unreadable
-	 *       (we cannot prove its state),</li>
-	 *   <li>the field accessor is absent or returns the wrong type (wrong
-	 *       guessed field name folds to UNREADABLE, never a guess-pass),</li>
-	 *   <li>the {@code <field>} token is anything other than
-	 *       {@code running} / {@code policy}.</li>
-	 * </ul>
+	 * service_state:&lt;service_key&gt;:&lt;field&gt;. Walks the host service
+	 * list at {@code config.service.service}, finds the entry whose {@code
+	 * key} matches, and returns {@code running} (Boolean) or {@code policy}
+	 * (String). A missing service is UNREADABLE (cannot prove its state),
+	 * NEVER a "stopped/compliant" pass — identical to v1.
 	 */
-	private Object readServiceStateRecipe(ManagedObjectReference moRef,
-			String path) throws Exception {
-		// path = "<service_key>:<field>" (the leading "service_state:" was
-		// already stripped by readByRecipe). The service key itself never
-		// contains a colon, so split on the LAST colon to isolate the field.
+	private Object readServiceStateRecipe(MoRef moRef, String path)
+			throws Exception {
 		int sep = path.lastIndexOf(':');
 		if (sep <= 0 || sep >= path.length() - 1) {
-			// Missing the :<field> segment — malformed, unreadable.
 			return null;
 		}
 		String serviceKey = path.substring(0, sep).trim();
 		String field = path.substring(sep + 1).trim();
 		if (serviceKey.isEmpty() || field.isEmpty()) return null;
 		if (!"running".equals(field) && !"policy".equals(field)) {
-			// Unknown field — never guess. Null -> UNREADABLE.
 			return null;
 		}
 		if (moRef == null) return null;
 
-		// Walk to the HostServiceInfo at config.service, then pull its
-		// service list via getService(). PropertyCollector resolves the
-		// longest leading prefix it can (config.service typically resolves
-		// as a single path returning a HostServiceInfo); any remaining
-		// segment is walked reflectively.
-		String[] svcSegments = new String[] {"config", "service"};
-		Object serviceInfo = walkToNode(moRef, svcSegments);
+		// config.service resolves to a HostServiceInfo; its <service> children
+		// are the HostService entries.
+		Element serviceInfo = getRawPropertyElement(moRef, "config.service");
 		if (serviceInfo == null) return null;
 
-		// HostServiceInfo.getService() -> List<HostService>. Reflective so
-		// we never cast to the concrete vim25 subclass (classloader / binding
-		// drift tolerance). A missing accessor returns null -> UNREADABLE.
-		Object listObj = invokeGetter(serviceInfo, "getService");
-		if (!(listObj instanceof List)) {
-			// Some bindings may expose the list under a different ArrayOfX
-			// wrapper; fall back to the first List-returning accessor.
-			listObj = firstListAccessor(serviceInfo);
-		}
-		if (!(listObj instanceof List)) return null;
+		for (Element svc : childrenByLocalName(serviceInfo, "service")) {
+			String key = childText(svc, "key");
+			if (key == null || !serviceKey.equals(key)) continue;
 
-		for (Object svc : (List<?>) listObj) {
-			if (svc == null) continue;
-			Object keyObj = invokeGetter(svc, "getKey");
-			if (keyObj == null) continue;
-			if (!serviceKey.equals(String.valueOf(keyObj))) continue;
-
-			// Matched the service entry. Extract the requested field.
 			if ("running".equals(field)) {
-				// HostService.running is a boolean primitive; JAX-WS may
-				// generate isRunning() (primitive) or getRunning() (wrapper)
-				// depending on schema treatment. Try both shapes; a wrong /
-				// absent accessor returns null -> UNREADABLE, never a guess.
-				return readBoolean(svc, "isRunning", "getRunning");
+				return parseBool(childText(svc, "running"));
 			}
-			// field == "policy" — HostService.policy is a String.
-			Object policyObj = invokeGetter(svc, "getPolicy");
-			if (policyObj == null) return null;
-			String policy = String.valueOf(policyObj).trim();
+			String policy = childText(svc, "policy");
+			if (policy == null) return null;
+			policy = policy.trim();
 			return policy.isEmpty() ? null : policy;
 		}
-		// No entry matched <service_key>. The service is absent from this
-		// host's service list — we cannot prove its running/policy state, so
-		// this is UNREADABLE, NOT a sentinel "stopped/compliant" pass.
+		// No matching service entry — UNREADABLE, not "stopped/compliant".
 		return null;
 	}
 
-	/**
-	 * Walk to the node identified by the FULL segment path, returning
-	 * the node object (or null on any missing accessor). Used by the
-	 * scalar / string_list_join styles where the final segment IS the
-	 * value node. PropertyCollector resolves the longest prefix it can;
-	 * the rest is a reflective getter walk.
-	 */
-	private Object walkToNode(ManagedObjectReference moRef, String[] segments)
+	// ----- scalar / bool / bool_policy / string_list_join ------------------
+
+	private Object readScalarRecipe(MoRef moRef, String[] segments)
 			throws Exception {
-		int[] consumed = new int[1];
-		Object node = getRawPropertyLongestPrefix(moRef, segments, consumed);
-		for (int i = consumed[0]; i < segments.length; i++) {
-			if (node == null) return null;
-			node = invokeGetter(node, getterName(segments[i]));
-		}
-		return node;
-	}
-
-	private Object readScalarRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
-		return walkToNode(moRef, segments);
-	}
-
-	/**
-	 * bool style — walk to the PARENT of the final segment, then read
-	 * the final segment as a boolean via {@code is<Field>()/get<Field>()}.
-	 * Reproduces the vSAN reader: {@code configurationEx} (PropertyCollector)
-	 * -> getVsanConfigInfo [-> getDefaultConfig] -> isEnabled/getEnabled
-	 * (or isChecksumEnabled/getChecksumEnabled, etc.).
-	 */
-	private Boolean readBoolRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
-		Object parent = walkToParent(moRef, segments);
-		if (parent == null) return null;
-		String field = segments[segments.length - 1];
-		return readBoolean(parent, "is" + capitalize(field),
-				"get" + capitalize(field));
-	}
-
-	/**
-	 * bool_policy style — walk to the PARENT of the final segment
-	 * (a DVSSecurityPolicy), then unwrap the final segment's BoolPolicy
-	 * wrapper to its {@code .value}. Reproduces readSecurityPolicy:
-	 * {@code config.defaultPortConfig} (PropertyCollector) ->
-	 * getSecurityPolicy -> get<Field> (BoolPolicy) -> isValue/getValue.
-	 */
-	private Boolean readBoolPolicyRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
-		Object parent = walkToParent(moRef, segments);
-		if (parent == null) return null;
-		String field = segments[segments.length - 1];
-		return readBoolPolicy(parent, "get" + capitalize(field));
-	}
-
-	private String readStringListJoinRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
-		Object node = walkToNode(moRef, segments);
+		Element node = walkToNode(moRef, segments);
 		if (node == null) return null;
-		if (node instanceof List) {
-			List<?> list = (List<?>) node;
-			if (list.isEmpty()) return null;
-			StringBuilder sb = new StringBuilder();
-			for (int i = 0; i < list.size(); i++) {
-				if (i > 0) sb.append(',');
-				sb.append(String.valueOf(list.get(i)));
-			}
-			return sb.toString();
-		}
-		// Some bindings wrap the list in an ArrayOfX with a getX()
-		// accessor; reflectively pull a List out if present.
-		Object inner = firstListAccessor(node);
-		if (inner instanceof List) {
-			List<?> list = (List<?>) inner;
-			if (list.isEmpty()) return null;
-			StringBuilder sb = new StringBuilder();
-			for (int i = 0; i < list.size(); i++) {
-				if (i > 0) sb.append(',');
-				sb.append(String.valueOf(list.get(i)));
-			}
-			return sb.toString();
-		}
-		return null;
+		String text = elementText(node);
+		return (text == null || text.isEmpty()) ? null : text;
 	}
 
 	/**
-	 * Result of {@link #readListConfirmed}. Carries the cardinal-trap
-	 * distinction these styles depend on: whether the LIST itself was
-	 * successfully obtained, independent of how many elements it holds.
-	 *
-	 * <ul>
-	 *   <li>{@code !confirmed} — the container node or the list accessor
-	 *       could NOT be read (PropertyCollector / reflective walk found
-	 *       nothing, or the accessor did not return a {@code List}). This
-	 *       is the failed-fetch case: callers MUST fold it to
-	 *       {@code null} -> UNREADABLE. A failed fetch is NOT an empty
-	 *       list and is NEVER scored as compliant.</li>
-	 *   <li>{@code confirmed} with {@code list} non-null — a real
-	 *       {@code List} was obtained off a non-null container node. It
-	 *       may be empty (zero elements) — that is a genuine, scoreable
-	 *       reading, distinct from a failed fetch.</li>
-	 * </ul>
+	 * bool style — walk to the final-segment element, read it as a boolean.
+	 * Reproduces the vSAN reader (configurationEx -> vsanConfigInfo ->
+	 * enabled / objectChecksumEnabled / ...). DOM: the leaf element's text is
+	 * {@code true}/{@code false}.
+	 */
+	private Boolean readBoolRecipe(MoRef moRef, String[] segments)
+			throws Exception {
+		Element node = walkToNode(moRef, segments);
+		if (node == null) return null;
+		return parseBool(elementText(node));
+	}
+
+	/**
+	 * bool_policy style — walk to the PARENT of the final segment (a
+	 * DVSSecurityPolicy), then read the final segment (a BoolPolicy wrapper)
+	 * -> its {@code value} child. Reproduces readSecurityPolicy:
+	 * config.defaultPortConfig -> securityPolicy -> &lt;field&gt; (BoolPolicy)
+	 * -> value.
+	 */
+	private Boolean readBoolPolicyRecipe(MoRef moRef, String[] segments)
+			throws Exception {
+		Element parent = walkToParent(moRef, segments);
+		if (parent == null) return null;
+		String field = segments[segments.length - 1];
+		Element wrapper = firstDirectChild(parent, field);
+		if (wrapper == null) return null;
+		// BoolPolicy.value child. Absent value -> null (not present), never
+		// false.
+		String v = childText(wrapper, "value");
+		return parseBool(v);
+	}
+
+	private String readStringListJoinRecipe(MoRef moRef, String[] segments)
+			throws Exception {
+		// The final segment names a repeated element; walk to its PARENT and
+		// collect every direct child of that name. An empty list -> null
+		// (coverage gap, never a "(non-empty)" pass) — identical to v1.
+		Element parent = walkToParent(moRef, segments);
+		if (parent == null) return null;
+		String field = segments[segments.length - 1];
+		List<Element> items = childrenByLocalName(parent, field);
+		if (items.isEmpty()) return null;
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < items.size(); i++) {
+			if (i > 0) sb.append(',');
+			String t = elementText(items.get(i));
+			sb.append(t != null ? t : "");
+		}
+		return sb.toString();
+	}
+
+	// ----- list styles (cardinal-trap: confirmed read vs failed fetch) -----
+
+	/**
+	 * Result of a list read. {@code confirmed} is true only when the owning
+	 * container node was positively read (so an empty list is a genuine
+	 * reading); {@code !confirmed} is the failed-fetch case the cardinal rule
+	 * forbids treating as compliant.
 	 */
 	private static final class ListRead {
 		final boolean confirmed;
-		final List<?> list;
-		private ListRead(boolean confirmed, List<?> list) {
+		final List<Element> items;
+		private ListRead(boolean confirmed, List<Element> items) {
 			this.confirmed = confirmed;
-			this.list = list;
+			this.items = items;
 		}
 		static ListRead failed() { return new ListRead(false, null); }
-		static ListRead of(List<?> l) { return new ListRead(true, l); }
+		static ListRead of(List<Element> l) { return new ListRead(true, l); }
 	}
 
 	/**
-	 * The CARDINAL-TRAP separator for the {@code vm_hardware_device_absent}
-	 * and {@code list_empty} styles, where <em>compliant == empty</em>.
-	 *
-	 * <p>The fatal failure mode these styles must avoid is letting a FAILED
-	 * read of the list fall through to "list is empty -> compliant". This
-	 * helper makes the distinction explicit and positive:
-	 *
-	 * <ol>
-	 *   <li>Walk to the <b>container node</b> (every segment except the
-	 *       final list segment). If that node is {@code null}, the read
-	 *       FAILED — we never reached the object that owns the list, so we
-	 *       cannot assert anything about the list's contents.
-	 *       -> {@link ListRead#failed()} (caller -> UNREADABLE).</li>
-	 *   <li>The container node IS present (positive proof the read
-	 *       reached the owning object). Invoke the final segment's
-	 *       zero-arg getter. If it returns a {@code List} instance (even an
-	 *       <b>empty</b> one), that is a CONFIRMED read of the collection.
-	 *       -> {@link ListRead#of(list)}.</li>
-	 *   <li>The accessor is absent or did not return a {@code List} (wrong
-	 *       guessed field name, binding drift) — we did NOT positively
-	 *       obtain the collection. -> {@link ListRead#failed()}
-	 *       (caller -> UNREADABLE, never an empty-list pass).</li>
-	 * </ol>
-	 *
-	 * <p>Note the asymmetry vs. {@code string_list_join}: that style maps an
-	 * empty list to {@code null} (an empty NTP list is a coverage gap, never
-	 * a {@code (non-empty)} pass). Here, by contrast, an empty list is the
-	 * COMPLIANT outcome — so we must NOT collapse empty to null. The
-	 * confirmation that we reached a non-null container node is what lets us
-	 * trust the empty list as a real reading rather than a failed fetch.
+	 * Positively obtain the repeated-element list named by the final segment.
+	 * Reaching a non-null container node is the proof that lets an empty list
+	 * count as a real reading. If the container node could not be read ->
+	 * {@code failed()} (caller -> UNREADABLE).
 	 */
-	private ListRead readListConfirmed(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
+	private ListRead readListConfirmed(MoRef moRef, String[] segments)
+			throws Exception {
 		if (segments == null || segments.length == 0) return ListRead.failed();
-		// Walk to the parent (owning) node of the final list segment.
-		Object container = walkToParent(moRef, segments);
+		Element container = walkToParent(moRef, segments);
 		if (container == null) {
-			// Could not reach the object that owns the list. FAILED read —
-			// NOT an empty list. This is the exact case the cardinal rule
-			// forbids treating as compliant.
 			return ListRead.failed();
 		}
 		String field = segments[segments.length - 1];
-		Object listObj = invokeGetter(container, getterName(field));
-		if (listObj instanceof List) {
-			// CONFIRMED: a real List was obtained off a present container.
-			// May be empty — that is a genuine reading, evaluated below.
-			return ListRead.of((List<?>) listObj);
-		}
-		// Some bindings wrap a list in an ArrayOfX; try the first
-		// List-returning accessor on the node the getter DID return (only
-		// when that node itself is non-null — a null here means the field
-		// accessor produced nothing, i.e. a failed fetch, not an empty list).
-		if (listObj != null) {
-			Object inner = firstListAccessor(listObj);
-			if (inner instanceof List) {
-				return ListRead.of((List<?>) inner);
-			}
-		}
-		// Field accessor absent / wrong type / null — we did NOT positively
-		// obtain the collection. FAILED read, never an empty-list pass.
-		return ListRead.failed();
+		// A confirmed container with zero matching children is a real empty
+		// list (e.g. no devices / no vspan sessions) — distinct from a failed
+		// fetch (container null above).
+		return ListRead.of(childrenByLocalName(container, field));
 	}
 
 	/**
-	 * {@code vm_hardware_device_absent} style — Style B.
-	 * Grammar: {@code vm_hardware_device_absent:<list_path>[:<TypeName>]}
-	 * (the type filter is the optional trailing dotted segment), but in
-	 * practice the recipe is written as
-	 * {@code vm_hardware_device_absent:config.hardware.device.<DeviceTypeSimpleName>}
-	 * — the FINAL segment names the vim25 device type to test for absence
-	 * and the preceding segments are the list path
-	 * ({@code config.hardware.device}).
-	 *
-	 * <p>Compliant ({@code Boolean.TRUE}) iff the device list was read AND
-	 * contains <b>no</b> element whose runtime class simple-name equals the
-	 * requested type. Non-compliant ({@code Boolean.FALSE}) iff at least one
-	 * matching device is present. {@code null} (-> UNREADABLE) iff the
-	 * device list could not be obtained (cardinal-trap separation:
-	 * {@link #readListConfirmed} returns {@code !confirmed}).
-	 *
-	 * <p>Type matching is by {@code getClass().getSimpleName()} — never an
-	 * {@code instanceof} against a concrete vim25 subclass — so it survives
-	 * per-pak classloader isolation and binding drift. {@code VirtualDevice}
-	 * subclasses report their concrete name (e.g. {@code VirtualPCIPassthrough}).
+	 * vm_hardware_device_absent — compliant iff the device list was read AND
+	 * contains no element of the requested device type. DOM type matching is
+	 * by the element's {@code xsi:type} (the wire type name), the analogue of
+	 * v1's {@code getClass().getSimpleName()} — never an instanceof against a
+	 * concrete subclass.
 	 */
-	private Boolean readDeviceAbsentRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
+	private Boolean readDeviceAbsentRecipe(MoRef moRef, String[] segments)
+			throws Exception {
 		if (segments.length < 2) return null;
-		// Final segment = the device type simple-name to test for absence.
-		// Preceding segments = the device list path (config.hardware.device).
 		String typeName = segments[segments.length - 1];
 		String[] listPath = new String[segments.length - 1];
 		System.arraycopy(segments, 0, listPath, 0, segments.length - 1);
 
 		ListRead read = readListConfirmed(moRef, listPath);
 		if (!read.confirmed) {
-			// FAILED to read the device list — UNREADABLE, never "absent".
-			return null;
+			return null;   // failed fetch -> UNREADABLE, never "absent"
 		}
-		for (Object dev : read.list) {
-			if (dev == null) continue;
-			if (typeName.equals(dev.getClass().getSimpleName())) {
-				// A device of the prohibited type is present -> NOT compliant.
-				return Boolean.FALSE;
+		for (Element dev : read.items) {
+			if (typeName.equals(xsiType(dev))) {
+				return Boolean.FALSE;   // prohibited device present
 			}
 		}
-		// List confirmed and no matching device present -> device absent ->
-		// compliant. (An empty device list also lands here, correctly: a
-		// confirmed empty list means the type is absent.)
-		return Boolean.TRUE;
+		return Boolean.TRUE;   // confirmed and type absent -> compliant
 	}
 
 	/**
-	 * {@code list_empty} style — Style C.
-	 * Grammar: {@code list_empty:<list_path>} (e.g.
-	 * {@code list_empty:config.vspanSession}).
-	 *
-	 * <p>Compliant ({@code Boolean.TRUE}) iff the list was read AND has zero
-	 * elements. Non-compliant ({@code Boolean.FALSE}) iff the list was read
-	 * AND has ≥1 element. {@code null} (-> UNREADABLE) iff the list could
-	 * NOT be obtained — the failed-fetch case, kept strictly distinct from
-	 * a genuinely-empty list by {@link #readListConfirmed}.
+	 * list_empty — compliant iff the list was read AND has zero elements;
+	 * non-compliant iff ≥1; UNREADABLE iff the list could not be obtained.
 	 */
-	private Boolean readListEmptyRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
+	private Boolean readListEmptyRecipe(MoRef moRef, String[] segments)
+			throws Exception {
 		ListRead read = readListConfirmed(moRef, segments);
 		if (!read.confirmed) {
-			// FAILED to read the list — UNREADABLE, NOT "empty -> compliant".
 			return null;
 		}
-		return read.list.isEmpty() ? Boolean.TRUE : Boolean.FALSE;
+		return read.items.isEmpty() ? Boolean.TRUE : Boolean.FALSE;
 	}
 
 	/**
-	 * {@code vlan_id_not} style — Style D.
-	 * Grammar: {@code vlan_id_not:<vlan_spec_path>} (e.g.
-	 * {@code vlan_id_not:config.defaultPortConfig.vlan}).
-	 *
-	 * <p>Type-aware VGT (virtual guest tagging) detection. VGT is
-	 * non-compliant. It presents either as a trunk spec
-	 * ({@code VmwareDistributedVirtualSwitchTrunkVlanSpec}) or, on a plain
-	 * id spec, as {@code vlanId == 4095}.
-	 *
-	 * <p>Compliant ({@code Boolean.TRUE}) iff the VLAN spec node was read
-	 * AND it is a plain id spec ({@code ...VlanIdSpec}) AND its
-	 * {@code vlanId != 4095}. Non-compliant ({@code Boolean.FALSE}) iff it
-	 * is a trunk spec OR a plain id spec with {@code vlanId == 4095}.
-	 * {@code null} (-> UNREADABLE) iff the spec node could not be read OR
-	 * its runtime type is neither a recognized id spec nor a recognized
-	 * trunk spec (unknown/unreadable spec type — never a guess-pass).
-	 *
-	 * <p>Type discrimination is by {@code getClass().getSimpleName()}
-	 * substring match — never an {@code instanceof} against a concrete
-	 * vim25 subclass — for classloader/binding tolerance.
+	 * vlan_id_not — VGT (virtual guest tagging) detection. A trunk spec
+	 * ({@code ...TrunkVlanSpec}) is VGT -> non-compliant. A plain id spec
+	 * ({@code ...VlanIdSpec}) with {@code vlanId == 4095} is VGT ->
+	 * non-compliant; any other id is compliant. An unreadable / unrecognized
+	 * spec type is UNREADABLE, never a guess. Type discrimination is by the
+	 * element {@code xsi:type} substring (Trunk / VlanId).
 	 */
-	private Boolean readVlanIdNotRecipe(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
-		Object specNode = walkToNode(moRef, segments);
+	private Boolean readVlanIdNotRecipe(MoRef moRef, String[] segments)
+			throws Exception {
+		Element specNode = walkToNode(moRef, segments);
 		if (specNode == null) {
-			// Could not read the VLAN spec — UNREADABLE, never a guess.
 			return null;
 		}
-		String typeName = specNode.getClass().getSimpleName();
-		// Trunk spec => VGT mode => NON-compliant. Recognized by the
-		// "Trunk" marker in the runtime type name
-		// (VmwareDistributedVirtualSwitchTrunkVlanSpec).
+		String typeName = xsiType(specNode);
+		if (typeName == null) return null;
 		if (typeName.contains("Trunk")) {
 			return Boolean.FALSE;
 		}
-		// Plain id spec => read vlanId; 4095 also indicates VGT. Recognized
-		// by the "VlanId" marker (VmwareDistributedVirtualSwitchVlanIdSpec).
 		if (typeName.contains("VlanId")) {
-			Object idObj = invokeGetter(specNode, "getVlanId");
-			if (!(idObj instanceof Number)) {
-				// Id spec but the id accessor did not yield a number — we
-				// cannot decide. UNREADABLE, never a guess-pass.
+			String idText = childText(specNode, "vlanId");
+			if (idText == null) return null;
+			try {
+				int vlanId = Integer.parseInt(idText.trim());
+				return vlanId == 4095 ? Boolean.FALSE : Boolean.TRUE;
+			} catch (NumberFormatException e) {
 				return null;
 			}
-			int vlanId = ((Number) idObj).intValue();
-			return vlanId == 4095 ? Boolean.FALSE : Boolean.TRUE;
 		}
-		// Neither a recognized id spec nor a trunk spec (e.g. a PVLAN spec,
-		// or an unexpected/unreadable type). We cannot assert VGT-vs-not, so
-		// this is UNREADABLE — NEVER a guess-pass.
-		return null;
+		return null;   // unrecognized spec type -> UNREADABLE
 	}
 
+	// -----------------------------------------------------------------------
+	// DOM path walking
+	// -----------------------------------------------------------------------
+
 	/**
-	 * Walk to the parent node of the final path segment. PropertyCollector
-	 * resolves the longest prefix; remaining intermediate segments (all
-	 * but the last) are walked reflectively.
+	 * Walk to the element identified by the FULL segment path, returning the
+	 * leaf element (or null on any missing element). PropertyCollector
+	 * resolves the longest dotted prefix it can; the remaining tail is walked
+	 * by DOM child local-name.
 	 */
-	private Object walkToParent(ManagedObjectReference moRef,
-			String[] segments) throws Exception {
+	private Element walkToNode(MoRef moRef, String[] segments)
+			throws Exception {
 		int[] consumed = new int[1];
-		// CAP at segments.length - 1: PropertyCollector must NOT be
-		// allowed to consume the final (leaf) segment for the
-		// bool / bool_policy styles, because the leaf is a boolean or a
-		// BoolPolicy wrapper that the style extractor reads via a
-		// reflective accessor on its PARENT. If PropertyCollector
-		// resolved the leaf directly we'd lose the wrapper and the
-		// extractor would null out (false unreadable). Capping the
-		// probe to the parent depth guarantees the walk reaches exactly
-		// the node the retired bespoke readers reflected from:
-		//   bool_policy -> the DVSSecurityPolicy (parent of <field>)
-		//   bool        -> the VsanClusterConfigInfo[.defaultConfig]
-		//                  (parent of <field>)
-		Object node = getRawPropertyLongestPrefix(moRef, segments,
-				segments.length - 1, consumed);
-		// Walk reflective getters for every intermediate segment up to,
-		// but not including, the final one.
-		for (int i = consumed[0]; i < segments.length - 1; i++) {
+		Element node = getLongestPrefixElement(moRef, segments,
+				segments.length, consumed);
+		for (int i = consumed[0]; i < segments.length; i++) {
 			if (node == null) return null;
-			node = invokeGetter(node, getterName(segments[i]));
+			node = firstDirectChild(node, segments[i]);
 		}
 		return node;
 	}
 
 	/**
-	 * Try PropertyCollector against progressively shorter dotted
-	 * prefixes of {@code segments} (longest first, but no longer than
-	 * {@code maxLen} segments) and return the first non-null value,
-	 * writing the number of segments consumed into {@code consumedOut[0]}.
-	 * Returns null with consumed=0 when no prefix resolves (the caller
-	 * then treats it as unreadable).
-	 *
-	 * <p>Longest-first matters: {@code config.defaultPortConfig}
-	 * resolves as a single PropertyCollector path on a DVS. We want the
-	 * deepest node PropertyCollector WILL hand back (within the cap),
-	 * then reflect the rest — which is exactly what the bespoke readers
-	 * did (PropertyCollector for {@code config.defaultPortConfig} /
-	 * {@code configurationEx}; reflective getters for the tail).
+	 * Walk to the parent of the final path segment. PropertyCollector is
+	 * capped at {@code segments.length - 1} so it never resolves the leaf
+	 * directly — the bool / bool_policy / list styles need the leaf element
+	 * (and its xsi:type / wrapper) intact, read off the parent.
 	 */
-	private Object getRawPropertyLongestPrefix(ManagedObjectReference moRef,
-			String[] segments, int[] consumedOut) throws Exception {
-		return getRawPropertyLongestPrefix(moRef, segments,
-				segments.length, consumedOut);
+	private Element walkToParent(MoRef moRef, String[] segments)
+			throws Exception {
+		int[] consumed = new int[1];
+		Element node = getLongestPrefixElement(moRef, segments,
+				segments.length - 1, consumed);
+		for (int i = consumed[0]; i < segments.length - 1; i++) {
+			if (node == null) return null;
+			node = firstDirectChild(node, segments[i]);
+		}
+		return node;
 	}
 
-	private Object getRawPropertyLongestPrefix(ManagedObjectReference moRef,
-			String[] segments, int maxLen, int[] consumedOut)
-			throws Exception {
+	/**
+	 * Try PropertyCollector against progressively shorter dotted prefixes of
+	 * {@code segments} (longest first, no longer than {@code maxLen}) and
+	 * return the first {@code <val>} element that resolves, writing the
+	 * number of segments consumed into {@code consumedOut[0]}. Returns null /
+	 * consumed=0 when no prefix resolves.
+	 */
+	private Element getLongestPrefixElement(MoRef moRef, String[] segments,
+			int maxLen, int[] consumedOut) throws Exception {
 		int start = Math.min(maxLen, segments.length);
 		for (int len = start; len >= 1; len--) {
 			StringBuilder p = new StringBuilder();
@@ -1068,9 +778,9 @@ public final class VSphereClient {
 				if (i > 0) p.append('.');
 				p.append(segments[i]);
 			}
-			Object v;
+			Element v;
 			try {
-				v = getRawProperty(moRef, p.toString());
+				v = getRawPropertyElement(moRef, p.toString());
 			} catch (Exception e) {
 				v = null;
 			}
@@ -1083,353 +793,446 @@ public final class VSphereClient {
 		return null;
 	}
 
-	private static String getterName(String segment) {
-		return "get" + capitalize(segment);
-	}
-
-	private static String capitalize(String s) {
-		if (s == null || s.isEmpty()) return s;
-		return Character.toUpperCase(s.charAt(0)) + s.substring(1);
-	}
+	// -----------------------------------------------------------------------
+	// PropertyCollector primitives (RetrieveProperties)
+	// -----------------------------------------------------------------------
 
 	/**
-	 * Reflectively find the first zero-arg getter on {@code node} that
-	 * returns a {@code List} — used by string_list_join to peel an
-	 * ArrayOfX wrapper. Returns null when none is found.
+	 * Retrieve a single property's {@code <val>} element for an object.
+	 * Returns the DOM element of the property value (carrying its xsi:type
+	 * and children), or null when the property is absent / unreadable.
 	 */
-	private Object firstListAccessor(Object node) {
-		if (node == null) return null;
-		for (java.lang.reflect.Method m : node.getClass().getMethods()) {
-			if (m.getParameterTypes().length != 0) continue;
-			if (!m.getName().startsWith("get")) continue;
-			if (!List.class.isAssignableFrom(m.getReturnType())) continue;
-			try {
-				return m.invoke(node);
-			} catch (Exception ignored) {
-				return null;
+	private Element getRawPropertyElement(MoRef moRef, String propPath)
+			throws Exception {
+		Document resp = retrieveProperties(moRef.type, moRef.value, propPath);
+		if (resp == null) return null;
+		Element returnval = firstByLocalName(resp.getDocumentElement(),
+				"returnval");
+		if (returnval == null) return null;
+		// <returnval> (ObjectContent): <obj/> then one or more <propSet>.
+		for (Element propSet : childrenByLocalName(returnval, "propSet")) {
+			String name = childText(propSet, "name");
+			if (propPath.equals(name)) {
+				return firstDirectChild(propSet, "val");
 			}
 		}
 		return null;
 	}
 
 	/**
-	 * Probe whether a cluster has a vSAN configuration object at all.
-	 *
-	 * <p>The bulk vSAN read is now data-driven via
-	 * {@link #readVimProperties} + the {@code bool:configurationEx.
-	 * vsanConfigInfo.*} recipes (canonical column 13). But the collector
-	 * still needs to distinguish a NON-vSAN cluster — where the
-	 * vsanConfig controls are genuinely N/A and should be skipped
-	 * silently — from a vSAN cluster where a field read back null (a
-	 * real coverage gap that should surface as unreadable). The retired
-	 * {@code getClusterVsanConfig} made that distinction by returning an
-	 * empty map when {@code configurationEx.vsanConfigInfo} was absent;
-	 * this probe preserves it.
-	 *
-	 * <p>vim25 surface:
-	 * {@code ClusterComputeResource.configurationEx} (a
-	 * {@code ClusterConfigInfoEx}) -> {@code getVsanConfigInfo()}. Returns
-	 * {@code false} when either is null (non-vSAN cluster, or
-	 * configurationEx absent), {@code true} when the vSAN config object
-	 * is present. Reflection-tolerant; never casts.
+	 * String form of a single property (used for inventory {@code name}).
 	 */
-	public boolean hasVsanConfig(ManagedObjectReference clusterRef)
+	private String getStringProperty(MoRef moRef, String propPath)
 			throws Exception {
-		ensureConnected();
-		if (clusterRef == null) return false;
-		// configurationEx is the rich ClusterConfigInfoEx; the older
-		// 'configuration' property is the legacy ClusterConfigInfo that
-		// does NOT carry vsanConfigInfo. Use configurationEx.
-		Object configEx = getRawProperty(clusterRef, "configurationEx");
-		if (configEx == null) return false;
-		Object vsanCfg = invokeGetter(configEx, "getVsanConfigInfo");
-		return vsanCfg != null;
+		Element val = getRawPropertyElement(moRef, propPath);
+		if (val == null) return null;
+		String t = elementText(val);
+		return (t == null || t.isEmpty()) ? null : t;
 	}
 
 	/**
-	 * Read a Boolean field from a JAX-WS binding object that may expose
-	 * either an {@code isX()} or {@code getX()} accessor depending on
-	 * the binding generator's treatment of {@code Boolean} vs
-	 * {@code boolean}. Returns null when neither accessor exists or
-	 * both return null.
+	 * Resolve a property whose value is itself a ManagedObjectReference
+	 * (e.g. {@code configManager.advancedOption}). The {@code <val>}
+	 * element's {@code type} attribute carries the MoRef type; its text is
+	 * the value.
 	 */
-	private Boolean readBoolean(Object target, String isGetter,
-			String getGetter) throws Exception {
-		Object v;
-		try {
-			v = invokeGetter(target, isGetter);
-		} catch (Exception e) {
-			v = null;
-		}
-		if (v == null) {
-			try {
-				v = invokeGetter(target, getGetter);
-			} catch (Exception e) {
-				return null;
-			}
-		}
-		if (v instanceof Boolean) return (Boolean) v;
-		return null;
-	}
-
-	/**
-	 * Enumerates DistributedVirtualPortgroup inventory entries.
-	 * Same shape and rationale as {@link #getDvSwitches()}.
-	 */
-	public List<DvpgInfo> getDvPortgroups() throws Exception {
-		ensureConnected();
-		List<DvpgInfo> result = new ArrayList<>();
-
-		ManagedObjectReference viewMgr = serviceContent.getViewManager();
-		ManagedObjectReference containerView = vimPort.createContainerView(
-				viewMgr, rootFolder,
-				java.util.Arrays.asList("DistributedVirtualPortgroup"),
-				true);
-
-		try {
-			List<ManagedObjectReference> refs = getViewMembersTyped(
-					containerView, "DistributedVirtualPortgroup");
-
-			for (ManagedObjectReference ref : refs) {
-				String name = getProperty(ref, "name");
-				if (name != null) {
-					result.add(new DvpgInfo(ref, name, ref.getValue()));
-				}
-			}
-		} finally {
-			destroyViewQuietly(containerView);
-		}
-		return result;
-	}
-
-	// DVS / DVPG security-policy reads and the cluster vSAN read are no
-	// longer bespoke: they are driven by the canonical read_recipe
-	// column via readVimProperties + readByRecipe above (bool_policy
-	// for the securityPolicy.* fields, bool for vsanConfig.*). The
-	// reflective primitives those recipes use — readBoolPolicy,
-	// readBoolean, invokeGetter, getRawProperty — are retained below.
-
-	/**
-	 * Read the {@code .value} child of a {@code BoolPolicy} field on
-	 * a {@code DVSSecurityPolicy}. The vim25 binding exposes each as
-	 * a {@code BoolPolicy} wrapper with {@code isInherited()} /
-	 * {@code isValue()} accessors (or {@code getInherited()} /
-	 * {@code getValue()} in older bindings). We try both shapes; null
-	 * means "not present" rather than "false".
-	 */
-	private Boolean readBoolPolicy(Object secPol, String getter) {
-		Object wrapper;
-		try {
-			wrapper = invokeGetter(secPol, getter);
-		} catch (Exception e) {
-			return null;
-		}
-		if (wrapper == null) return null;
-		// BoolPolicy.value is a Boolean. JAX-WS generates isValue() for
-		// boolean primitives and getValue() for Boolean wrappers
-		// depending on schema treatment; try both.
-		Object v;
-		try {
-			v = invokeGetter(wrapper, "isValue");
-		} catch (Exception e) {
-			v = null;
-		}
-		if (v == null) {
-			try {
-				v = invokeGetter(wrapper, "getValue");
-			} catch (Exception e) {
-				return null;
-			}
-		}
-		if (v instanceof Boolean) return (Boolean) v;
-		return null;
-	}
-
-	/**
-	 * Reflection helper — invoke a zero-arg getter by name on
-	 * {@code target}. Returns null when the getter doesn't exist
-	 * (NoSuchMethodException) so the security-policy walker can
-	 * skip absent fields rather than crashing.
-	 */
-	private Object invokeGetter(Object target, String name)
+	private MoRef getMoRefProperty(MoRef moRef, String propPath)
 			throws Exception {
-		if (target == null) return null;
-		try {
-			java.lang.reflect.Method m = target.getClass()
-					.getMethod(name);
-			return m.invoke(target);
-		} catch (NoSuchMethodException ignored) {
-			return null;
-		}
+		Element val = getRawPropertyElement(moRef, propPath);
+		if (val == null) return null;
+		String type = val.getAttribute("type");
+		String value = elementText(val);
+		if (value == null || value.isEmpty()) return null;
+		return new MoRef(type != null && !type.isEmpty() ? type
+				: "ManagedObject", value);
 	}
 
 	/**
-	 * Returns the vCenter instance UUID
-	 * ({@code ServiceContent.about.instanceUuid}) — a stable
-	 * identifier for the vCenter we are connected to, useful for
-	 * naming the synthetic "VCenterAdapterInstance" the canonical
-	 * profile targets.
+	 * RetrieveProperties for one object and one property path (no traversal).
 	 */
-	public String getVCenterInstanceUuid() throws Exception {
-		ensureConnected();
-		if (serviceContent == null) return null;
-		if (serviceContent.getAbout() == null) return null;
-		return serviceContent.getAbout().getInstanceUuid();
-	}
-
-	/**
-	 * Returns the vCenter API name (commonly "VMware vCenter Server")
-	 * for diagnostic logging.
-	 */
-	public String getVCenterDisplayName() throws Exception {
-		ensureConnected();
-		if (serviceContent == null) return null;
-		if (serviceContent.getAbout() == null) return null;
-		return serviceContent.getAbout().getFullName();
-	}
-
-	private String getProperty(ManagedObjectReference moRef, String propName)
-			throws Exception {
-		Object raw = getRawProperty(moRef, propName);
-		return raw == null ? null : String.valueOf(raw);
-	}
-
-	/**
-	 * Like {@link #getProperty(ManagedObjectReference, String)} but
-	 * returns the unwrapped JAX-WS value object so callers can read
-	 * complex types (e.g. {@code config.extraConfig} which deserializes
-	 * to an {@code ArrayOfOptionValue} wrapper around a
-	 * {@code List<OptionValue>}).
-	 */
-	private Object getRawProperty(ManagedObjectReference moRef, String propName)
-			throws Exception {
-		PropertyFilterSpec filterSpec = new PropertyFilterSpec();
-
-		ObjectSpec objectSpec = new ObjectSpec();
-		objectSpec.setObj(moRef);
-		objectSpec.setSkip(false);
-		filterSpec.getObjectSet().add(objectSpec);
-
-		PropertySpec propertySpec = new PropertySpec();
-		propertySpec.setType(moRef.getType());
-		propertySpec.getPathSet().add(propName);
-		filterSpec.getPropSet().add(propertySpec);
-
-		List<ObjectContent> results = vimPort.retrieveProperties(
-				serviceContent.getPropertyCollector(),
-				java.util.Arrays.asList(filterSpec));
-
-		if (results != null && !results.isEmpty()) {
-			for (DynamicProperty dp : results.get(0).getPropSet()) {
-				if (propName.equals(dp.getName())) {
-					return dp.getVal();
-				}
-			}
-		}
-		return null;
-	}
-
-	private ManagedObjectReference getMoRef(ManagedObjectReference moRef,
+	private Document retrieveProperties(String type, String value,
 			String propPath) throws Exception {
-		PropertyFilterSpec filterSpec = new PropertyFilterSpec();
-
-		ObjectSpec objectSpec = new ObjectSpec();
-		objectSpec.setObj(moRef);
-		objectSpec.setSkip(false);
-		filterSpec.getObjectSet().add(objectSpec);
-
-		PropertySpec propertySpec = new PropertySpec();
-		propertySpec.setType(moRef.getType());
-		propertySpec.getPathSet().add(propPath);
-		filterSpec.getPropSet().add(propertySpec);
-
-		List<ObjectContent> results = vimPort.retrieveProperties(
-				serviceContent.getPropertyCollector(),
-				java.util.Arrays.asList(filterSpec));
-
-		if (results != null && !results.isEmpty()) {
-			for (DynamicProperty dp : results.get(0).getPropSet()) {
-				if (dp.getVal() instanceof ManagedObjectReference) {
-					return (ManagedObjectReference) dp.getVal();
-				}
-			}
-		}
-		return null;
+		String body =
+				"<RetrieveProperties xmlns=\"urn:vim25\">"
+				+ "<_this type=\"PropertyCollector\">"
+				+ xmlEscape(propertyCollector.value) + "</_this>"
+				+ "<specSet>"
+				+ "<propSet>"
+				+ "<type>" + xmlEscape(type) + "</type>"
+				+ "<pathSet>" + xmlEscape(propPath) + "</pathSet>"
+				+ "</propSet>"
+				+ "<objectSet>"
+				+ "<obj type=\"" + xmlEscape(type) + "\">"
+				+ xmlEscape(value) + "</obj>"
+				+ "<skip>false</skip>"
+				+ "</objectSet>"
+				+ "</specSet>"
+				+ "</RetrieveProperties>";
+		return post(body, "urn:vim25/RetrieveProperties", true);
 	}
 
-	private List<ManagedObjectReference> getViewMembers(
-			ManagedObjectReference containerView) throws Exception {
-		return getViewMembersTyped(containerView, "HostSystem");
-	}
+	// -----------------------------------------------------------------------
+	// ContainerView inventory listing
+	// -----------------------------------------------------------------------
 
 	/**
-	 * Release a ContainerView, swallowing any failure. Called from the
-	 * {@code finally} of every inventory walker so the server-side view is
-	 * always destroyed — even when the {@code retrieveProperties} membership
-	 * read throws (a PropertyCollector network call). Without this, a SOAP
-	 * error mid-walk would skip {@code destroyView} and leak the view on the
-	 * vCenter for the session lifetime; across a long-running collector with
-	 * intermittent errors those accumulate. Null-guarded (a failed
-	 * createContainerView never reaches here, but be defensive) and never
-	 * re-throws — view cleanup failure must not mask the original exception
-	 * the {@code finally} is unwinding, nor abort the collection cycle.
+	 * Create a ContainerView over the root folder for {@code type},
+	 * RetrieveProperties the view members' {@code name}, then destroy the
+	 * view. Returns the member MoRefs. The view is always destroyed even on
+	 * a mid-walk failure.
 	 */
-	private void destroyViewQuietly(ManagedObjectReference containerView) {
-		if (containerView == null) return;
+	private List<MoRef> listView(String type) throws Exception {
+		MoRef view = createContainerView(type);
+		if (view == null) return new ArrayList<>();
 		try {
-			vimPort.destroyView(containerView);
-		} catch (Exception ignored) {
-			// Best-effort cleanup; the session logout will reap any
-			// straggler views when the cycle's connection is torn down.
+			return retrieveViewMembers(view, type);
+		} finally {
+			destroyViewQuietly(view);
 		}
 	}
 
+	private MoRef createContainerView(String type) throws Exception {
+		String body =
+				"<CreateContainerView xmlns=\"urn:vim25\">"
+				+ "<_this type=\"ViewManager\">"
+				+ xmlEscape(viewManager.value) + "</_this>"
+				+ "<container type=\"Folder\">"
+				+ xmlEscape(rootFolder.value) + "</container>"
+				+ "<type>" + xmlEscape(type) + "</type>"
+				+ "<recursive>true</recursive>"
+				+ "</CreateContainerView>";
+		Document resp = post(body, "urn:vim25/CreateContainerView", true);
+		if (resp == null) return null;
+		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
+		if (rv == null) return null;
+		String val = elementText(rv);
+		if (val == null || val.trim().isEmpty()) return null;
+		String t = rv.getAttribute("type");
+		return new MoRef(t != null && !t.isEmpty() ? t : "ContainerView",
+				val.trim());
+	}
+
 	/**
-	 * Generic ContainerView walker. The original {@link #getViewMembers}
-	 * hardcoded {@code HostSystem} — Phase 2 needs the same traversal
-	 * against VirtualMachine, DistributedVirtualSwitch, and
-	 * DistributedVirtualPortgroup, so the type filter became a parameter.
+	 * RetrieveProperties over a ContainerView with a traversal spec walking
+	 * its {@code view} property; returns the member MoRefs (read from each
+	 * ObjectContent's {@code <obj>}).
 	 */
-	private List<ManagedObjectReference> getViewMembersTyped(
-			ManagedObjectReference containerView, String type)
+	private List<MoRef> retrieveViewMembers(MoRef view, String type)
 			throws Exception {
-		PropertyFilterSpec filterSpec = new PropertyFilterSpec();
-
-		ObjectSpec objectSpec = new ObjectSpec();
-		objectSpec.setObj(containerView);
-		objectSpec.setSkip(true);
-
-		TraversalSpec traversal = new TraversalSpec();
-		traversal.setName("view");
-		traversal.setPath("view");
-		traversal.setType("ContainerView");
-		traversal.setSkip(false);
-		objectSpec.getSelectSet().add(traversal);
-		filterSpec.getObjectSet().add(objectSpec);
-
-		PropertySpec propertySpec = new PropertySpec();
-		propertySpec.setType(type);
-		propertySpec.getPathSet().add("name");
-		filterSpec.getPropSet().add(propertySpec);
-
-		List<ObjectContent> results = vimPort.retrieveProperties(
-				serviceContent.getPropertyCollector(),
-				java.util.Arrays.asList(filterSpec));
-
-		List<ManagedObjectReference> refs = new ArrayList<>();
-		if (results != null) {
-			for (ObjectContent oc : results) {
-				refs.add(oc.getObj());
-			}
+		List<MoRef> refs = new ArrayList<>();
+		String body =
+				"<RetrieveProperties xmlns=\"urn:vim25\">"
+				+ "<_this type=\"PropertyCollector\">"
+				+ xmlEscape(propertyCollector.value) + "</_this>"
+				+ "<specSet>"
+				+ "<propSet>"
+				+ "<type>" + xmlEscape(type) + "</type>"
+				+ "<pathSet>name</pathSet>"
+				+ "</propSet>"
+				+ "<objectSet>"
+				+ "<obj type=\"ContainerView\">"
+				+ xmlEscape(view.value) + "</obj>"
+				+ "<skip>true</skip>"
+				+ "<selectSet xsi:type=\"TraversalSpec\">"
+				+ "<name>view</name>"
+				+ "<type>ContainerView</type>"
+				+ "<path>view</path>"
+				+ "<skip>false</skip>"
+				+ "</selectSet>"
+				+ "</objectSet>"
+				+ "</specSet>"
+				+ "</RetrieveProperties>";
+		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
+		if (resp == null) return refs;
+		for (Element rv : childrenByLocalName(resp.getDocumentElement(),
+				"returnval")) {
+			Element obj = firstDirectChild(rv, "obj");
+			if (obj == null) continue;
+			String value = elementText(obj);
+			if (value == null || value.trim().isEmpty()) continue;
+			String t = obj.getAttribute("type");
+			refs.add(new MoRef(t != null && !t.isEmpty() ? t : type,
+					value.trim()));
 		}
 		return refs;
 	}
 
-	private ManagedObjectReference createSiRef() {
-		ManagedObjectReference ref = new ManagedObjectReference();
-		ref.setType("ServiceInstance");
-		ref.setValue("ServiceInstance");
-		return ref;
+	private void destroyViewQuietly(MoRef view) {
+		if (view == null) return;
+		try {
+			String body =
+					"<DestroyView xmlns=\"urn:vim25\">"
+					+ "<_this type=\"" + xmlEscape(view.type) + "\">"
+					+ xmlEscape(view.value) + "</_this>"
+					+ "</DestroyView>";
+			post(body, "urn:vim25/DestroyView", true);
+		} catch (Exception ignored) {}
+	}
+
+	// -----------------------------------------------------------------------
+	// SOAP HTTP transport + DOM helpers
+	// -----------------------------------------------------------------------
+
+	/**
+	 * POST a SOAP body to the vCenter {@code /sdk}. Sends the live session
+	 * cookie when {@code authenticated}; captures any {@code Set-Cookie}
+	 * vmware_soap_session from the response (login path). Returns the parsed
+	 * response Document, or null on a non-2xx / SOAP fault (callers map any
+	 * failure to null/unreadable, never a default).
+	 */
+	private Document post(String soapBody, String soapAction,
+			boolean authenticated) throws Exception {
+		String envelope =
+				"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+				+ "<soapenv:Envelope "
+				+ "xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+				+ "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+				+ "xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">"
+				+ "<soapenv:Body>" + soapBody + "</soapenv:Body>"
+				+ "</soapenv:Envelope>";
+
+		URL url = new URL(vcenterUrl);
+		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+		if (conn instanceof HttpsURLConnection && sslFactory != null) {
+			((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
+			((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
+		}
+		conn.setRequestMethod("POST");
+		conn.setDoOutput(true);
+		conn.setConnectTimeout(30000);
+		conn.setReadTimeout(120000);
+		conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
+		conn.setRequestProperty("SOAPAction", soapAction);
+		if (authenticated && sessionCookie != null
+				&& !sessionCookie.isEmpty()) {
+			conn.setRequestProperty("Cookie", sessionCookie);
+		}
+
+		byte[] payload = envelope.getBytes(StandardCharsets.UTF_8);
+		try (OutputStream os = conn.getOutputStream()) {
+			os.write(payload);
+		}
+
+		int code = conn.getResponseCode();
+		// Capture the session cookie from any response (the login response
+		// carries it). Take name=value up to the first ';'.
+		captureCookie(conn);
+
+		InputStream is = (code >= 200 && code < 300)
+				? conn.getInputStream() : conn.getErrorStream();
+		byte[] respBytes = drain(is);
+		conn.disconnect();
+		if (code < 200 || code >= 300) {
+			return null;   // SOAP fault (500) / auth failure -> null upstream
+		}
+		if (respBytes == null || respBytes.length == 0) return null;
+		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
+	}
+
+	private void captureCookie(HttpURLConnection conn) {
+		try {
+			List<String> setCookies = conn.getHeaderFields()
+					.get("Set-Cookie");
+			if (setCookies == null) {
+				// Header keys can be case-insensitive; scan manually.
+				for (Map.Entry<String, List<String>> e
+						: conn.getHeaderFields().entrySet()) {
+					if (e.getKey() != null
+							&& "set-cookie".equalsIgnoreCase(e.getKey())) {
+						setCookies = e.getValue();
+						break;
+					}
+				}
+			}
+			if (setCookies == null) return;
+			for (String c : setCookies) {
+				if (c == null) continue;
+				String pair = c;
+				int semi = pair.indexOf(';');
+				if (semi >= 0) pair = pair.substring(0, semi);
+				pair = pair.trim();
+				if (pair.startsWith("vmware_soap_session")) {
+					this.sessionCookie = pair;
+					return;
+				}
+			}
+		} catch (Exception ignored) {
+			// Cookie capture failure surfaces as a failed authenticated call
+			// downstream (null -> unreadable), never a false pass.
+		}
+	}
+
+	private static byte[] drain(InputStream is) throws Exception {
+		if (is == null) return null;
+		try {
+			ByteArrayOutputStream bos = new ByteArrayOutputStream();
+			byte[] buf = new byte[8192];
+			int n;
+			while ((n = is.read(buf)) >= 0) {
+				bos.write(buf, 0, n);
+			}
+			return bos.toByteArray();
+		} finally {
+			try { is.close(); } catch (Exception ignored) {}
+		}
+	}
+
+	private static Document parseXml(String xml) {
+		try {
+			DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+			// Non-namespace-aware: read by LOCAL name throughout; harden
+			// against external entities (the collision was JAX-WS service
+			// discovery, NOT JAXP — DOM is safe here).
+			dbf.setNamespaceAware(false);
+			trySetFeature(dbf,
+					"http://apache.org/xml/features/disallow-doctype-decl", true);
+			trySetFeature(dbf,
+					"http://xml.org/sax/features/external-general-entities", false);
+			trySetFeature(dbf,
+					"http://xml.org/sax/features/external-parameter-entities", false);
+			DocumentBuilder db = dbf.newDocumentBuilder();
+			return db.parse(new java.io.ByteArrayInputStream(
+					xml.getBytes(StandardCharsets.UTF_8)));
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	private static void trySetFeature(DocumentBuilderFactory dbf, String f,
+			boolean v) {
+		try { dbf.setFeature(f, v); } catch (Exception ignored) {}
+	}
+
+	/** First descendant element (direct child preferred) by local name. */
+	private static Element firstByLocalName(Element parent, String name) {
+		if (parent == null) return null;
+		Element direct = firstDirectChild(parent, name);
+		if (direct != null) return direct;
+		NodeList all = parent.getElementsByTagName("*");
+		for (int i = 0; i < all.getLength(); i++) {
+			Node n = all.item(i);
+			if (n.getNodeType() == Node.ELEMENT_NODE
+					&& name.equals(localName((Element) n))) {
+				return (Element) n;
+			}
+		}
+		return null;
+	}
+
+	/** First direct-child element by local name. */
+	private static Element firstDirectChild(Element parent, String name) {
+		if (parent == null) return null;
+		NodeList kids = parent.getChildNodes();
+		for (int i = 0; i < kids.getLength(); i++) {
+			Node n = kids.item(i);
+			if (n.getNodeType() == Node.ELEMENT_NODE
+					&& name.equals(localName((Element) n))) {
+				return (Element) n;
+			}
+		}
+		return null;
+	}
+
+	/** All direct-child elements by local name. */
+	private static List<Element> childrenByLocalName(Element parent,
+			String name) {
+		List<Element> out = new ArrayList<>();
+		if (parent == null) return out;
+		NodeList kids = parent.getChildNodes();
+		for (int i = 0; i < kids.getLength(); i++) {
+			Node n = kids.item(i);
+			if (n.getNodeType() == Node.ELEMENT_NODE
+					&& name.equals(localName((Element) n))) {
+				out.add((Element) n);
+			}
+		}
+		return out;
+	}
+
+	/** All direct-child elements (any name). */
+	private static List<Element> childElements(Element parent) {
+		List<Element> out = new ArrayList<>();
+		if (parent == null) return out;
+		NodeList kids = parent.getChildNodes();
+		for (int i = 0; i < kids.getLength(); i++) {
+			Node n = kids.item(i);
+			if (n.getNodeType() == Node.ELEMENT_NODE) {
+				out.add((Element) n);
+			}
+		}
+		return out;
+	}
+
+	/** Text of a named direct child element, or null when absent. */
+	private static String childText(Element parent, String name) {
+		Element c = firstDirectChild(parent, name);
+		if (c == null) return null;
+		return elementText(c);
+	}
+
+	/**
+	 * Trimmed text content of an element. For a complex element this returns
+	 * the concatenated descendant text, which callers never use (they read
+	 * named children), so scalar reads stay exact.
+	 */
+	private static String elementText(Element e) {
+		if (e == null) return null;
+		String t = e.getTextContent();
+		return t == null ? null : t.trim();
+	}
+
+	/**
+	 * The {@code xsi:type} attribute (the wire type discriminator), or null.
+	 * Non-namespace-aware parse keeps the prefixed attribute name verbatim.
+	 */
+	private static String xsiType(Element e) {
+		if (e == null) return null;
+		String t = e.getAttribute("xsi:type");
+		if (t == null || t.isEmpty()) {
+			t = e.getAttribute("type");   // some servers drop the xsi prefix
+		}
+		return (t == null || t.isEmpty()) ? null : t;
+	}
+
+	/** Local name (strip any prefix) of an element. */
+	private static String localName(Element e) {
+		String ln = e.getLocalName();
+		if (ln != null) return ln;
+		String tag = e.getTagName();
+		int colon = tag.indexOf(':');
+		return colon >= 0 ? tag.substring(colon + 1) : tag;
+	}
+
+	/**
+	 * Parse a vim25 boolean text value. Returns {@code Boolean.TRUE}/{@code
+	 * FALSE} for {@code true}/{@code false} (case-insensitive, also accepts
+	 * {@code 1}/{@code 0}); null for anything else or null input (-> the
+	 * caller folds null to UNREADABLE, never a guess).
+	 */
+	private static Boolean parseBool(String text) {
+		if (text == null) return null;
+		String t = text.trim();
+		if (t.isEmpty()) return null;
+		if ("true".equalsIgnoreCase(t) || "1".equals(t)) return Boolean.TRUE;
+		if ("false".equalsIgnoreCase(t) || "0".equals(t)) return Boolean.FALSE;
+		return null;
+	}
+
+	private static String xmlEscape(String s) {
+		if (s == null) return "";
+		StringBuilder sb = new StringBuilder(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			switch (c) {
+				case '&': sb.append("&amp;"); break;
+				case '<': sb.append("&lt;"); break;
+				case '>': sb.append("&gt;"); break;
+				case '"': sb.append("&quot;"); break;
+				case '\'': sb.append("&apos;"); break;
+				default: sb.append(c);
+			}
+		}
+		return sb.toString();
 	}
 
 	private static javax.net.ssl.SSLSocketFactory trustAllSslFactory() {
@@ -1456,13 +1259,42 @@ public final class VSphereClient {
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Public value types — MoRef replaces vim25 ManagedObjectReference
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Lightweight managed-object reference: the {@code type} + {@code value}
+	 * pair that vim25's {@code ManagedObjectReference} carried. No vim25
+	 * binding dependency.
+	 */
+	public static final class MoRef {
+		public final String type;
+		public final String value;
+
+		public MoRef(String type, String value) {
+			this.type = type;
+			this.value = value;
+		}
+	}
+
+	/** Build a MoRef from a named MoRef-valued child of {@code parent}. */
+	private static MoRef moRefOf(Element parent, String childName) {
+		Element c = firstDirectChild(parent, childName);
+		if (c == null) return null;
+		String value = c.getTextContent();
+		if (value == null || value.trim().isEmpty()) return null;
+		String type = c.getAttribute("type");
+		return new MoRef(type != null && !type.isEmpty() ? type
+				: "ManagedObject", value.trim());
+	}
+
 	public static final class HostInfo {
-		public final ManagedObjectReference moRef;
+		public final MoRef moRef;
 		public final String name;
 		public final String moid;
 
-		public HostInfo(ManagedObjectReference moRef, String name,
-				String moid) {
+		public HostInfo(MoRef moRef, String name, String moid) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
@@ -1470,11 +1302,11 @@ public final class VSphereClient {
 	}
 
 	public static final class VmInfo {
-		public final ManagedObjectReference moRef;
+		public final MoRef moRef;
 		public final String name;
 		public final String moid;
 
-		public VmInfo(ManagedObjectReference moRef, String name, String moid) {
+		public VmInfo(MoRef moRef, String name, String moid) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
@@ -1482,11 +1314,11 @@ public final class VSphereClient {
 	}
 
 	public static final class DvsInfo {
-		public final ManagedObjectReference moRef;
+		public final MoRef moRef;
 		public final String name;
 		public final String moid;
 
-		public DvsInfo(ManagedObjectReference moRef, String name, String moid) {
+		public DvsInfo(MoRef moRef, String name, String moid) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
@@ -1494,12 +1326,11 @@ public final class VSphereClient {
 	}
 
 	public static final class DvpgInfo {
-		public final ManagedObjectReference moRef;
+		public final MoRef moRef;
 		public final String name;
 		public final String moid;
 
-		public DvpgInfo(ManagedObjectReference moRef, String name,
-				String moid) {
+		public DvpgInfo(MoRef moRef, String name, String moid) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
@@ -1507,12 +1338,11 @@ public final class VSphereClient {
 	}
 
 	public static final class ClusterInfo {
-		public final ManagedObjectReference moRef;
+		public final MoRef moRef;
 		public final String name;
 		public final String moid;
 
-		public ClusterInfo(ManagedObjectReference moRef, String name,
-				String moid) {
+		public ClusterInfo(MoRef moRef, String name, String moid) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
