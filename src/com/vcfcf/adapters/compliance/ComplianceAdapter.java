@@ -141,13 +141,32 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Expose the v2 base's instance logger to the adapter's helper classes
-	 * (the stitcher and SuiteApiStitcher take a {@link Logger}). The base's
-	 * private {@code adapterLogger()} builds the same instance from the same
-	 * factory; this thin accessor reuses that factory.
+	 * Expose a WORKING instance logger to the adapter's helper classes
+	 * ({@link VSphereClient}, {@link EsxcliSoapClient}, {@link ComplianceStitcher},
+	 * {@link SuiteApiStitcher}) — all of which take a {@link Logger} at
+	 * construction.
+	 *
+	 * <p><b>Build 46 dead-logger fix (root cause).</b> A bare
+	 * {@code getAdapterLoggerFactory().getLogger(getClass())} returns a logger
+	 * whose effective level sits BELOW INFO, so every {@code log.info(...)}
+	 * breadcrumb emitted from inside {@link VSphereClient}/{@link EsxcliSoapClient}
+	 * (e.g. "vSphere SOAP: N hosts", "listView(...): RetrieveProperties -> N
+	 * objectContent") was silently filtered out on devel — zero lines despite
+	 * INFO being enabled and the strings being present in the shipped jar. The
+	 * adapter's OWN breadcrumbs still appeared because {@code logInfo()} routes
+	 * through the framework base's private {@code adapterLogger()}, which caches
+	 * a SEPARATE logger handle and explicitly raises it to INFO
+	 * ({@code logger.setLevel(CustomLevel.INFO)}). The handle handed to the
+	 * helper clients never got that {@code setLevel} call, so it logged nothing.
+	 *
+	 * <p>This accessor now mirrors the base exactly: raise the returned logger
+	 * to INFO before handing it out, so the injected logger is the working,
+	 * level-configured one. The helpers' breadcrumbs now reach the collector log.
 	 */
 	private Logger adapterLogger() {
-		return getAdapterLoggerFactory().getLogger(getClass());
+		Logger logger = getAdapterLoggerFactory().getLogger(getClass());
+		logger.setLevel(Logger.CustomLevel.INFO);
+		return logger;
 	}
 
 	// -----------------------------------------------------------------------
@@ -156,16 +175,68 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	@Override
 	protected VcfCfTester<ComplianceConfig> getTester() {
+		// Build 46 onTest NPE fix: the controller invokes Test-connection on a
+		// FRESH instance — onConfigure (configureAdapter) has NOT run, so the
+		// instance fields (this.vcApi, this.config) are still null. The base's
+		// onTest also passes the still-null this.config as `cfg`. So the tester
+		// must be fully self-contained: derive everything it needs from the
+		// ResourceConfig the platform carries on the TestParam, never from
+		// instance state. (Pre-build-46 this lambda dereferenced this.vcApi →
+		// "Cannot invoke VCenterApiClient.login() because this.vcApi is null".)
 		return (cfg, http, param) -> {
-			vcApi.login();
-			SimpleJson hosts = vcApi.listHosts();
-			int count = 0;
-			if (!hosts.isNull() && hosts.isList()) {
-				count = hosts.asList().size();
+			ResourceConfig rc = testResourceConfig(param);
+			if (rc == null) {
+				throw new Exception("Test-connection: no adapter-instance "
+						+ "ResourceConfig available on TestParam — cannot read "
+						+ "vCenter host/credentials to test");
 			}
-			logInfo("Test OK: connected to " + cfg.vcenterHost
-					+ ", " + count + " host(s) visible");
+
+			String vcenterHost = getIdentifier(rc, "vcenter_host");
+			String allowInsecure = getIdentifier(rc, "allowInsecure");
+			String username = getCredentialField(rc, "username");
+			String password = getCredentialField(rc, "password");
+
+			ComplianceConfig testCfg = new ComplianceConfig(
+					vcenterHost, username, password,
+					/*profile*/ null, /*customPath*/ null, allowInsecure);
+
+			VCenterApiClient testApi = new VCenterApiClient(
+					testCfg.baseUrl(), testCfg.username, testCfg.password,
+					testCfg.allowInsecure);
+			testApi.login();
+			try {
+				SimpleJson hosts = testApi.listHosts();
+				int count = 0;
+				if (!hosts.isNull() && hosts.isList()) {
+					count = hosts.asList().size();
+				}
+				logInfo("Test OK: connected to " + testCfg.vcenterHost
+						+ ", " + count + " host(s) visible");
+			} finally {
+				testApi.logout();
+			}
 		};
+	}
+
+	/**
+	 * Resolve the adapter-instance {@link ResourceConfig} from a
+	 * {@code TestParam} so the tester can read vCenter host + credentials
+	 * without relying on instance state that the controller has not yet
+	 * populated (Test-connection runs on a bare instance). Returns null if the
+	 * platform did not attach an adapter config (defensive — should not happen
+	 * in a real Test-connection call).
+	 */
+	private static ResourceConfig testResourceConfig(
+			com.integrien.alive.common.adapter3.TestParam param) {
+		if (param == null) {
+			return null;
+		}
+		com.integrien.alive.common.adapter3.config.AdapterConfig adConf =
+				param.getAdapterConfig();
+		if (adConf == null) {
+			return null;
+		}
+		return adConf.getAdapterInstResource();
 	}
 
 	// -----------------------------------------------------------------------
