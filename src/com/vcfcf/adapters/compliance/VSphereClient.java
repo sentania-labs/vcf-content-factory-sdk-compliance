@@ -21,6 +21,8 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import com.integrien.alive.common.adapter3.Logger;
+
 /**
  * Raw-SOAP vSphere (vim25) client — build 43 rewrite.
  *
@@ -65,6 +67,7 @@ public final class VSphereClient {
 	private final String username;
 	private final String password;
 	private final SSLSocketFactory sslFactory;
+	private final Logger log;              // nullable — standalone use logs nothing
 
 	// SOAP session state.
 	private volatile String sessionCookie;     // vmware_soap_session=...
@@ -82,11 +85,26 @@ public final class VSphereClient {
 	private volatile EsxcliSoapClient esxcli;
 
 	public VSphereClient(String vcenterHost, String username, String password) {
+		this(vcenterHost, username, password, null);
+	}
+
+	/**
+	 * @param log adapter logger for SOAP-walk breadcrumbs (response-shape per
+	 *            RetrieveProperties, inventory counts). May be null (standalone
+	 *            / test use), in which case the client logs nothing.
+	 */
+	public VSphereClient(String vcenterHost, String username, String password,
+			Logger log) {
 		this.vcenterUrl = "https://" + vcenterHost + "/sdk";
 		this.username = username;
 		this.password = password;
 		this.sslFactory = trustAllSslFactory();
+		this.log = log;
 	}
+
+	private void logInfo(String msg)  { if (log != null) log.info(msg); }
+	private void logDebug(String msg) { if (log != null) log.debug(msg); }
+	private void logWarn(String msg)  { if (log != null) log.warn(msg); }
 
 	// -----------------------------------------------------------------------
 	// Session lifecycle
@@ -202,6 +220,12 @@ public final class VSphereClient {
 			String name = getStringProperty(ref, "name");
 			if (name != null) result.add(new HostInfo(ref, name, ref.value));
 		}
+		logInfo("vSphere SOAP: " + result.size() + " hosts");
+		if (result.isEmpty()) {
+			logWarn("vSphere SOAP: ContainerView returned 0 HostSystem — a "
+					+ "vCenter inventory should have at least one host; "
+					+ "check the RetrieveProperties walk");
+		}
 		return result;
 	}
 
@@ -212,6 +236,7 @@ public final class VSphereClient {
 			String name = getStringProperty(ref, "name");
 			if (name != null) result.add(new VmInfo(ref, name, ref.value));
 		}
+		logInfo("vSphere SOAP: " + result.size() + " VMs");
 		return result;
 	}
 
@@ -231,6 +256,7 @@ public final class VSphereClient {
 			String name = getStringProperty(ref, "name");
 			if (name != null) result.add(new DvsInfo(ref, name, ref.value));
 		}
+		logInfo("vSphere SOAP: " + result.size() + " DVS");
 		return result;
 	}
 
@@ -241,6 +267,7 @@ public final class VSphereClient {
 			String name = getStringProperty(ref, "name");
 			if (name != null) result.add(new DvpgInfo(ref, name, ref.value));
 		}
+		logInfo("vSphere SOAP: " + result.size() + " DVPG");
 		return result;
 	}
 
@@ -251,6 +278,7 @@ public final class VSphereClient {
 			String name = getStringProperty(ref, "name");
 			if (name != null) result.add(new ClusterInfo(ref, name, ref.value));
 		}
+		logInfo("vSphere SOAP: " + result.size() + " Clusters");
 		return result;
 	}
 
@@ -315,8 +343,11 @@ public final class VSphereClient {
 				+ "</QueryOptions>";
 		Document resp = post(body, "urn:vim25/QueryOptions", true);
 		if (resp == null) return result;
-		// Each <returnval> is an OptionValue with <key> and <value>.
-		for (Element rv : childrenByLocalName(resp.getDocumentElement(),
+		// Each <returnval> is an OptionValue with <key> and <value>. Deep
+		// search — the returnvals are nested under Envelope > Body >
+		// QueryOptionsResponse, not direct children of the document element
+		// (build 44 fix, same defect class as the inventory walk).
+		for (Element rv : descendantsByLocalName(resp.getDocumentElement(),
 				"returnval")) {
 			String key = childText(rv, "key");
 			String value = childText(rv, "value");
@@ -943,16 +974,32 @@ public final class VSphereClient {
 				+ "</specSet>"
 				+ "</RetrieveProperties>";
 		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
-		if (resp == null) return refs;
-		for (Element rv : childrenByLocalName(resp.getDocumentElement(),
-				"returnval")) {
+		if (resp == null) {
+			logWarn("listView(" + type + "): RetrieveProperties returned no "
+					+ "response (HTTP error / SOAP fault) — 0 entities");
+			return refs;
+		}
+		// Deep search: <returnval> (ObjectContent) entries are nested under
+		// Envelope > Body > RetrievePropertiesResponse — NOT direct children of
+		// the document element. (build 44 fix: build 43 used a direct-children
+		// search here and silently found zero.)
+		List<Element> returnvals = descendantsByLocalName(
+				resp.getDocumentElement(), "returnval");
+		logInfo("listView(" + type + "): RetrieveProperties -> "
+				+ returnvals.size() + " objectContent");
+		for (Element rv : returnvals) {
 			Element obj = firstDirectChild(rv, "obj");
 			if (obj == null) continue;
 			String value = elementText(obj);
 			if (value == null || value.trim().isEmpty()) continue;
 			String t = obj.getAttribute("type");
-			refs.add(new MoRef(t != null && !t.isEmpty() ? t : type,
-					value.trim()));
+			MoRef ref = new MoRef(t != null && !t.isEmpty() ? t : type,
+					value.trim());
+			if (refs.isEmpty() && log != null && log.isDebugEnabled()) {
+				logDebug("listView(" + type + "): first object type="
+						+ ref.type + " value=" + ref.value);
+			}
+			refs.add(ref);
 		}
 		return refs;
 	}
@@ -1141,6 +1188,43 @@ public final class VSphereClient {
 		NodeList kids = parent.getChildNodes();
 		for (int i = 0; i < kids.getLength(); i++) {
 			Node n = kids.item(i);
+			if (n.getNodeType() == Node.ELEMENT_NODE
+					&& name.equals(localName((Element) n))) {
+				out.add((Element) n);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * All descendant elements by local name (whole subtree). Unlike
+	 * {@link #childrenByLocalName} (direct children only), this tolerates the
+	 * SOAP {@code Envelope > Body > <op>Response} wrapping without binding to
+	 * the exact nesting depth — the multi-element analogue of
+	 * {@link #firstByLocalName}.
+	 *
+	 * <p><b>Why this exists (build 44 regression fix).</b> The build-43
+	 * inventory walk and {@code QueryOptions} reader iterated
+	 * {@code childrenByLocalName(resp.getDocumentElement(), "returnval")}.
+	 * {@code getDocumentElement()} is the {@code <soapenv:Envelope>}, but the
+	 * {@code <returnval>} elements live two levels deeper (under {@code Body >
+	 * RetrievePropertiesResponse}). A direct-children-only search found ZERO —
+	 * so every ContainerView walk silently yielded an empty host/VM/DVS/DVPG/
+	 * cluster set with no fault and no parse error ("connects clean, zero
+	 * results"). Single-object reads were unaffected because they used the
+	 * deep-search {@link #firstByLocalName}. This restores the same deep search
+	 * for the multi-{@code returnval} responses.
+	 */
+	private static List<Element> descendantsByLocalName(Element parent,
+			String name) {
+		List<Element> out = new ArrayList<>();
+		if (parent == null) return out;
+		// Direct children first (the common shape once unwrapped), then any
+		// remaining deeper matches — preserving document order without
+		// double-counting a direct child.
+		NodeList all = parent.getElementsByTagName("*");
+		for (int i = 0; i < all.getLength(); i++) {
+			Node n = all.item(i);
 			if (n.getNodeType() == Node.ELEMENT_NODE
 					&& name.equals(localName((Element) n))) {
 				out.add((Element) n);
