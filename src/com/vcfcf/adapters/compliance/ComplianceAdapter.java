@@ -525,17 +525,78 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String hostId = hostInfo.moid;
 			String hostName = hostInfo.name;
 
-			java.util.Map<String, String> advSettings;
+			// Build 47 — connection-state guard. A host whose vCenter link is
+			// down at read time (disconnected / notResponding) cannot be read
+			// honestly: its OptionManager MoRef is gone and esxcli/vim reads
+			// fail. Scoring the partial subset that still resolves from
+			// vCenter's cache yields a flattering, dishonest partial score
+			// (the build-46 esx04 regression). Mark EVERY control for the host
+			// UNREADABLE for this cycle instead — one loud WARN, no score.
+			String connState;
 			try {
-				advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
+				connState = vsphere.getHostConnectionState(hostInfo.moRef);
 			} catch (Exception e) {
-				logWarn("Failed to read settings for " + hostName + ": "
-						+ e.getMessage());
-				advSettings = new java.util.HashMap<>();
+				connState = null;  // unknown -> proceed with normal evaluation
+			}
+			if (isDisconnectedState(connState)) {
+				logWarn("Host " + hostName + ": connectionState='" + connState
+						+ "' — host not fully connected to vCenter; ALL "
+						+ "compliance controls marked UNREADABLE this cycle "
+						+ "(no partial score emitted)");
+				ControlEvaluator.ComplianceResult advUnread =
+						ControlEvaluator.evaluateControlsUnreadable(
+								hostControls, hostName);
+				ControlEvaluator.ComplianceResult vimUnread =
+						unreadableVimResult(hostControls, hostName);
+				ControlEvaluator.ComplianceResult cr =
+						mergeResults(advUnread, vimUnread);
+				stats.unreadable += cr.unreadableCount;
+				stats.total++;  // total attempted; not scored (totalCount==0)
+
+				logInfo("Host " + hostName + ": UNREADABLE (connectionState='"
+						+ connState + "', " + cr.unreadableCount
+						+ " controls)");
+
+				if (stitcher != null) {
+					ComplianceStitcher.HostEntry he =
+							stitcher.matchHost(hostName, hostId);
+					if (he != null) {
+						pushComplianceViaClient(he.resourceId, cr, profile.name);
+					}
+				}
+				continue;
 			}
 
-			ControlEvaluator.ComplianceResult advCr =
-					ControlEvaluator.evaluateControls(
+			java.util.Map<String, String> advSettings = null;
+			boolean advUnreadable = false;
+			try {
+				advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
+			} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
+				// Known-unreadable advanced-settings channel (null
+				// OptionManager MoRef — disconnected host the connectionState
+				// guard above did not catch, e.g. a flap between the two
+				// reads). Fold every advanced_setting control to UNREADABLE;
+				// never evaluate against a silently-empty map. logWarn routes
+				// through the framework base (NOT the dead helper-logger).
+				advUnreadable = true;
+				logWarn("Host " + hostName + ": advanced-settings channel "
+						+ "UNREADABLE (" + e.getMessage() + ") — all "
+						+ "advanced_setting controls marked UNREADABLE this "
+						+ "cycle (not dropped from the denominator)");
+			} catch (Exception e) {
+				// Any other read failure (SOAP fault, transport) is likewise a
+				// read failure, not an empty result — treat as unreadable.
+				advUnreadable = true;
+				logWarn("Host " + hostName + ": failed to read advanced "
+						+ "settings (" + e.getMessage() + ") — all "
+						+ "advanced_setting controls marked UNREADABLE this "
+						+ "cycle (not dropped from the denominator)");
+			}
+
+			ControlEvaluator.ComplianceResult advCr = advUnreadable
+					? ControlEvaluator.evaluateControlsUnreadable(
+							hostControls, hostName)
+					: ControlEvaluator.evaluateControls(
 							hostControls, advSettings, hostName);
 			ControlEvaluator.ComplianceResult vimCr =
 					evaluateVimForResource(hostInfo.moRef, hostControls,
@@ -871,6 +932,52 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} else {
 			pushProfileNamePropertyOnly(resourceId, profileName);
 		}
+	}
+
+	/**
+	 * Build 47 — true when a host's {@code runtime.connectionState} is a
+	 * not-fully-connected state ({@code disconnected} / {@code notResponding}).
+	 * A null/unknown state is NOT treated as disconnected (we proceed with
+	 * normal evaluation and let the per-channel UNREADABLE sentinels surface
+	 * any read failures) — only an explicit not-connected enum string trips
+	 * the whole-host guard. Case-insensitive; the vim25
+	 * {@code HostSystemConnectionState} enum is lower-camel.
+	 */
+	private static boolean isDisconnectedState(String connState) {
+		if (connState == null) return false;
+		String s = connState.trim().toLowerCase();
+		return s.equals("disconnected") || s.equals("notresponding");
+	}
+
+	/**
+	 * Build 47 — fold every evaluable {@code vim_property} / {@code esxcli}
+	 * control in the slice to UNREADABLE without issuing any SOAP read. Used
+	 * by the whole-host connection-state guard: a disconnected host cannot be
+	 * read, so its vim/esxcli channel is unreadable, not skippable. Builds a
+	 * value map of {@code UNREADABLE} for every evaluable recipe control and
+	 * runs it through the normal evaluator so the unreadable accounting and
+	 * per-control {@code (unreadable)} ControlResults match the live path
+	 * exactly.
+	 */
+	private static ControlEvaluator.ComplianceResult unreadableVimResult(
+			java.util.List<BenchmarkProfile.Control> controls,
+			String resourceName) {
+		java.util.Map<String, Object> values = new java.util.HashMap<>();
+		for (BenchmarkProfile.Control c : controls) {
+			if (!"vim_property".equals(c.parameterKind)
+					&& !"esxcli".equals(c.parameterKind)) {
+				continue;
+			}
+			if (!c.isEvaluable()) continue;
+			String param = c.configParameter;
+			if (param == null || param.isEmpty() || "N/A".equals(param)) {
+				continue;
+			}
+			if (param.contains("\n")) continue;
+			values.put(param, VSphereClient.UNREADABLE);
+		}
+		return ControlEvaluator.evaluateVimProperties(
+				controls, values, resourceName, VSphereClient.UNREADABLE);
 	}
 
 	private ControlEvaluator.ComplianceResult evaluateVimForResource(

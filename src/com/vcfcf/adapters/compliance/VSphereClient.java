@@ -287,19 +287,67 @@ public final class VSphereClient {
 	// -----------------------------------------------------------------------
 
 	/**
+	 * Thrown by {@link #getAdvancedSettings(MoRef)} when the host's
+	 * {@code configManager.advancedOption} OptionManager MoRef cannot be
+	 * resolved (build 47). This is the disconnected/flapping-host signature:
+	 * {@code PropertyCollector} returns the host's {@code configManager}
+	 * without a live {@code advancedOption} MoRef, so the advanced-setting
+	 * channel is <b>unreadable</b>, not empty. Distinguishing the two is the
+	 * whole point — an empty map (host read OK, no keys) and an unreadable
+	 * channel (could not read at all) must NOT collapse to the same outcome,
+	 * or every advanced_setting control silently vanishes from the
+	 * denominator (the build-46 esx04 partial-collection regression). The
+	 * caller folds every advanced_setting control to UNREADABLE instead of
+	 * scoring a flattering partial subset.
+	 */
+	public static final class AdvancedSettingsUnreadableException
+			extends Exception {
+		private static final long serialVersionUID = 1L;
+		public AdvancedSettingsUnreadableException(String message) {
+			super(message);
+		}
+	}
+
+	/**
 	 * Host advanced settings via {@code configManager.advancedOption} ->
 	 * {@code QueryOptions(null)}. Returns the full key/value map; values are
 	 * stringified exactly as {@code String.valueOf(OptionValue.value)} did
 	 * (the SOAP {@code <value>} text content).
+	 *
+	 * <p>Build 47: a null {@code advancedOption} MoRef is a <b>read
+	 * failure</b> (disconnected host), NOT an empty result. It throws
+	 * {@link AdvancedSettingsUnreadableException} so the caller can fold the
+	 * advanced_setting channel to UNREADABLE rather than evaluate every
+	 * control against a silently-empty map (which drops them from the score
+	 * denominator entirely). A host that genuinely has zero advanced options
+	 * but a live OptionManager still returns an empty map normally — only the
+	 * unresolvable-MoRef case signals unreadable.
 	 */
 	public Map<String, String> getAdvancedSettings(MoRef hostRef)
 			throws Exception {
 		ensureConnected();
-		Map<String, String> result = new HashMap<>();
 		MoRef optMgr = getMoRefProperty(hostRef,
 				"configManager.advancedOption");
-		if (optMgr == null) return result;
+		if (optMgr == null) {
+			throw new AdvancedSettingsUnreadableException(
+					"configManager.advancedOption MoRef is null — host's "
+					+ "advanced-settings channel is unreadable (host likely "
+					+ "disconnected / not responding)");
+		}
 		return queryOptions(optMgr);
+	}
+
+	/**
+	 * Read a host's {@code runtime.connectionState} (build 47). Returns the
+	 * raw vim25 {@code HostSystemConnectionState} enum string
+	 * ({@code "connected"} / {@code "disconnected"} / {@code "notResponding"})
+	 * or {@code null} when the property could not be read. Reflection-tolerant
+	 * DOM read — a missing element returns null (caller treats null as
+	 * "unknown", proceeds with normal evaluation), never throws.
+	 */
+	public String getHostConnectionState(MoRef hostRef) throws Exception {
+		ensureConnected();
+		return getStringProperty(hostRef, "runtime.connectionState");
 	}
 
 	/**

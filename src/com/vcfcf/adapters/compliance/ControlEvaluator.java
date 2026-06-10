@@ -200,6 +200,58 @@ public final class ControlEvaluator {
 	}
 
 	/**
+	 * Build 47 — fold every {@code advanced_setting} control in the slice to
+	 * UNREADABLE. Called when the advanced-settings channel for a resource is
+	 * <b>known-unreadable</b> (the OptionManager MoRef could not be resolved —
+	 * a disconnected/flapping host), as opposed to known-empty (host read OK,
+	 * keys genuinely absent → the {@link #evaluateControls} allowsUndefined
+	 * path still applies).
+	 *
+	 * <p>This is the third leg of the cardinal "unreadable is NOT compliant"
+	 * rule: an unreadable channel must surface every declared control as
+	 * UNREADABLE — counted in {@code unreadableCount}, excluded from
+	 * pass/fail/total (the score denominator) — never silently dropped. The
+	 * denominator story stays honest: total attempted = scored + unreadable.
+	 *
+	 * <p>The control set and per-control filtering exactly mirror
+	 * {@link #evaluateControls} (same {@code advanced_setting} parameterKind
+	 * filter, same N/A / empty / multiline param guards) so a control that
+	 * {@code evaluateControls} would have skipped as non-evaluable is also
+	 * skipped here — it was never a control we could read, so it is not
+	 * unreadable. Only the controls {@code evaluateControls} would have
+	 * actually evaluated become UNREADABLE.
+	 */
+	public static ComplianceResult evaluateControlsUnreadable(
+			List<BenchmarkProfile.Control> controls, String resourceName) {
+		List<ControlResult> results = new ArrayList<>();
+		int unreadable = 0;
+		for (BenchmarkProfile.Control control : controls) {
+			if (!"advanced_setting".equals(control.parameterKind)) {
+				continue;
+			}
+			String param = control.configParameter;
+			if (param == null || param.isEmpty() || "N/A".equals(param)) {
+				continue;
+			}
+			if (param.contains("\n")) continue;
+
+			unreadable++;
+			results.add(new ControlResult(
+					control.scgId,
+					"(unreadable)",
+					control.suggestedValue,
+					false,
+					control.description
+			));
+		}
+		// total = 0 (nothing scored), score=100.0 zero-divisor sentinel — the
+		// caller refuses to fold a totalCount=0 result into a fleet average,
+		// and unreadableCount carries the loud coverage-gap signal.
+		return new ComplianceResult(resourceName, 0, 0, 0, unreadable, 100.0,
+				results);
+	}
+
+	/**
 	 * True when the SCG expected_value qualifies "key is unset/absent"
 	 * as a compliant state. Matches two idioms in Bob's SCG CSVs:
 	 *
