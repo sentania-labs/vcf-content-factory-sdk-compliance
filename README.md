@@ -5,6 +5,10 @@ configuration and evaluating controls against a user-selectable security
 profile. Pushes per-control compliance properties and aggregate scores
 onto existing VMWARE HostSystem resources via ARIA_OPS stitching.
 
+## Documentation
+
+Full docset (overview, installing & configuring, inventory tree): [`docs/README.md`](docs/README.md).
+
 ## Quick start
 
 1. Build: `python3 -m vcfops_managementpacks build-sdk content/sdk-adapters/compliance`
