@@ -16,11 +16,8 @@ import com.integrien.alive.common.adapter3.ResourceKey;
 import com.integrien.alive.common.adapter3.ResourceStatus;
 import com.integrien.alive.common.adapter3.config.ResourceConfig;
 import com.integrien.alive.common.adapter3.config.ResourceIdentifierConfig;
-import com.integrien.alive.common.adapter3.describe.AdapterDescribe;
 import com.integrien.alive.common.util.CommonConstants.ResourceStatusEnum;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -82,32 +79,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	// -----------------------------------------------------------------------
-	// onDescribe — load the hand-authored describe.xml from the conf dir
+	// onDescribe — provided by the framework base (VcfCfAdapter, commit
+	// 750e0ee). The default resolves getAdapterDescribeFile(getAdapterKind(),
+	// "describe.xml") and AdapterDescribe.make(is) — byte-for-byte the behavior
+	// this adapter used to override, so the explicit override was removed in
+	// build 44 (less code to maintain; getAdapterKind() == "vcfcf_compliance").
 	// -----------------------------------------------------------------------
-
-	/**
-	 * Load {@code <adaptersHome>/vcfcf_compliance/conf/describe.xml} via the
-	 * SDK's {@code AdapterDescribe.make(InputStream)}.
-	 *
-	 * <p>v1's {@code UnlicensedAdapter} provided {@code onDescribe()} for free
-	 * (off {@code getAdapterDirectory()}); v2's {@code VcfCfAdapter} does not,
-	 * so the adapter loads the describe file itself. The path is resolved with
-	 * the SDK's own {@code getAdapterDescribeFile(kind, "describe.xml")}
-	 * ({@code <adaptersHome>/<kind>/conf/describe.xml}). See the FRAMEWORK GAP
-	 * note in the build report: a default {@code onDescribe()} belongs in the
-	 * framework base, not in every adapter.
-	 */
-	@Override
-	public AdapterDescribe onDescribe() {
-		Path describeFile = getAdapterDescribeFile(ADAPTER_KIND, "describe.xml");
-		try (InputStream is = Files.newInputStream(describeFile)) {
-			return AdapterDescribe.make(is);
-		} catch (Exception e) {
-			logError("onDescribe: failed to load describe.xml from "
-					+ describeFile + ": " + e.getMessage(), e);
-			return null;
-		}
-	}
 
 	// -----------------------------------------------------------------------
 	// configureAdapter (replaces v1 configure)
@@ -132,7 +109,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				config.allowInsecure);
 
 		this.vsphere = new VSphereClient(
-				config.vcenterHost, config.username, config.password);
+				config.vcenterHost, config.username, config.password,
+				adapterLogger());
 
 		this.benchmarkLoader = new BenchmarkLoader();
 

@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0.43 (2026-06-09)
+## 1.0.0.44 (2026-06-09)
 
-- feat(adapter): build 43 — framework v2 migration. Re-homed onto VcfCfAdapter + com.vcfcf.adapter.spi (VcfCfCollector/VcfCfDiscoverer/VcfCfTester); dropped aria-ops-core. Replaced the vim25/JAX-WS SOAP path with hand-built raw SOAP over HttpURLConnection + JDK DOM (fixes the prod 9.1 javax/jakarta JAX-WS Provider collision — compliance had never collected on 9.1); lib/ now ships only vcfcf-adapter-base.jar (C2). Rewired stitching onto the framework SuiteApiStitcher (ambient maintenanceAdmin credentials); deleted dead-code SuiteApiPropertyPusher. Property/stat keys, value semantics, and MOID stitching identity preserved for golden comparison vs build 41.
+- fix(adapter): build 44 — fix vCenter inventory enumeration regression from the build-43 raw-SOAP rewrite. `retrieveViewMembers` and `queryOptions` searched for `<returnval>` as a DIRECT child of the SOAP `<Envelope>` document element, but the returnvals nest under `Envelope > Body > <op>Response` — direct-child search found zero, so every ContainerView walk (hosts/VMs/DVS/DVPG/clusters) and QueryOptions read silently yielded an empty set with no fault or parse error. Added a deep-search `descendantsByLocalName` (the multi-element analogue of the already-deep `firstByLocalName` that single-object reads used, which masked the bug). Added SOAP-walk instrumentation in `VSphereClient`: INFO inventory counts (hosts/VMs/DVS/DVPG/clusters), per-RetrieveProperties objectContent-count log, DEBUG first-object type/value, and a zero-HostSystem WARN. Removed the redundant `onDescribe()` override (framework default in VcfCfAdapter is byte-identical). Rebuilt against current vcfcf-adapter-base.jar (AmbientCredential VCOPS path fix, default onDescribe).
 
 ## 1.0.0.41 (2026-06-03)
 
