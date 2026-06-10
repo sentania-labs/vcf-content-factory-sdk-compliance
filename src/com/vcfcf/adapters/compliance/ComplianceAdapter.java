@@ -572,17 +572,41 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			try {
 				advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
 			} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
-				// Known-unreadable advanced-settings channel (null
-				// OptionManager MoRef — disconnected host the connectionState
-				// guard above did not catch, e.g. a flap between the two
-				// reads). Fold every advanced_setting control to UNREADABLE;
-				// never evaluate against a silently-empty map. logWarn routes
-				// through the framework base (NOT the dead helper-logger).
-				advUnreadable = true;
+				// Build 48 — null OptionManager MoRef means the host
+				// disconnected between the connectionState check above and this
+				// read (a flap). A half-connected host must never produce a
+				// score: its cached vim/esxcli reads are equally suspect, so
+				// scoring them live (the build-46/47 partial-score shape) is
+				// dishonest. Treat the WHOLE host as unreadable, identical to
+				// the connection-state branch above — fold every control
+				// (advanced_setting + vim/esxcli) to UNREADABLE, emit no score,
+				// and continue. logWarn routes through the framework base.
 				logWarn("Host " + hostName + ": advanced-settings channel "
-						+ "UNREADABLE (" + e.getMessage() + ") — all "
-						+ "advanced_setting controls marked UNREADABLE this "
-						+ "cycle (not dropped from the denominator)");
+						+ "UNREADABLE (" + e.getMessage() + ") — host flapped "
+						+ "between connection check and read; ALL compliance "
+						+ "controls marked UNREADABLE this cycle (no partial "
+						+ "score emitted)");
+				ControlEvaluator.ComplianceResult advUnread =
+						ControlEvaluator.evaluateControlsUnreadable(
+								hostControls, hostName);
+				ControlEvaluator.ComplianceResult vimUnread =
+						unreadableVimResult(hostControls, hostName);
+				ControlEvaluator.ComplianceResult cr =
+						mergeResults(advUnread, vimUnread);
+				stats.unreadable += cr.unreadableCount;
+				stats.total++;  // total attempted; not scored (totalCount==0)
+
+				logInfo("Host " + hostName + ": UNREADABLE (adv-settings flap, "
+						+ cr.unreadableCount + " controls)");
+
+				if (stitcher != null) {
+					ComplianceStitcher.HostEntry he =
+							stitcher.matchHost(hostName, hostId);
+					if (he != null) {
+						pushComplianceViaClient(he.resourceId, cr, profile.name);
+					}
+				}
+				continue;
 			} catch (Exception e) {
 				// Any other read failure (SOAP fault, transport) is likewise a
 				// read failure, not an empty result — treat as unreadable.
@@ -1121,9 +1145,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String ctrlPrefix = prefix + "|" + ctrl.scgId;
 			stats.put(ctrlPrefix + "|Compliant", ctrl.compliant ? 1.0 : 0.0);
 		}
-		stats.put("VCF-CF Compliance|score", cr.score);
-		stats.put("VCF-CF Compliance|pass_count", (double) cr.passCount);
-		stats.put("VCF-CF Compliance|fail_count", (double) cr.failCount);
+		// Build 48 — no-sentinel per-resource push. A totalCount==0 result is
+		// a host nothing could be scored on (every control unreadable); its
+		// cr.score is the zero-divisor sentinel 100.0 from
+		// evaluateControlsUnreadable. Pushing that sentinel as
+		// VCF-CF Compliance|score lands a green "100" on the resource and the
+		// per-host compliance symptoms (LT 95 / LT 80) read it as fully
+		// compliant -> a blind host masquerades as perfect. Mirror the world
+		// rollup's scored>0 discipline (line ~330): when totalCount==0, OMIT
+		// score/pass_count/fail_count entirely and push only total_count=0 +
+		// unreadable_count, so the symptoms see 'no data', not a sentinel.
+		// Absent is the only honest per-resource value here (score=0 would
+		// false-trip CRITICAL and is equally dishonest).
+		if (cr.totalCount > 0) {
+			stats.put("VCF-CF Compliance|score", cr.score);
+			stats.put("VCF-CF Compliance|pass_count", (double) cr.passCount);
+			stats.put("VCF-CF Compliance|fail_count", (double) cr.failCount);
+		}
 		stats.put("VCF-CF Compliance|total_count", (double) cr.totalCount);
 		stats.put("VCF-CF Compliance|unreadable_count",
 				(double) cr.unreadableCount);
