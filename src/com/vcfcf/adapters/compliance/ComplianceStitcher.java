@@ -25,13 +25,30 @@ import java.util.Map;
  * through {@link SuiteApiStitcher#pushProperties}/{@link
  * SuiteApiStitcher#pushStats}.
  *
- * <p>The identity rules are preserved <b>byte-for-byte</b> from v1 (the MOID
- * trap): all vim25-backed VMWARE kinds resolve by
- * {@code VMEntityName} (name) + {@code VMEntityObjectID} (moid); the
- * non-vim25 {@code VMwareAdapter Instance} resolves by {@code VCURL} (vCenter
- * FQDN) and {@code VMEntityVCID} (vCenter Instance UUID), with a display-name
- * and singleton fallback. moid is tried first (most authoritative), then
- * exact name, then dot-prefix fuzzy match (FQDN/shortname tolerance).
+ * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
+ * VMWARE kinds resolve by {@code VMEntityName} (name) +
+ * {@code VMEntityObjectID} (moid); the non-vim25 {@code VMwareAdapter Instance}
+ * resolves by {@code VCURL} (vCenter FQDN) and {@code VMEntityVCID} (vCenter
+ * Instance UUID), with a display-name and singleton fallback. moid is tried
+ * first (most authoritative), then exact name, then dot-prefix fuzzy match
+ * (FQDN/shortname tolerance).
+ *
+ * <p><b>Cross-vCenter MOID scoping (the MOID trap — fix, build 51).</b> A bare
+ * MOID like {@code host-12} / {@code vm-42} is <b>NOT unique across
+ * vCenters</b> — in a multi-vCenter VCF Ops (e.g. the devel mgmt + wld01
+ * instances) the {@code /api/resources} load returns every vCenter's
+ * {@code host-12}, and the by-moid index keeps only the last writer, so a push
+ * can land on the wrong vCenter's host. v1 inherited the unscoped matcher;
+ * this build restores per-vCenter scoping: {@link #setOwningVcUuid} pins the
+ * vCenter Instance UUID this adapter instance monitors (from
+ * {@code VSphereClient.getVCenterInstanceUuid()}, called once per cycle before
+ * the {@code load*} calls), and every loaded vim25-backed foreign resource is
+ * filtered to that UUID by its {@code VMEntityVCID}. A resource belonging to a
+ * different vCenter is skipped; a row whose {@code VMEntityVCID} is unknown, or
+ * when the owning UUID itself is unknown, degrades to the unscoped behaviour
+ * (logged) rather than dropping the resource. Single-vCenter deployments are
+ * unaffected either way. (sdk-adapter-reviewer, vcommunity build 1 —
+ * MOID-trap WARNING; same defect confirmed corpus-wide.)
  *
  * <p>The Suite API {@code /api/resources} response shape consumed here:
  * <pre>
@@ -61,9 +78,26 @@ public final class ComplianceStitcher {
 	private final Map<String, HostEntry> vcByHost = new HashMap<>();
 	private final Map<String, HostEntry> vcByVcUuid = new HashMap<>();
 
+	// The vCenter Instance UUID this adapter instance monitors. When set, the
+	// vim25-backed loaders keep only foreign resources whose VMEntityVCID
+	// matches it, so a bare MOID can never resolve to a same-MOID resource in
+	// another vCenter (the MOID trap). Null disables scoping (degrades to the
+	// unscoped matcher — single-vCenter safe).
+	private volatile String owningVcUuid;
+
 	public ComplianceStitcher(SuiteApiStitcher stitcher, Logger logger) {
 		this.stitcher = stitcher;
 		this.logger = logger;
+	}
+
+	/**
+	 * Pin the owning vCenter Instance UUID (from
+	 * {@code VSphereClient.getVCenterInstanceUuid()}). Call once per cycle
+	 * BEFORE the {@code load*} calls. A null/blank value disables scoping
+	 * (degrades to the unscoped matcher — single-vCenter safe).
+	 */
+	public void setOwningVcUuid(String vcUuid) {
+		this.owningVcUuid = (vcUuid != null && !vcUuid.isEmpty()) ? vcUuid : null;
 	}
 
 	public void loadHostResources() {
@@ -172,11 +206,25 @@ public final class ComplianceStitcher {
 		logger.info("ComplianceStitcher: " + resourceKind
 				+ " — processing " + resources.size() + " resource(s)");
 
+		int skippedForeignVc = 0;
 		for (SimpleJson r : resources) {
 			String uuid = findUuid(r);
 			SimpleJson key = r.get("resourceKey");
 			String name = getIdValue(key, "VMEntityName");
 			String moid = getIdValue(key, "VMEntityObjectID");
+			String vcUuid = getIdValue(key, "VMEntityVCID");
+
+			// vCenter scoping (the MOID-trap fix): when this instance's owning
+			// vCenter UUID is known AND the resource carries a VMEntityVCID that
+			// does NOT match it, the resource belongs to a DIFFERENT vCenter —
+			// skip it so a bare MOID cannot resolve across vCenters. A resource
+			// with no VMEntityVCID is kept (degrade to unscoped — never drop a
+			// resource we cannot disambiguate).
+			if (owningVcUuid != null && vcUuid != null && !vcUuid.isEmpty()
+					&& !owningVcUuid.equals(vcUuid)) {
+				skippedForeignVc++;
+				continue;
+			}
 
 			// resourceId prefers the platform UUID; fall back to name only
 			// so a malformed row never produces a null push target.
@@ -195,7 +243,11 @@ public final class ComplianceStitcher {
 
 		logger.info("ComplianceStitcher: loaded "
 				+ byName.size() + " " + resourceKind + " by name, "
-				+ byMoid.size() + " by MOID");
+				+ byMoid.size() + " by MOID"
+				+ (owningVcUuid != null
+						? " (scoped to vCenter " + owningVcUuid + "; skipped "
+						  + skippedForeignVc + " from other vCenters)"
+						: " (unscoped — owning vCenter UUID unknown)"));
 	}
 
 	/**
