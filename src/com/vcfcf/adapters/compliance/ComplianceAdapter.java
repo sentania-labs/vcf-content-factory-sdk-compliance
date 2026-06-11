@@ -474,6 +474,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// ----- Stitcher resource loading --------------------------------------
 
 	private void loadStitcherResources() {
+		// Pin the owning vCenter Instance UUID BEFORE loading foreign resources
+		// so the loaders scope every vim25-backed kind by VMEntityVCID — a bare
+		// MOID (host-12, vm-42) is not unique across vCenters and would
+		// otherwise cross-stitch in a multi-vCenter VCF Ops (the MOID trap).
+		// A read failure degrades to the unscoped matcher (single-vCenter safe).
+		try {
+			stitcher.setOwningVcUuid(vsphere.getVCenterInstanceUuid());
+		} catch (Exception e) {
+			stitcher.setOwningVcUuid(null);
+			logWarn("Stitcher owning-vCenter UUID unavailable — foreign "
+					+ "resource matching degrades to unscoped (single-vCenter "
+					+ "safe): " + e.getMessage());
+		}
 		safeLoad(() -> stitcher.loadHostResources(),
 				() -> "Stitcher loaded: " + stitcher.size() + " hosts",
 				"loadHostResources");
