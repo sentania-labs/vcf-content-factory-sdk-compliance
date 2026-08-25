@@ -16,9 +16,9 @@ operator sees compliance posture in-place on the hosts and vCenter they
 already monitor — no separate object tree to navigate for per-control
 detail.
 
-Bundled profiles cover the VMware Security Configuration Guide (SCG) for
-ESXi 8.x and 9.x and the CIS vSphere Foundations Benchmark. A custom
-profile can be supplied as an SCG-format CSV.
+Bundled profiles cover the VMware Security Configuration Guide (SCG)
+8.0, 9.0, and 9.1. A custom profile can be supplied as a
+canonical-schema CSV.
 
 ### Resource kinds
 

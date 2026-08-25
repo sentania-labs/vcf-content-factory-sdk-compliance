@@ -112,11 +112,15 @@ public final class BenchmarkLoader {
 	static String resolveBundledProfileName(String profileName) {
 		if (profileName == null) return "VMware_SCG_8.0";
 		switch (profileName) {
+			case "VMware_SCG_9.1":
 			case "VMware_SCG_9.0":
-			case "CIS_vSphere_8":
 			case "VMware_SCG_8.0":
 				return profileName;
 			default:
+				// Unknown / retired names (including the removed
+				// CIS_vSphere_8) fall back to the default profile; the
+				// resolved name is pushed as the profile_name property,
+				// so the operator can see what is actually loaded.
 				return "VMware_SCG_8.0";
 		}
 	}
@@ -130,10 +134,10 @@ public final class BenchmarkLoader {
 	 */
 	static String bundledFilename(String resolvedName) {
 		switch (resolvedName) {
+			case "VMware_SCG_9.1":
+				return "scg_9.1.csv";
 			case "VMware_SCG_9.0":
 				return "scg_9.0.csv";
-			case "CIS_vSphere_8":
-				return "cis_vsphere_8.csv";
 			case "VMware_SCG_8.0":
 			default:
 				return "scg_8.0.csv";

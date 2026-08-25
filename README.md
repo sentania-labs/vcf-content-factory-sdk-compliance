@@ -1,6 +1,6 @@
 # VCF Content Factory Compliance Adapter
 
-Monitors ESXi hosts for CIS benchmark compliance by querying vCenter
+Monitors ESXi hosts for VMware SCG benchmark compliance by querying vCenter
 configuration and evaluating controls against a user-selectable security
 profile. Pushes per-control compliance properties and aggregate scores
 onto existing VMWARE HostSystem resources via ARIA_OPS stitching.
@@ -24,17 +24,24 @@ Full docset (overview, installing & configuring, inventory tree): [`docs/README.
 | vCenter Host | Yes | - | vCenter FQDN or IP |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Benchmark Profile | No | CIS_8.0 | CIS_8.0, CIS_9.0, or Custom |
+| Benchmark Profile | Yes | VMware_SCG_8.0 | VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
 | Custom Profile Path | No | - | Filesystem path to CSV if Custom |
 | Allow Insecure SSL | No | true | Accept self-signed certificates |
 
 ## Benchmark profiles
 
-Bundled profiles ship with the pak under `profiles/`:
-- `cis_esxi_8.0.csv` — CIS vSphere 8.0 Security Configuration Guide
+Bundled profiles ship with the pak under `profiles/canonical/`:
+- `scg_8.0.csv` — VMware Security Configuration Guide for vSphere 8.x
+- `scg_9.0.csv` — VMware Cloud Foundation 9.0 Security Configuration Guide
+- `scg_9.1.csv` — VMware Cloud Foundation 9.1 Security Configuration Guide
 
-Custom profiles must follow the VMware SCG CSV format (27 columns).
-Upload the CSV to the VCF Ops appliance and reference the path.
+All three derive from vmware/vcf-security-and-compliance-guidelines
+(source CSVs kept beside them under `profiles/`; the canonical form is
+produced by the normalizer pipeline, see CANONICAL_SCHEMA.md).
+
+Custom profiles must follow the canonical CSV schema
+(CANONICAL_SCHEMA.md). Upload the CSV to the VCF Ops appliance and
+reference the path.
 
 ## Property naming
 
