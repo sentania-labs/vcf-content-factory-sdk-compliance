@@ -10,9 +10,10 @@
 - A **vCenter account** for the adapter to authenticate with (vCenter SSO
   credentials). The account needs **read-only** access — the adapter only
   reads configuration; it performs no writes or remediation.
-- One or more **compliance benchmark profiles**. The pack bundles SCG ESXi
-  8.x / 9.x and the CIS vSphere Foundations Benchmark; a custom profile is
-  supplied as an SCG-format CSV staged on the collector appliance.
+- One or more **compliance benchmark profiles**. The pack bundles the
+  VMware Security Configuration Guide (SCG) 8.0, 9.0, and 9.1; a custom
+  profile is supplied as a canonical-schema CSV staged on the collector
+  appliance.
 
 ## Permissions Required
 
@@ -68,7 +69,7 @@ for:
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile | `benchmark_profile` | Yes | — | Select a bundled SCG/CIS profile, or `Custom`. |
+| Compliance Profile | `benchmark_profile` | Yes | — | Select a bundled SCG profile (8.0 / 9.0 / 9.1), or `Custom`. |
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Read-only access. |

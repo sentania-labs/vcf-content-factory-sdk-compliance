@@ -109,15 +109,46 @@ public final class BenchmarkLoader {
 		return profile;
 	}
 
+	/**
+	 * Resolves the configured profile name to a bundled profile.
+	 *
+	 * <p>An absent name ({@code null} / blank) keeps the describe.xml
+	 * default. Any unknown NON-null name — including the retired
+	 * {@code CIS_vSphere_8} — throws (build 56, review B1): the
+	 * exception propagates out of the collect cycle so the adapter
+	 * instance goes to a visible failed state with an actionable
+	 * message, instead of silently scoring against a benchmark the
+	 * operator did not configure. A silent fallback would put a
+	 * confident compliance score on dashboards that answers a
+	 * different question than the instance's own configuration says —
+	 * for a compliance product the wrong-score mode is strictly worse
+	 * than a one-click-recoverable Down. {@code Custom} reaches here
+	 * only when {@code custom_profile_path} is unset (the caller
+	 * handles the valid Custom+path case first) and gets its own
+	 * actionable message.
+	 */
 	static String resolveBundledProfileName(String profileName) {
-		if (profileName == null) return "VMware_SCG_8.0";
+		if (profileName == null || profileName.trim().isEmpty()) {
+			return "VMware_SCG_8.0";
+		}
 		switch (profileName) {
+			case "VMware_SCG_9.1":
 			case "VMware_SCG_9.0":
-			case "CIS_vSphere_8":
 			case "VMware_SCG_8.0":
 				return profileName;
 			default:
-				return "VMware_SCG_8.0";
+				if ("Custom".equalsIgnoreCase(profileName)) {
+					throw new RuntimeException(
+							"benchmark_profile 'Custom' requires "
+							+ "custom_profile_path to point at a "
+							+ "canonical-schema profile CSV on the "
+							+ "collector");
+				}
+				throw new RuntimeException(
+						"configured benchmark_profile '" + profileName
+						+ "' is not bundled in this version; choose "
+						+ "VMware_SCG_8.0 / VMware_SCG_9.0 / "
+						+ "VMware_SCG_9.1 or Custom");
 		}
 	}
 
@@ -130,10 +161,10 @@ public final class BenchmarkLoader {
 	 */
 	static String bundledFilename(String resolvedName) {
 		switch (resolvedName) {
+			case "VMware_SCG_9.1":
+				return "scg_9.1.csv";
 			case "VMware_SCG_9.0":
 				return "scg_9.0.csv";
-			case "CIS_vSphere_8":
-				return "cis_vsphere_8.csv";
 			case "VMware_SCG_8.0":
 			default:
 				return "scg_8.0.csv";
