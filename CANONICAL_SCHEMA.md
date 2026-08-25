@@ -1,8 +1,8 @@
 # Canonical Benchmark CSV Schema
 
 The compliance adapter consumes benchmarks in a single, header-aware
-CSV format. Source benchmarks (VMware SCG 8.x, VMware SCG 9.x, CIS
-vSphere) are normalized into this schema before being loaded by the
+CSV format. Source benchmarks (VMware SCG 8.0, 9.0, 9.1) are
+normalized into this schema before being loaded by the
 adapter. The adapter does not parse vendor-specific formats — it
 parses only the canonical schema.
 
@@ -21,11 +21,11 @@ class of bug impossible.
 profiles/                                  # source CSVs (vendor formats)
   vmware_scg_8.0.csv
   vmware_scg_9.0.csv
-  cis_vsphere_8.csv
+  vmware_scg_9.1.csv
 profiles/canonical/                        # canonical CSVs (loaded by adapter)
   scg_8.0.csv
   scg_9.0.csv
-  cis_vsphere_8.csv
+  scg_9.1.csv
 ```
 
 Source CSVs stay in `profiles/` so future updates can be diffed and
@@ -191,6 +191,8 @@ all currently come in as `manual_audit` / `powercli_only`):
 | `fleet` | `fleet-9.*` | Operations Fleet Management |
 | `logs` | `logs-9.*` | Operations for Logs |
 | `networks` | `networks-9.*` | Operations for Networks |
+| `automation` | `automation-9.*` | VCF Automation (added with SCG 9.1) |
+| `pnr` | `pnr-9.*` | Protection and Recovery (added with SCG 9.1) |
 
 These rows exist in the profile for traceability; they don't push
 data because the adapter cannot reach those sub-products today.
@@ -310,8 +312,8 @@ Sources currently in use:
 | Source token | Description |
 |---|---|
 | `SCG-8.0` | VMware Security Configuration Guide v8.x |
-| `SCG-9.0` | VMware Security Configuration Guide v9.x |
-| `CIS-vSphere-8` | CIS Benchmark for vSphere 8 |
+| `SCG-9.0` | VMware Cloud Foundation 9.0 Security Configuration Guide |
+| `SCG-9.1` | VMware Cloud Foundation 9.1 Security Configuration Guide |
 
 ### `remediation_text` format
 
@@ -325,9 +327,14 @@ column is empty.
 Per-source Python scripts under `scripts/`:
 
 - `scripts/normalize_scg_v8.py` — VMware SCG 8.x source format
-- `scripts/normalize_scg_v9.py` — VMware SCG 9.x source format
-  (different column order than 8.x)
-- `scripts/normalize_cis_vsphere.py` — CIS vSphere benchmark source
+  (factory repo `scripts/`)
+- `scripts/normalize_scg_v9.py` — VMware SCG 9.0 source format
+  (different column order than 8.x; factory repo `scripts/`)
+- `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
+  (this repo's `scripts/`; a thin delta driver over the factory's
+  9.x normalizer — 9.1 drops the embedded-newline header cells,
+  adds a NIST 800-53R5 column, tags `source_ref` `SCG-9.1`, and
+  introduces the `automation` / `pnr` / `networks` sub-products)
 
 Each script takes `<input.csv> <output.csv>` as positional args. They
 log counts (in / out / skipped, by `parameter_kind`) to stderr and
