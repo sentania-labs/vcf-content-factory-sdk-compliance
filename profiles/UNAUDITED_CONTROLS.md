@@ -5,6 +5,15 @@ This document ships **inside the pak** (bundled at
 coverage statement for the VCF Content Factory Compliance adapter against
 the VMware Security Configuration Guide (SCG) 8.0 / 9.0 profiles.
 
+> **SCG 9.1 (build 55):** the 9.1 profile was added after this document
+> was reconciled. Canonical `control_id`s are version-stable, so the
+> 9.0 entries below carry over to the 9.1 rows that share a control_id;
+> the 9.1-only additions (new `esx.*`/`vm.*` controls plus the
+> `automation.*` / `pnr.*` sub-products) load as `manual_audit` /
+> `powercli_only` unless a read recipe matched, and are therefore in
+> bucket 1/3 by construction — never scored, never a pass. A full 9.1
+> reconciliation pass of this document is pending.
+
 The adapter machine-audits every control it *can* assess from the vCenter
 vim25 SOAP surface (advanced settings + `vim_property` read recipes) and
 the esxcli-over-vCenter-session surface (esxcli `read_recipe` recipes,

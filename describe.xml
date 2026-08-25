@@ -27,7 +27,7 @@
                           enum="true">
         <enum value="VMware_SCG_8.0" displayOrder="1"/>
         <enum value="VMware_SCG_9.0" displayOrder="2"/>
-        <enum value="CIS_vSphere_8" displayOrder="3"/>
+        <enum value="VMware_SCG_9.1" displayOrder="3"/>
         <enum value="Custom" displayOrder="4"/>
       </ResourceIdentifier>
       <ResourceIdentifier key="custom_profile_path" nameKey="8" type="string"
