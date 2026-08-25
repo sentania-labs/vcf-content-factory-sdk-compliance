@@ -10,7 +10,9 @@ This is a thin delta driver over the factory's SCG 9.x normalizer
 The 9.x pipeline (component mapping, source-ID prefix handling,
 Setting Location refinement, every build-35..41 read-recipe reclass
 map) is reused verbatim; only the 9.1-specific deltas are applied
-here:
+here (deltas 1-3 are the 9.1 format; deltas 4-5 close review
+findings W1/W2 from
+knowledge/context/reviews/compliance-scg-benchmark-set-2026-08-25.md):
 
 1. **Header shapes.** The 9.1 source CSV drops the embedded newlines
    9.0 carried in three header cells:
@@ -41,6 +43,7 @@ collapses to a two-line invocation.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -70,7 +73,30 @@ def main(argv: list) -> int:
     import _compliance_normalize as base
     import normalize_scg_v9 as v9
 
+    # Every patch below is guarded: if the factory renames the target
+    # attribute, a bare setattr / dict-update would silently create a
+    # stale attribute and the run would SUCCEED with plausible wrong
+    # output (SCG-9.0 source tokens, unmapped sub-products). A factory
+    # rename must fail this driver loudly instead (review W3).
+    def _require(mod, name):
+        if not hasattr(mod, name):
+            raise SystemExit(
+                f"ERROR: factory module {mod.__name__} no longer has "
+                f"'{name}' — the 9.1 delta driver's patch target moved; "
+                "update scripts/normalize_scg_v91.py before regenerating."
+            )
+
     # Delta 1: 9.1 header shapes (no embedded newlines).
+    for name in ("COL_COMPONENT", "COL_PRIORITY", "REQUIRED_COLUMNS",
+                 "SOURCE_TOKEN", "COL_SCG_ID", "COL_TITLE",
+                 "COL_DESCRIPTION", "COL_PARAMETER", "COL_EXPECTED",
+                 "COL_ASSESSMENT", "COL_REMEDIATION",
+                 "classify_parameter_kind"):
+        _require(v9, name)
+    for name in ("COMPONENT_MAP", "SOURCE_ID_PREFIX_MAP",
+                 "_VIM_RECLASS_BY_CONTROL_ID", "classify_vim_reclass"):
+        _require(base, name)
+
     v9.COL_COMPONENT = "Component Name"
     v9.COL_PRIORITY = "Implementation Priority"
     # REQUIRED_COLUMNS was built at import time from the 9.0 constants;
@@ -102,6 +128,43 @@ def main(argv: list) -> int:
         "automation": ("automation", "VCenterAdapterInstance"),
         "pnr": ("pnr", "VCenterAdapterInstance"),
     })
+
+    # Delta 4 (review W1): upstream changed the Setting Location text of
+    # `vcenter-9.network-reset-port` ("Distributed Switch Settings" ->
+    # "UI: Distributed Port Group > ..."), so map_setting_location now
+    # refines the row to DistributedVirtualPortgroup / control_id
+    # `dvpg.network-reset-port` — and the 9.0-era reclass entry keyed
+    # `vds.network-reset-port` no longer matches, silently dropping the
+    # control to powercli_only. Add the DVPG-keyed entry with the same
+    # recipe: `config.policy.portConfigResetAtDisconnect` is a
+    # DVPortgroupConfigInfo.policy field, so DVPG is the more correct
+    # target kind than 9.0's vds mapping anyway.
+    base._VIM_RECLASS_BY_CONTROL_ID["dvpg.network-reset-port"] = (
+        "config.policy.portConfigResetAtDisconnect",
+        "bool",
+        "config.policy.portConfigResetAtDisconnect",
+        "true",   # SCG "Enabled" -> reset-at-disconnect must be ON
+    )
+
+    # Delta 5 (review W2): 9.1's assessment-text changes promote
+    # `vc.smtp` / `vc.snmp` to advanced_setting, but their parameter
+    # keys are not real OptionManager keys — a comma-joined multi-key
+    # list ("mail.smtp.port, mail.smtp.username, ...") and a literal
+    # placeholder ("snmp.receiver.<x>.enabled"). Such rows can never
+    # resolve (every cycle hits the absent-key skip: safe, but dead
+    # weight inflating the evaluable count). Demote them back to
+    # manual_audit, mirroring the newline-joined multi-key rule the
+    # factory classifier already applies.
+    _orig_classify = v9.classify_parameter_kind
+
+    def _classify_91(parameter, assessment_cmd):
+        kind = _orig_classify(parameter, assessment_cmd)
+        if kind == "advanced_setting" and parameter and (
+                "," in parameter or re.search(r"<[^>]*>", parameter)):
+            return "manual_audit"
+        return kind
+
+    v9.classify_parameter_kind = _classify_91
 
     return v9.normalize(argv[1], argv[2])
 
