@@ -64,6 +64,29 @@ public final class ComplianceRollup {
 			new EnumMap<>(BenchmarkSelector.Kind.class);
 	private final Map<String, Integer> byBucket = new LinkedHashMap<>();
 
+	// Build 78: kinds whose inventory listing failed this cycle.
+	private final java.util.Set<BenchmarkSelector.Kind> incomplete =
+			java.util.EnumSet.noneOf(BenchmarkSelector.Kind.class);
+
+	/**
+	 * Build 78 (review of build 77, NIT): the inventory listing for
+	 * {@code kind} failed this cycle, so its objects were not evaluated.
+	 * {@link #toStats} then OMITS that kind's keys, and the cross-kind
+	 * {@code All} and {@code Benchmark|<B>|objects} keys, instead of pushing
+	 * counts that silently leave those objects out. Omitted keys keep their
+	 * previous values in VCF Ops, so the environment super metrics (sums of
+	 * each vCenter's {@code Rollup|All|*}) stay close to the truth for the
+	 * cycle rather than dropping, e.g., every VM of one vCenter. The next
+	 * complete cycle pushes everything again.
+	 */
+	public void markIncomplete(BenchmarkSelector.Kind kind) {
+		incomplete.add(kind);
+	}
+
+	public java.util.Set<BenchmarkSelector.Kind> incompleteKinds() {
+		return java.util.Collections.unmodifiableSet(incomplete);
+	}
+
 	public ComplianceRollup() {
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			byKind.put(k, new Tally());
@@ -134,9 +157,17 @@ public final class ComplianceRollup {
 			all.noBenchmark += t.noBenchmark;
 			all.scoreSum += t.scoreSum;
 		}
-		put(out, "All", all);
+		boolean complete = incomplete.isEmpty();
+		if (complete) {
+			put(out, "All", all);
+		}
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
-			put(out, k.rollupName, byKind.get(k));
+			if (!incomplete.contains(k)) {
+				put(out, k.rollupName, byKind.get(k));
+			}
+		}
+		if (!complete) {
+			return out;   // All and Benchmark counts would under-count
 		}
 		for (Map.Entry<String, Integer> e : byBucket.entrySet()) {
 			out.put(PREFIX + "Benchmark|" + e.getKey() + "|objects",

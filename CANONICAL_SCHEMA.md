@@ -317,8 +317,10 @@ read is **never** folded into a pass:
   `(non-empty)` pass.)
 - For `advanced_setting`, "absent" means only that the option read
   SUCCEEDED and the key is not set (build 77). A failed read (a SOAP fault
-  on `QueryOptions` or on the VM `config.extraConfig`, or a missing vCenter
-  setting manager) is never an empty option list: every advanced_setting
+  on `QueryOptions` or on the VM `config.extraConfig`, a per-property fault
+  such as `NoPermission` reported in the response's `missingSet`, a VM
+  whose `config.extraConfig` is not returned at all, or a missing vCenter
+  setting manager; builds 77 and 78) is never an empty option list: every advanced_setting
   control of the object is UNREADABLE for that cycle (pushed as -1, counted
   in `unreadable_count`, never a pass, never touched by the stale cleanup).
 - For `advanced_setting`, an absent key is **skipped** (excluded from the
