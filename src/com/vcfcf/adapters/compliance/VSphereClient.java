@@ -255,8 +255,8 @@ public final class VSphereClient {
 		ensureConnected();
 		List<HostInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("HostSystem")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new HostInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new HostInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " hosts");
 		if (result.isEmpty()) {
@@ -290,15 +290,14 @@ public final class VSphereClient {
 		if (rows != null && !rows.isEmpty()) {
 			for (ViewRow row : rows) {
 				String name = row.values.get("name");
-				if (name == null) name = getStringProperty(row.ref, "name");
-				if (name == null) continue;
+				if (name == null) name = nameOrMoid(row.ref);
 				result.add(new VmInfo(row.ref, name, row.ref.value,
 						row.values.get("runtime.host"), true));
 			}
 		} else {
 			for (MoRef ref : listView("VirtualMachine")) {
-				String name = getStringProperty(ref, "name");
-				if (name != null) result.add(new VmInfo(ref, name, ref.value));
+				String name = nameOrMoid(ref);
+				result.add(new VmInfo(ref, name, ref.value));
 			}
 		}
 		logInfo("vSphere SOAP: " + result.size() + " VMs");
@@ -318,8 +317,8 @@ public final class VSphereClient {
 			refs = listView("DistributedVirtualSwitch");
 		}
 		for (MoRef ref : refs) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new DvsInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new DvsInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " DVS");
 		return result;
@@ -329,8 +328,8 @@ public final class VSphereClient {
 		ensureConnected();
 		List<DvpgInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("DistributedVirtualPortgroup")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new DvpgInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new DvpgInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " DVPG");
 		return result;
@@ -340,11 +339,28 @@ public final class VSphereClient {
 		ensureConnected();
 		List<ClusterInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("ClusterComputeResource")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new ClusterInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new ClusterInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " Clusters");
 		return result;
+	}
+
+	/**
+	 * Build 77: an object's display name, or its MOID when the name read
+	 * fails (logged). An object is never dropped from inventory because one
+	 * property read faulted: it is still evaluated, and it still stitches by
+	 * MOID.
+	 */
+	private String nameOrMoid(MoRef ref) throws Exception {
+		String name = getStringProperty(ref, "name");
+		if (name == null) {
+			logWarn("vSphere SOAP: name of " + ref.type + " " + ref.value
+					+ " unreadable" + (lastFault != null ? " (" + lastFault + ")"
+					: "") + "; using its MOID");
+			return ref.value;
+		}
+		return name;
 	}
 
 	// -----------------------------------------------------------------------
@@ -422,19 +438,16 @@ public final class VSphereClient {
 	 */
 	public Map<String, String> getVmExtraConfig(MoRef vmRef) throws Exception {
 		ensureConnected();
-		Map<String, String> result = new HashMap<>();
-		Element val = getRawPropertyElement(vmRef, "config.extraConfig");
-		if (val == null) return result;
-		// extraConfig is an array of OptionValue; each child element carries
-		// <key> and <value>.
-		for (Element item : childElements(val)) {
-			String key = childText(item, "key");
-			String value = childText(item, "value");
-			if (key != null && value != null) {
-				result.put(key, value);
-			}
-		}
-		return result;
+		// Build 77: a failed read THROWS (VimOptions.ReadFault) instead of
+		// returning an empty map, which the evaluator would read as "nothing
+		// set" and pass every "X or Undefined" control. Empty now means only
+		// "read OK, property unset".
+		lastFault = null;
+		Document resp = retrieveProperties(vmRef.type, vmRef.value,
+				"config.extraConfig");
+		return VimOptions.fromPropertyOptions(resp, "config.extraConfig",
+				"RetrieveProperties config.extraConfig on " + vmRef.value,
+				lastFault);
 	}
 
 	/**
@@ -443,32 +456,30 @@ public final class VSphereClient {
 	 */
 	public Map<String, String> getVCenterAdvancedSettings() throws Exception {
 		ensureConnected();
-		if (settingOptionMgr == null) return new HashMap<>();
+		if (settingOptionMgr == null) {
+			// Build 77: no setting manager means the vCenter settings cannot
+			// be read at all; never an empty "nothing set" map.
+			throw new VimOptions.ReadFault("vCenter setting manager "
+					+ "(ServiceContent.setting) missing");
+		}
 		return queryOptions(settingOptionMgr);
 	}
 
 	private Map<String, String> queryOptions(MoRef optionMgr) throws Exception {
-		Map<String, String> result = new HashMap<>();
 		String body =
 				"<QueryOptions xmlns=\"urn:vim25\">"
 				+ "<_this type=\"" + xmlEscape(optionMgr.type) + "\">"
 				+ xmlEscape(optionMgr.value) + "</_this>"
 				+ "</QueryOptions>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/QueryOptions", true);
-		if (resp == null) return result;
-		// Each <returnval> is an OptionValue with <key> and <value>. Deep
-		// search — the returnvals are nested under Envelope > Body >
-		// QueryOptionsResponse, not direct children of the document element
-		// (build 44 fix, same defect class as the inventory walk).
-		for (Element rv : descendantsByLocalName(resp.getDocumentElement(),
-				"returnval")) {
-			String key = childText(rv, "key");
-			String value = childText(rv, "value");
-			if (key != null && value != null) {
-				result.put(key, value);
-			}
-		}
-		return result;
+		// Build 77: a SOAP fault (host stopped responding after the
+		// connection check, session fault) THROWS instead of returning an
+		// empty map; callers fold the advanced-setting controls to
+		// UNREADABLE. Returnvals are nested under Envelope > Body >
+		// QueryOptionsResponse (deep search, build 44).
+		return VimOptions.fromQueryOptions(resp,
+				"QueryOptions on " + optionMgr.value, lastFault);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1159,7 +1170,10 @@ public final class VSphereClient {
 	 */
 	private List<MoRef> listView(String type) throws Exception {
 		MoRef view = createContainerView(type);
-		if (view == null) return new ArrayList<>();
+		if (view == null) {
+			throw new VimOptions.ReadFault("CreateContainerView(" + type
+					+ ") returned no view");
+		}
 		try {
 			return retrieveViewMembers(view, type);
 		} finally {
@@ -1177,8 +1191,13 @@ public final class VSphereClient {
 				+ "<type>" + xmlEscape(type) + "</type>"
 				+ "<recursive>true</recursive>"
 				+ "</CreateContainerView>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/CreateContainerView", true);
-		if (resp == null) return null;
+		if (resp == null) {
+			// Build 77: a failed view is not an empty inventory.
+			throw new VimOptions.ReadFault("CreateContainerView(" + type
+					+ ") failed" + (lastFault != null ? ": " + lastFault : ""));
+		}
 		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
 		if (rv == null) return null;
 		String val = elementText(rv);
@@ -1218,11 +1237,13 @@ public final class VSphereClient {
 				+ "</objectSet>"
 				+ "</specSet>"
 				+ "</RetrieveProperties>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
 		if (resp == null) {
-			logWarn("listView(" + type + "): RetrieveProperties returned no "
-					+ "response (HTTP error / SOAP fault) — 0 entities");
-			return refs;
+			// Build 77: a failed listing is not an empty inventory.
+			throw new VimOptions.ReadFault("listView(" + type + "): "
+					+ "RetrieveProperties failed"
+					+ (lastFault != null ? ": " + lastFault : ""));
 		}
 		// Deep search: <returnval> (ObjectContent) entries are nested under
 		// Envelope > Body > RetrievePropertiesResponse — NOT direct children of
