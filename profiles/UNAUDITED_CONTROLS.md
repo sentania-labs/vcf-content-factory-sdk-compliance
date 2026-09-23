@@ -78,6 +78,32 @@ The coverage tables below count these controls as scored (they are
 scored rows in the canonical CSV); subtract the overlay rows for the
 effective count.
 
+## Standard-switch controls read from the wrong object (build 70)
+
+The SCG standard-switch security policy controls (reject forged
+transmits, MAC address changes and promiscuous mode) apply to each ESX
+host's standard vSwitches and their port groups. The normalizers map them
+to `DistributedVirtualSwitch` (a Codex review finding on PR #12), so
+builds 57 to 69 read `config.defaultPortConfig` from each distributed
+switch and could score a PASS while the hosts' standard switches stayed
+insecure. Since build 70 they are listed in `profiles/manual_review.csv`
+and never scored, in every profile, until a host-side standard-switch
+reader exists (host `config.network.vswitch[].spec.policy.security` and
+`config.network.portgroup[].spec.policy.security`, not yet built):
+
+| Profile | control_ids |
+|---|---|
+| 6.7, 7.0, 8.0 | `vds.network-reject-forged-transmit-standardswitch`, `vds.network-reject-mac-changes-standardswitch`, `vds.network-reject-promiscuous-mode-standardswitch` |
+| 9.0, 9.1 | `vds.network-standard-reject-forged-transmit`, `vds.network-standard-reject-mac-changes`, `vds.network-standard-reject-promiscuous-mode` |
+
+A review of every other `vds.*` / `dvpg.*` row in all five profiles found
+no other host-scoped control scored on a distributed object: the
+remaining scored rows come from `vcenter-*` sources (or SCG 6.7
+dvportgroup / VDS guidelines), and the host-side VGT rows
+(`dvpg.network-vgt` from `esxi-*` / `esx-*` sources) were already
+unscored. The distributed-switch equivalents
+(`dvpg.network-reject-*-dvportgroup`) remain scored.
+
 ## SCG 6.7 and 7.0 profiles (added 2026-09-23, selectable since build 57)
 
 The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)

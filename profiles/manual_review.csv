@@ -21,3 +21,18 @@ VMware_SCG_9.1,esx.etc-issue,expected value is prose (consult legal advisors)
 VMware_SCG_9.1,esx.log-forwarding,expected value is prose (Site-Specific Log Server)
 VMware_SCG_9.1,esx.login-message,expected value is prose (consult legal advisors)
 VMware_SCG_9.1,vc.etc-issue,expected value is prose (consult legal advisors)
+VMware_SCG_6.7,vds.network-reject-forged-transmit-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_6.7,vds.network-reject-mac-changes-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_6.7,vds.network-reject-promiscuous-mode-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_7.0,vds.network-reject-forged-transmit-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_7.0,vds.network-reject-mac-changes-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_7.0,vds.network-reject-promiscuous-mode-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_8.0,vds.network-reject-forged-transmit-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_8.0,vds.network-reject-mac-changes-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_8.0,vds.network-reject-promiscuous-mode-standardswitch,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.0,vds.network-standard-reject-forged-transmit,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.0,vds.network-standard-reject-mac-changes,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.0,vds.network-standard-reject-promiscuous-mode,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.1,vds.network-standard-reject-forged-transmit,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.1,vds.network-standard-reject-mac-changes,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_9.1,vds.network-standard-reject-promiscuous-mode,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet

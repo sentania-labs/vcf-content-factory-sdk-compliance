@@ -440,7 +440,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
 					+ all.size() + " bundled profiles loaded; "
 					+ benchmarkLoader.lastManualReviewApplied()
-					+ " prose-expected controls set to manual review)");
+					+ " controls set to manual review (prose expected values, standard-switch controls))");
 			return BenchmarkSelector.auto(all);
 		}
 		BenchmarkProfile profile = benchmarkLoader.load(
@@ -458,7 +458,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		profilesByName = one;
 		logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
 				+ "object (" + benchmarkLoader.lastManualReviewApplied()
-				+ " prose-expected controls set to manual review)");
+				+ " controls set to manual review (prose expected values, standard-switch controls))");
 		return BenchmarkSelector.fixed(profile);
 	}
 

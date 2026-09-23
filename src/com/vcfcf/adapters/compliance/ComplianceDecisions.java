@@ -226,9 +226,12 @@ public final class ComplianceDecisions {
 	/**
 	 * Control ids whose {@code Compliant} key could hold a stale value on an
 	 * object of {@code kind}: every control any bundled profile evaluates for
-	 * the kind, minus the controls the object's current benchmark evaluates
-	 * (those are pushed live every cycle). {@code current} null (no
-	 * benchmark) means every bundled control is a candidate.
+	 * the kind, PLUS every control the manual-review overlay demoted for the
+	 * kind (build 70: an earlier build may have scored and pushed it, e.g.
+	 * the standard-switch controls wrongly read from distributed switches in
+	 * builds 57 to 69), minus the controls the object's current benchmark
+	 * evaluates (those are pushed live every cycle). {@code current} null (no
+	 * benchmark) means every such control is a candidate.
 	 *
 	 * <p>Candidates are only QUERIED, never pushed blindly: see
 	 * {@link #staleZeroControls}.
@@ -238,6 +241,9 @@ public final class ComplianceDecisions {
 		Set<String> out = new TreeSet<>();
 		for (BenchmarkProfile p : allBundled) {
 			addEvaluated(out, kind, p);
+			for (BenchmarkProfile.Control c : sliceFor(p, kind)) {
+				if (c.manualReview) out.add(c.controlId);
+			}
 		}
 		if (current != null) {
 			Set<String> keep = new TreeSet<>();
