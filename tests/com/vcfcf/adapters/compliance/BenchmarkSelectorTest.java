@@ -39,11 +39,19 @@ public final class BenchmarkSelectorTest {
 		BenchmarkSelector.Selection s65 =
 				auto.select(BenchmarkSelector.Kind.HOST, "6.5.0");
 		T.eq("no benchmark for ESXi 6.5", s65.profileName, "6.5 label");
-		BenchmarkSelector.Selection sNull =
-				auto.select(BenchmarkSelector.Kind.HOST, null);
-		T.check(sNull.noBenchmark(), "unreadable version has no benchmark");
-		T.eq("no benchmark for ESXi (version unreadable)", sNull.profileName,
-				"unreadable label");
+		T.check(s10.noBenchmark() && !s10.versionUnreadable(),
+				"unmapped is no-benchmark, not unreadable");
+		// Review B2: an unreadable version is NOT "no benchmark".
+		for (String bad : new String[] {null, "", "unknown"}) {
+			BenchmarkSelector.Selection u =
+					auto.select(BenchmarkSelector.Kind.HOST, bad);
+			T.check(u.versionUnreadable(), "unreadable: " + bad);
+			T.check(!u.noBenchmark(), "unreadable is not no-benchmark: " + bad);
+			T.check(u.profile == null, "unreadable has no profile: " + bad);
+			T.eq("unknown", u.bucket, "unreadable bucket");
+			T.eq("benchmark unknown: ESXi version unreadable", u.profileName,
+					"unreadable label");
+		}
 		T.eq("no benchmark for vCenter 10.0",
 				auto.select(BenchmarkSelector.Kind.VCENTER, "10.0.0")
 						.profileName, "vCenter label");

@@ -25,11 +25,13 @@ import java.util.regex.Pattern;
  *       every object regardless of version (the pre-v3 behavior).</li>
  * </ul>
  *
- * <p>An unreadable version in Auto mode is NOT guessed: the object gets no
- * benchmark with the profile name
- * {@code "no benchmark for <product> (version unreadable)"}. Scoring it
- * against some default SCG would put a confident number on an object the
- * adapter could not place.
+ * <p>An unreadable version in Auto mode is NOT guessed and is NOT "no
+ * benchmark" (build 58, review B2): the selection is
+ * {@link Selection#versionUnreadable()}, which the caller treats as an
+ * unreadable object (non-compliant, no alert cleanup), or resolves to the
+ * benchmark the object had last cycle (see
+ * {@link ComplianceDecisions#decide}). "No benchmark" is reserved for a
+ * readable version with no bundled SCG.
  *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
@@ -42,6 +44,12 @@ public final class BenchmarkSelector {
 
 	/** Rollup benchmark bucket for objects with no applicable SCG. */
 	public static final String BUCKET_NONE = "none";
+
+	/**
+	 * Rollup benchmark bucket for objects whose governing version could not
+	 * be read and that had no benchmark to fall back on (build 58).
+	 */
+	public static final String BUCKET_UNKNOWN = "unknown";
 
 	/** Object kinds, as used in the rollup keys. */
 	public enum Kind {
@@ -117,8 +125,8 @@ public final class BenchmarkSelector {
 		}
 		String mm = majorMinor(version);
 		if (mm == null) {
-			return Selection.none("no benchmark for " + kind.product
-					+ " (version unreadable)");
+			return Selection.unreadable("benchmark unknown: " + kind.product
+					+ " version unreadable");
 		}
 		BenchmarkProfile p = byScg.get(mm);
 		if (p == null) {
@@ -207,24 +215,36 @@ public final class BenchmarkSelector {
 		public final BenchmarkProfile profile;   // null when no benchmark
 		public final String profileName;         // pushed as profile_name
 		public final String bucket;              // rollup benchmark bucket
+		private final boolean unreadableVersion;
 
 		private Selection(BenchmarkProfile profile, String profileName,
-				String bucket) {
+				String bucket, boolean unreadableVersion) {
 			this.profile = profile;
 			this.profileName = profileName;
 			this.bucket = bucket;
+			this.unreadableVersion = unreadableVersion;
 		}
 
 		static Selection of(BenchmarkProfile p) {
-			return new Selection(p, p.name, bucketOf(p.name));
+			return new Selection(p, p.name, bucketOf(p.name), false);
 		}
 
 		static Selection none(String label) {
-			return new Selection(null, label, BUCKET_NONE);
+			return new Selection(null, label, BUCKET_NONE, false);
 		}
 
+		static Selection unreadable(String label) {
+			return new Selection(null, label, BUCKET_UNKNOWN, true);
+		}
+
+		/** A READABLE version with no bundled SCG. */
 		public boolean noBenchmark() {
-			return profile == null;
+			return profile == null && !unreadableVersion;
+		}
+
+		/** The governing version could not be read (never a guess). */
+		public boolean versionUnreadable() {
+			return unreadableVersion;
 		}
 	}
 }

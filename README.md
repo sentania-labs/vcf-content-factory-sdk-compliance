@@ -36,9 +36,9 @@ Full docset (overview, installing & configuring, inventory tree): [`docs/README.
 
 **Existing instances keep their stored profile on upgrade.** VCF Ops
 stores the configured value on each adapter instance, and a pak upgrade
-does not rewrite it (the new default applies to new instances only). An
-instance configured `VMware_SCG_9.0` before the upgrade keeps scoring
-every object against SCG 9.0 until someone edits it to
+does not rewrite it (the new default applies to new instances only). The
+devel instances, for example, are stored as fixed `VMware_SCG_9.1` and keep
+scoring every object against SCG 9.1 until someone edits them to
 `Auto (by version)`. An instance with no stored value keeps the pre-v3
 fallback, SCG 8.0.
 
@@ -47,10 +47,15 @@ fallback, SCG 8.0.
 - **Auto (by version):** hosts by their ESXi version, VMs by their host's
   ESXi version, and vCenter, clusters, distributed switches and portgroups
   by the vCenter version (a distributed switch's own version is not used).
-  `major.minor` picks SCG 6.7, 7.0, 8.0, 9.0 or 9.1 (8.0 U3 is 8.0). Any
-  other version, or a version the adapter could not read, gets no
-  benchmark: `profile_name` = `no benchmark for ESXi 10.0` (or
-  `... (version unreadable)`), `no_benchmark` = 1, and no score.
+  `major.minor` picks SCG 6.7, 7.0, 8.0, 9.0 or 9.1 (8.0 U3 is 8.0). A
+  readable version with no bundled SCG gets no benchmark:
+  `profile_name` = `no benchmark for ESXi 10.0`, `no_benchmark` = 1,
+  counters zeroed, no score.
+- **Version the adapter could not read:** never a guess and never "no
+  benchmark". The object is scored against the SCG it had last cycle; with
+  no previous SCG it is reported as unreadable (`profile_name` =
+  `benchmark unknown: ESXi version unreadable`, `non_compliant` = 1, not
+  scored).
 - **Fixed profile:** that SCG for every object regardless of version.
 - **Custom:** a canonical-schema CSV on the collector, for every object.
 
@@ -90,9 +95,9 @@ Per object:
 ```
 VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."
 VCF-CF Compliance|score              0-100%, only when at least one control was scored
-VCF-CF Compliance|pass_count         only when scored
-VCF-CF Compliance|fail_count         only when scored
-VCF-CF Compliance|total_count
+VCF-CF Compliance|pass_count         0 when nothing was scored
+VCF-CF Compliance|fail_count         0 when nothing was scored
+VCF-CF Compliance|total_count        0 when nothing was scored (no score pushed)
 VCF-CF Compliance|unreadable_count
 VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
 VCF-CF Compliance|no_benchmark       1 when the version has no SCG
@@ -108,8 +113,14 @@ VCF-CF Compliance|Rollup|<K>|score_sum
 VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
 VCF-CF Compliance|Rollup|Host|scored_stale     hosts scored from their last-known score
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
-                                               SCG_9.0, SCG_9.1, none (+ Custom)
+                                               SCG_9.0, SCG_9.1, none, unknown
+                                               (+ Custom)
 ```
+
+`score` and `avg_score` are never pushed as a stand-in: when nothing was
+scored they are simply not pushed, and VCF Ops keeps showing the last value
+it had. Read them together with `total_count` / `no_benchmark` (per object)
+and `scored` (per vCenter, pushed every cycle, 0 when nothing was scored).
 
 The adapter's own Compliance World carries only
 `Summary|last_scan_timestamp`: it is one object shared by every adapter

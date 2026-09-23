@@ -28,8 +28,8 @@ import java.util.Map;
  * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
  * VMWARE kinds resolve by {@code VMEntityName} (name) +
  * {@code VMEntityObjectID} (moid); the non-vim25 {@code VMwareAdapter Instance}
- * resolves by {@code VCURL} (vCenter FQDN) and {@code VMEntityVCID} (vCenter
- * Instance UUID), with a display-name and singleton fallback. moid is tried
+ * resolves by {@code VMEntityVCID} (vCenter Instance UUID), or an exact
+ * {@code VCURL} (vCenter FQDN) only when the UUID is unreadable. moid is tried
  * first (most authoritative), then exact name, then dot-prefix fuzzy match
  * (FQDN/shortname tolerance).
  *
@@ -292,37 +292,34 @@ public final class ComplianceStitcher {
 	}
 
 	/**
-	 * Resolve the {@code VMwareAdapter Instance} resource by vCenter Instance
-	 * UUID (most authoritative — survives DNS/hostname renames) against
-	 * {@code VMEntityVCID}, then by FQDN against {@code VCURL} (exact then
-	 * dot-prefix fuzzy), then display-name match, then singleton fallback.
+	 * Resolve the {@code VMwareAdapter Instance} resource for this instance's
+	 * vCenter. Build 58 (review B1): the decision is
+	 * {@link ComplianceDecisions#matchVCenter}. A known vCenter Instance UUID
+	 * resolves ONLY through {@code VMEntityVCID}; an unreadable UUID falls
+	 * back to an exact {@code VCURL} match only. The pre-58 prefix,
+	 * display-name and single-vCenter fallbacks are gone: each could push
+	 * this vCenter's compliance data and rollup onto another vCenter's
+	 * object. Null means "do not push" and is logged.
 	 */
 	public HostEntry matchVCenterAdapterInstance(String hostname,
 			String vcInstanceUuid) {
-		if (vcInstanceUuid != null && !vcInstanceUuid.isEmpty()) {
-			HostEntry m = vcByVcUuid.get(vcInstanceUuid);
-			if (m != null) return m;
-		}
-
-		if (hostname != null && !hostname.isEmpty()) {
-			HostEntry m = vcByHost.get(hostname);
-			if (m != null) return m;
-
-			for (Map.Entry<String, HostEntry> e : vcByHost.entrySet()) {
-				String registered = e.getKey();
-				if (registered.equalsIgnoreCase(hostname)) return e.getValue();
-				if (registered.startsWith(hostname + ".")
-						|| hostname.startsWith(registered + ".")) {
-					return e.getValue();
-				}
+		HostEntry m = ComplianceDecisions.matchVCenter(vcInstanceUuid,
+				vcByVcUuid, vcByHost, hostname);
+		if (m == null) {
+			if (vcInstanceUuid != null && !vcInstanceUuid.isEmpty()) {
+				logger.warn("ComplianceStitcher: no VMwareAdapter Instance "
+						+ "carries VMEntityVCID=" + vcInstanceUuid + " (vCenter "
+						+ hostname + "); not pushing vCenter data. Is this "
+						+ "vCenter monitored by the VMWARE adapter in this VCF "
+						+ "Ops?");
+			} else {
+				logger.warn("ComplianceStitcher: vCenter instance UUID "
+						+ "unreadable and no VMwareAdapter Instance has "
+						+ "VCURL exactly '" + hostname + "'; not pushing "
+						+ "vCenter data");
 			}
-
-			HostEntry n = matchResource("VMwareAdapter Instance",
-					hostname, null);
-			if (n != null) return n;
 		}
-
-		return singletonOfKind("VMwareAdapter Instance");
+		return m;
 	}
 
 	public HostEntry matchDvs(String name, String moid) {
@@ -335,18 +332,6 @@ public final class ComplianceStitcher {
 
 	public HostEntry matchCluster(String name, String moid) {
 		return matchResource("ClusterComputeResource", name, moid);
-	}
-
-	/**
-	 * Returns the single resource of a given kind when there is exactly one
-	 * in inventory; null when ambiguous (&gt;1) or missing (0).
-	 */
-	public HostEntry singletonOfKind(String resourceKind) {
-		Map<String, HostEntry> byName = resourcesByName.get(resourceKind);
-		if (byName == null || byName.size() != 1) {
-			return null;
-		}
-		return byName.values().iterator().next();
 	}
 
 	/**

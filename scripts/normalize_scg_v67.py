@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Normalize the VMware vSphere SCG 6.7 source CSV to the canonical schema.
 
-Usage (run from the factory checkout the adapter repo is cloned into,
-AFTER profiles/canonical/scg_7.0.csv has been generated, because the
-priority cross-check reads it):
+Usage (run from the factory checkout the adapter repo is cloned into).
+Prerequisites: the priority cross-check (_check_priorities) reads every
+canonical profile named as a priority source in ID_MAP from the OUTPUT
+file's directory. Today that is scg_7.0.csv AND scg_9.1.csv, so both must
+already exist there (generate 7.0 and 9.1 first; regenerating into a
+scratch directory means copying them in). A new source version in ID_MAP
+adds to this list.
   python3 scripts/normalize_scg_v67.py \
       profiles/vmware_scg_6.7.csv profiles/canonical/scg_6.7.csv
 

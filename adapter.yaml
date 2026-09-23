@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 57
+build_number: 58
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -21,5 +21,9 @@ released: false
 bundled_content:
   views:
     - views/compliance-host-overview.yaml
-  dashboards:
-    - dashboards/compliance-overview.yaml
+  # Build 58 (review B3): the Compliance Fleet Overview dashboard
+  # (dashboards/compliance-overview.yaml) is no longer bundled. It reads the
+  # ComplianceWorld Summary metrics retired in build 57 and would show frozen
+  # build-56 values as current. The file stays until the v3 content round
+  # replaces it with the Environment Overview and bundles that instead.
+  dashboards: []
