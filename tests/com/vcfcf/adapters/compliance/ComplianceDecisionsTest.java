@@ -194,6 +194,27 @@ public final class ComplianceDecisionsTest {
 					"old 0 for " + id + " flips to -1");
 		}
 
+		// Build 72: vds.network-reset-port (moved to the portgroup) stays a
+		// vDS cleanup candidate, so any lingering 0 on a switch is retired.
+		T.check(!ProfileSetTest.find(all.get("VMware_SCG_9.0").controls,
+				"dvpg.network-reset-port").isDvsControl(), "moved off vDS");
+		T.check(dvsCand.contains("vds.network-reset-port"),
+				"retired vds.network-reset-port is a vDS cleanup candidate");
+		Map<String, Double> oldReset = new HashMap<>();
+		oldReset.put("vds.network-reset-port", 0.0);
+		T.eq(java.util.Collections.singleton("vds.network-reset-port"),
+				ComplianceDecisions.staleZeroControls(dvsCand, oldReset),
+				"old reset-port 0 on a vDS flips to -1");
+		Map<String, Double> unread = new HashMap<>();
+		unread.put("vds.network-reset-port", -1.0);
+		T.check(ComplianceDecisions.staleZeroControls(dvsCand, unread).isEmpty(),
+				"the -1 builds 57-71 actually pushed is left alone");
+		Set<String> pgCand = ComplianceDecisions.candidateControlIds(
+				BenchmarkSelector.Kind.PORTGROUP, all.get("VMware_SCG_9.0"),
+				all.values());
+		T.check(!pgCand.contains("dvpg.network-reset-port"),
+				"scored on the portgroup under 9.0: pushed live, not cleaned");
+
 		// ---- benchmark memory (B2, N3): only restart / edit wipe it
 		LastBenchmarkMemory mem = new LastBenchmarkMemory();
 		String key = LastBenchmarkMemory.key(HOST, "host-1");

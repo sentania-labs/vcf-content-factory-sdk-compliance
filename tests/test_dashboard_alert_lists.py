@@ -11,12 +11,13 @@ dashboard's alert_definitions list.
 Expected per dashboard (Ops resource kinds of the generated alerts), each
 set being the per-control alerts of those kinds PLUS the build-63
 "Compliance data not collected" alert of each of those kinds:
-  compliance-environment-overview.yaml  all kinds: 138 + 6 = 144
+  compliance-environment-overview.yaml  all kinds: 137 + 6 = 143
   compliance-esxi-hosts.yaml            HostSystem: 86 + 1 = 87
   compliance-vms.yaml                   VirtualMachine: 23 + 1 = 24
   compliance-vcenter-networking.yaml    vCenter, cluster, vDS, portgroup:
-                                        29 + 4 = 33
-(build 70: the 6 standard-switch vDS controls are no longer alerted)
+                                        28 + 4 = 32
+(build 70: the 6 standard-switch vDS controls are no longer alerted;
+build 72: vds.network-reset-port folded into dvpg.network-reset-port)
 
 Standard library only (the hosted PR workflow installs nothing), so the
 alert_definitions lists are read with a small line parser, not PyYAML.
@@ -119,11 +120,11 @@ class DashboardAlertListTest(unittest.TestCase):
     def test_expected_counts(self):
         # Build 70: 138 per-control (6 standard-switch vDS controls
         # removed) plus the build-63 collection alert per kind.
-        self.assertEqual(len(expected_ids(None)), 144)
+        self.assertEqual(len(expected_ids(None)), 143)
         self.assertEqual(len(expected_ids({"HostSystem"})), 87)
         self.assertEqual(len(expected_ids({"VirtualMachine"})), 24)
         self.assertEqual(len(expected_ids(
-            EXPECTED_KINDS["compliance-vcenter-networking.yaml"])), 33)
+            EXPECTED_KINDS["compliance-vcenter-networking.yaml"])), 32)
 
     def test_parser_and_diff_catch_drift(self):
         # The checker itself must fail on each kind of drift.

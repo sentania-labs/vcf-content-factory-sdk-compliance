@@ -76,6 +76,11 @@ drops to informational or scores against the wrong literal):
    instead of evaluating. Corrected here. (Build 57 also lists the
    control for manual review because its expected value is prose, so
    the fix matters once site overrides exist.)
+8. **Reset-port on the portgroup (adapter build 72).**
+   `vds.network-reset-port` moves to DistributedVirtualPortgroup as
+   `dvpg.network-reset-port` (its read is a portgroup-policy field; a
+   distributed switch always read it as unreadable). Shared with the 8.0
+   and 9.0 drivers: scripts/_adapter_deltas.py.
 """
 
 from __future__ import annotations
@@ -216,6 +221,10 @@ def main(argv: list) -> int:
         if (r["control_id"] == "esx.etc-issue"
                 and r["parameter"] == "Config.Etc.Issue"):
             r["parameter"] = "Config.Etc.issue"
+    # Delta 8: reset-port on the portgroup (scripts/_adapter_deltas.py).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _adapter_deltas as deltas
+    deltas.reset_port_to_portgroup(out_rows)
     base.write_canonical(argv[2], out_rows)
     return 0
 

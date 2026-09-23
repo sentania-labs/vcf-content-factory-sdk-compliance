@@ -104,6 +104,21 @@ dvportgroup / VDS guidelines), and the host-side VGT rows
 unscored. The distributed-switch equivalents
 (`dvpg.network-reject-*-dvportgroup`) remain scored.
 
+## Reset-port moved to the portgroup (build 72)
+
+`vds.network-reset-port` (SCG 7.0 / 8.0 / 9.0) read
+`config.policy.portConfigResetAtDisconnect` on each distributed switch, a
+field that exists only on distributed PORTGROUPS (DVPortgroupPolicy; the
+switch's `config.policy` is DVSPolicy). Every switch therefore read it as
+unreadable: permanently non-compliant with a "Compliance data not
+collected" alert that no configuration change could clear. Since build 72
+the 7.0 / 8.0 / 9.0 drivers map it to `dvpg.network-reset-port` on
+DistributedVirtualPortgroup, as SCG 9.1 already did (same requirement,
+read and expected value), so it is now actually scored on every
+portgroup. A ProfileSetTest guard checks every scored read path against
+the fields its object type really has; across all five profiles it found
+no other mismatch.
+
 ## SCG 6.7 and 7.0 profiles (added 2026-09-23, selectable since build 57)
 
 The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)
