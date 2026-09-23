@@ -82,7 +82,7 @@ effective count.
 
 The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)
 are selectable since build 57, as fixed profiles and through
-`Auto (by version)` (ESXi 6.7 / 7.0 hosts and their VMs, vCenter 6.7 /
+`Auto (by version)` (ESX 6.7 / 7.0 hosts and their VMs, vCenter 6.7 /
 7.0 objects). The same three buckets apply, and the sections
 further down that name a control_id apply to the 6.7 / 7.0 row carrying
 that id, because matched controls share the id, the read recipe, and
@@ -222,7 +222,7 @@ vCenter SOAP/REST endpoint. (14 controls in 8.0, 14 in 9.0.)
 `vm.tools-prevent-recustomization`, `vm.tools-remove-feature`,
 `vm.tools-upgrade`. (`vm.tools-updates` needs a lifecycle DB, also manual.)
 
-### ESXi SSH daemon (`sshd_config`) — the FIPS-enable flag only
+### ESX SSH daemon (`sshd_config`): the FIPS-enable flag only
 
 The SSH daemon's *config parameters* (ciphers, gateway-ports, idle
 timeouts, banner, rhosts, forwarding, tunnels, user-environment) are now
@@ -233,7 +233,7 @@ which has no list/get read recipe wired:
 
 `esx.ssh-fips` (`system security fips140 ssh get` — no recipe wired yet).
 
-### ESXi host — no PropertyCollector path / per-account / kernel boot
+### ESX host: no PropertyCollector path / per-account / kernel boot
 
 `esx.entropy` (kernel boot param),
 `esx.firewall-restrict-access` (per-ruleset IP allowlist — env-specific),
@@ -335,7 +335,7 @@ therefore stay **manual**, mirroring the vSAN SDK classpath gap above:
 `vc.account-lockout-reset`, `vc.password-history`,
 `vc.password-max-age` (9.0).
 
-> These are the vCenter-level SSO policy controls. The ESXi-host equivalents
+> These are the vCenter-level SSO policy controls. The ESX-host equivalents
 > (`esx.account-lockout`, `esx.account-password-history`,
 > `esx.account-lockout-duration`, `esx.account-lockout-max-attempts`,
 > `esx.password-max-age`, etc.) are `Security.*` advanced settings and ARE
@@ -382,7 +382,7 @@ Safe-by-construction: if a derived field/row name is wrong, the read
 returns `null` → the `UNREADABLE` sentinel (counted in `unreadable_count` and, since build 63, counted as failing in the score, raising the
 "Compliance data not collected" alert). A wrong field name can therefore
 produce a coverage gap that lowers the score, **never a false `pass`**. But until a live run confirms
-them, treat the coverage here as *claimed, not proven*. A live ESXi 8.0
+them, treat the coverage here as *claimed, not proven*. A live ESX 8.0
 run is exactly what promotes these to proven coverage.
 
 ### List-command row selectors (highest uncertainty)
@@ -488,7 +488,7 @@ imminent live 8.0 run is exactly what promotes these to proven coverage.
 >
 > Caveat compounding: the 8.0 SSH cluster has never been directly
 > exercised. As of 2026-09-23 the devel instances are configured fixed
-> `VMware_SCG_9.1` and every devel host runs ESXi 9.1.1, so no 8.0 run
+> `VMware_SCG_9.1` and every devel host runs ESX 9.1.1, so no 8.0 run
 > exists yet; a live 8.0 host (fixed `VMware_SCG_8.0`, or Auto against an
 > 8.0 host) is the confirmation.
 

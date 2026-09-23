@@ -1,5 +1,5 @@
 id: e2e42416-53d7-49fb-85d6-68bd9323aae8
-name: "[VCF Content Factory] Compliance ESXi Hosts"
+name: "[VCF Content Factory] Compliance ESX Hosts"
 description: >
   Pick a scope (whole environment, one vCenter, or one cluster), see
   every host in it worst first with its score and applied SCG, then
@@ -14,7 +14,7 @@ hidden: true
 
 widgets:
 
-  # ── W1: Scope picker (World / vCenter / Cluster) ─────────────────────
+  # ── W1: Scope picker (World / vCenter) ───────────────────────────────
 
   - id: scope_picker
     type: ResourceList
@@ -26,8 +26,6 @@ widgets:
         resource_kind: "vSphere World"
       - adapter_kind: VMWARE
         resource_kind: "VMwareAdapter Instance"
-      - adapter_kind: VMWARE
-        resource_kind: ClusterComputeResource
 
   # ── W2: Host Compliance list, driven by W1, sorted worst-first ──────
 
@@ -201,7 +199,7 @@ widgets:
           resource_kind: HostSystem
           metric_key: "summary|version"
           metric_name: "Summary|Version"
-          label: "ESXi Version"
+          label: "ESX Version"
           is_string_metric: true
         - adapter_kind: VMWARE
           resource_kind: HostSystem

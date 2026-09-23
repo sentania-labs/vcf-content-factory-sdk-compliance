@@ -104,7 +104,7 @@ COLLECTION_FAILED_NAMEKEY_BASE = 2020   # 2020 + i: collection_failed symptoms
 # Per-kind "Compliance data not collected" alerts (build 63).
 # canonical resource_kind -> (id slug, label used in names)
 COLLECTION_KINDS = [
-    ("HostSystem", "host", "ESXi host"),
+    ("HostSystem", "host", "ESX host"),
     ("VirtualMachine", "vm", "VM"),
     ("VCenterAdapterInstance", "vcenter", "vCenter"),
     ("ClusterComputeResource", "cluster", "cluster"),
@@ -116,7 +116,7 @@ COLLECTION_REC_TEXT = (
     "The compliance adapter could not read one or more security settings on "
     "this object, so they were not collected and count as failing in its "
     "compliance score (they are not reported as violations, and raise no "
-    "per-control alert). Common causes: the object or its ESXi host is "
+    "per-control alert). Common causes: the object or its ESX host is "
     "disconnected or not responding in vCenter; the adapter's vCenter "
     "account lacks read permission for the setting; or the read method is "
     "not supported on this product version. If the object's product "

@@ -38,7 +38,7 @@ public final class ComplianceDecisionsTest {
 		T.eq(ComplianceDecisions.Outcome.VERSION_UNREADABLE, d.outcome,
 				"unreadable, no history");
 		d = ComplianceDecisions.decide(auto, HOST, "garbage",
-				"no benchmark for ESXi 10.0", all);
+				"no benchmark for ESX 10.0", all);
 		T.eq(ComplianceDecisions.Outcome.VERSION_UNREADABLE, d.outcome,
 				"a no-benchmark label is not a reusable benchmark");
 

@@ -485,7 +485,7 @@ public final class VSphereClient {
 	}
 
 	/**
-	 * v3: a host's ESXi product version (e.g. {@code "8.0.3"} for 8.0 U3).
+	 * v3: a host's ESX product version (e.g. {@code "8.0.3"} for 8.0 U3).
 	 * Reads {@code summary.config.product.version} first (vCenter keeps it
 	 * for disconnected hosts too), then {@code config.product.version}.
 	 * Null when neither resolves; the caller treats null as "version

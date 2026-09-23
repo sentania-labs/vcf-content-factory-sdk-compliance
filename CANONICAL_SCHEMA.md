@@ -232,7 +232,7 @@ informational-only.
 
 | Value | Meaning | Evaluable in adapter? |
 |---|---|---|
-| `advanced_setting` | ESXi Advanced System Setting (e.g. `Security.AccountUnlockTime`). Read via vSphere SOAP `OptionManager.QueryOptions`. | yes |
+| `advanced_setting` | ESX Advanced System Setting (e.g. `Security.AccountUnlockTime`). Read via vSphere SOAP `OptionManager.QueryOptions`. | yes |
 | `vim_property` | Vim object property (e.g. `config.defaultPortConfig.securityPolicy.forgedTransmits`). Read data-driven via the `read_recipe` column (vSphere SOAP `PropertyCollector` + reflective getter walk). | yes, **iff** `read_recipe` is non-empty (else informational) |
 | `esxcli` | esxcli command result field (e.g. `system syslog config get` -> `LocalLogOutputIsPersistent`). Read data-driven via the `read_recipe` column with the `esxcli:<namespace.command>:<ResultField>` style — `EsxcliSoapClient` issues `RetrieveManagedMethodExecuter` + `ExecuteSoap` over the **existing vCenter session** (no host credentials, no per-host fan-out; build 36). | yes, **iff** `read_recipe` is non-empty (else informational) — was "no" before build 36 |
 | `vami_api` | vCenter Appliance Management (VAMI) REST field (e.g. `/api/appliance/access/ssh` -> `enabled`). `VCenterAdapterInstance`-only. Read data-driven via the `read_recipe` column with the `vami:<appliance-path>:<json-field>` style — `VamiApiClient` opens its OWN REST session (`POST /api/session`, HTTP Basic auth, `vmware-api-session-id` header) distinct from the vim25 SOAP cookie (build 41). | yes, **iff** `read_recipe` is non-empty (else informational) |

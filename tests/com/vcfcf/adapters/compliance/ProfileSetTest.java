@@ -70,7 +70,7 @@ public final class ProfileSetTest {
 				all.get("VMware_SCG_8.0").controls, "vm.virtual-hardware")
 				.expectedValue), "8.0 vmx is exact");
 
-		// 7.0 esx.etc-issue carries the real ESXi option key case.
+		// 7.0 esx.etc-issue carries the real ESX option key case.
 		T.eq("Config.Etc.issue", find(all.get("VMware_SCG_7.0").controls,
 				"esx.etc-issue").parameter, "7.0 etc-issue key case");
 

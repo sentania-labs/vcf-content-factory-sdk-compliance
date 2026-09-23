@@ -17,7 +17,7 @@ public final class ComplianceRollupTest {
 
 		ComplianceRollup r = new ComplianceRollup();
 		// Hosts: 90 (fails), 100 (clean), all-unreadable (0), partially
-		// unreadable (80), and one no-benchmark (ESXi 10.0).
+		// unreadable (80), and one no-benchmark (ESX 10.0).
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 10, 1, 0,
 				ControlEvaluator.score(9, 1, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0,

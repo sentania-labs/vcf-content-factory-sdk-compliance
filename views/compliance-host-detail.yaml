@@ -3,7 +3,7 @@ name: "[VCF Content Factory] Compliance Host Detail"
 description: >
   Per-host compliance scores, control counts and applied SCG benchmark
   from the VCF-CF Compliance adapter (stitched onto VMWARE HostSystem).
-  Feeds ESXi Hosts W2 (Host Compliance). Replaces Compliance Host
+  Feeds ESX Hosts W2 (Host Compliance). Replaces Compliance Host
   Overview. Score columns list every row, unfiltered: VCF Ops keeps a
   metric's last value, so a host that moved to a version with no SCG
   can show a retained score, identified by the No SCG flag column
@@ -26,7 +26,7 @@ columns:
     is_property: true
     is_string_attribute: true
   - attribute: summary|version
-    display_name: "ESXi Version"
+    display_name: "ESX Version"
     is_property: true
     is_string_attribute: true
   - attribute: VCF-CF Compliance|profile_name

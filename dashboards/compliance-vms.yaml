@@ -1,7 +1,7 @@
 id: 692972c7-29f3-4d00-a069-331d82a457bd
 name: "[VCF Content Factory] Compliance VMs"
 description: >
-  The ESXi Hosts pattern applied to VMs, sized for thousands of
+  The ESX Hosts pattern applied to VMs, sized for thousands of
   objects: pick a scope, see the VMs in it worst first, select one to
   see its failing controls with runbooks. No heatmap: at VM counts it
   stops being readable, the sorted list and its totals row carry the
@@ -13,7 +13,7 @@ hidden: true
 
 widgets:
 
-  # ── W1: Scope picker (World / vCenter / Cluster / Host) ─────────────
+  # ── W1: Scope picker (World / vCenter) ───────────────────────────────
 
   - id: scope_picker
     type: ResourceList
@@ -25,10 +25,6 @@ widgets:
         resource_kind: "vSphere World"
       - adapter_kind: VMWARE
         resource_kind: "VMwareAdapter Instance"
-      - adapter_kind: VMWARE
-        resource_kind: ClusterComputeResource
-      - adapter_kind: VMWARE
-        resource_kind: HostSystem
 
   # ── W2: VM Compliance list, driven by W1, sorted worst-first ────────
 
