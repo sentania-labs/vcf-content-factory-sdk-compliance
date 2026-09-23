@@ -53,6 +53,201 @@ Source of record: `context/investigations/scg89-audit-coverage-recon.md`.
 
 ---
 
+## Manual review: prose expected values (build 57)
+
+Some controls the adapter CAN read carry prose instead of a value as the
+SCG expected result ("Site-Specific Log Server", "Consult your
+organization's legal advisors for text ..."). No real setting can equal
+that text, so scoring them failed every object (false fails, never false
+passes). Since build 57 they are listed in `profiles/manual_review.csv`
+and load as `manual_audit`: not scored, no per-control keys, no alert.
+The overlay is per profile (a control is demoted only in the profiles
+that list it) and applies to bundled profiles only, never to a Custom
+profile. Site values for these controls are the job of the planned
+per-connection control overrides.
+
+| Profile | control_ids |
+|---|---|
+| 6.7 | `esx.logs-remote`, `esx.lockdown-dcui-access`, `esx.account-password-policies`, `vm.transparentpagesharing-inter-vm-enabled` |
+| 7.0 | `esx.annotations-welcomemessage`, `esx.etc-issue`, `esx.logs-remote`, `vc.etc-issue` |
+| 8.0 | `esx.annotations-welcomemessage`, `esx.etc-issue`, `esx.logs-remote`, `vc.etc-issue` |
+| 9.0 | `esx.etc-issue`, `esx.log-forwarding`, `esx.login-message`, `vc.etc-issue`, `esx.ad-admin-group-name` |
+| 9.1 | `esx.ad-admin-group-name`, `esx.etc-issue`, `esx.log-forwarding`, `esx.login-message`, `vc.etc-issue` |
+
+The coverage tables below count these controls as scored (they are
+scored rows in the canonical CSV); subtract the overlay rows for the
+effective count.
+
+## Standard-switch controls read from the wrong object (build 70)
+
+The SCG standard-switch security policy controls (reject forged
+transmits, MAC address changes and promiscuous mode) apply to each ESX
+host's standard vSwitches and their port groups. The normalizers map them
+to `DistributedVirtualSwitch` (a Codex review finding on PR #12), so
+builds 57 to 69 read `config.defaultPortConfig` from each distributed
+switch and could score a PASS while the hosts' standard switches stayed
+insecure. Since build 70 they are listed in `profiles/manual_review.csv`
+and never scored, in every profile, until a host-side standard-switch
+reader exists (host `config.network.vswitch[].spec.policy.security` and
+`config.network.portgroup[].spec.policy.security`, not yet built):
+
+| Profile | control_ids |
+|---|---|
+| 6.7, 7.0, 8.0 | `vds.network-reject-forged-transmit-standardswitch`, `vds.network-reject-mac-changes-standardswitch`, `vds.network-reject-promiscuous-mode-standardswitch` |
+| 9.0, 9.1 | `vds.network-standard-reject-forged-transmit`, `vds.network-standard-reject-mac-changes`, `vds.network-standard-reject-promiscuous-mode` |
+
+A review of every other `vds.*` / `dvpg.*` row in all five profiles found
+no other host-scoped control scored on a distributed object: the
+remaining scored rows come from `vcenter-*` sources (or SCG 6.7
+dvportgroup / VDS guidelines), and the host-side VGT rows
+(`dvpg.network-vgt` from `esxi-*` / `esx-*` sources) were already
+unscored. The distributed-switch equivalents
+(`dvpg.network-reject-*-dvportgroup`) remain scored.
+
+## Build 74 read-path fixes
+
+Source: knowledge/context/api-surface/compliance_config_encryption_and_vsan_checksum_reads.md
+and compliance_vami_appliance_api_read_path.md (vendor spec
+reference/docs/vcenter-9.1.1-appliance-api.json).
+
+- **Host configuration encryption** (`esx.tpm-configuration`,
+  `esx.secureboot-enforcement`, `esx.tpm-trusted-binaries`; 7.0 to 9.1):
+  the old recipes read `config.encryptionState.*`, which is not a vim25
+  field, so every host was UNREADABLE. They now read the SCG's own audit
+  command, `esxcli system settings encryption get` (fields `Mode`,
+  `RequireSecureBoot`, `RequireExecutablesOnlyFromInstalledVIBs`, taken
+  from the vendor SCG 9.1 audit script and **not yet seen on the wire**;
+  the reader matches field names case-insensitively and logs once if a
+  field is missing). A host without TPM now reads `Mode: NONE`, an honest
+  FAIL instead of UNREADABLE.
+- **vCenter appliance (VAMI) controls**: TLS now uses the platform trust
+  store (it used the JDK default, so any vCenter with a lab or enterprise
+  CA failed); `vc.ssh` / `vc.vami-access-ssh` read the bare boolean body
+  with the new `(value)` token; `vc.vami-password-max-age` /
+  `vc.vami-administration-password-expiration` read
+  `local-accounts/root:max_days_between_password_change` (the old
+  `local-accounts/policy` path does not exist). The vendor spec says "If
+  unset, password never expires"; since build 76 the recipe's
+  `?absent=-1` option reads an absent field in a successful response as
+  -1 (the SCG's "never expires" value), so a never-expiring root passes.
+  An HTTP failure (for example 403 before the SSO grant) stays UNREADABLE.
+  The real response shape is still to be confirmed on the wire. `vc.fips-enable` (8.0, 9.0) reads
+  `system/global-fips` (not `system/security/global-fips`); the vendor
+  spec marks its `enabled` field deprecated as of vSphere API 9.0.0.0.
+  SCG 9.1 `vc.tls-ciphers` now expects `NIST_2024_TLS_13_ONLY`, the
+  vendor 9.1 baseline (source row `vcenter-9.tls-ciphers`); 8.0 and 9.0
+  keep `NIST_2024`.
+- **Appliance authorization (operator step):** reading the appliance API
+  needs the collection account in the vsphere.local SSO group
+  `SystemConfiguration.Administrators`, which also grants appliance write
+  access (there is no read-only appliance role). The HOLD setting "Read
+  vCenter appliance settings" (default off) makes these controls manual
+  review until an operator decides to grant it.
+
+## Reset-port moved to the portgroup (build 72)
+
+`vds.network-reset-port` (SCG 7.0 / 8.0 / 9.0) read
+`config.policy.portConfigResetAtDisconnect` on each distributed switch, a
+field that exists only on distributed PORTGROUPS (DVPortgroupPolicy; the
+switch's `config.policy` is DVSPolicy). Every switch therefore read it as
+unreadable: permanently non-compliant with a "Compliance data not
+collected" alert that no configuration change could clear. Since build 72
+the 7.0 / 8.0 / 9.0 drivers map it to `dvpg.network-reset-port` on
+DistributedVirtualPortgroup, as SCG 9.1 already did (same requirement,
+read and expected value), so it is now actually scored on every
+portgroup. A ProfileSetTest guard checks every scored read path against
+the fields its object type really has; across all five profiles it found
+no other mismatch.
+
+## SCG 6.7 and 7.0 profiles (added 2026-09-23, selectable since build 57)
+
+The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)
+are selectable since build 57, as fixed profiles and through
+`Auto (by version)` (ESX 6.7 / 7.0 hosts and their VMs, vCenter 6.7 /
+7.0 objects). The same three buckets apply, and the sections
+further down that name a control_id apply to the 6.7 / 7.0 row carrying
+that id, because matched controls share the id, the read recipe, and
+therefore the coverage of their 8.0 row.
+
+**Coverage at a glance** (scored = evaluable advanced_setting, or a
+vim_property / esxcli / vami_api row with a read recipe):
+
+| Profile | Controls | Scored | Unscored (informational) |
+|---|---|---|---|
+| SCG 7.0 | 122 | 82 | 40 (30 powercli_only, 7 manual_audit, 3 esxcli with no recipe) |
+| SCG 6.7 | 51 | 36 | 15 (13 powercli_only, 1 manual_audit, 1 esxcli with no recipe) |
+
+**SCG 7.0 unscored controls.** Every 7.0 control_id also exists in 8.0
+and is unscored there for the same reason. (`vm.virtual-hardware` was
+the one 7.0-only exception until build 57: its baseline
+`vmx-13 or newer` is now compared as a minimum and the row is scored.)
+
+Other 7.0 unscored ids (same bucket as their 8.0 entries below):
+`dvpg.network-vgt` (ESX standard-switch row only; the distributed-switch
+row is scored), `esx.ad-auth-proxy`, `esx.firewall-restrict-access`,
+`esx.iscsi-mutual-chap`, `esx.lockdown-exception-users`,
+`esx.secureboot`, `esx.supported`, `esx.updates`,
+`esx.vib-acceptance-level-supported`, `esx.vmk-management`,
+`vc.administration-client-session-timeout`,
+`vc.administration-failed-login-interval`,
+`vc.administration-login-message-details`,
+`vc.administration-login-message-enable`,
+`vc.administration-login-message-text`, `vc.administration-sso-groups`,
+`vc.administration-sso-lockout-policy-max-attempts`,
+`vc.administration-sso-lockout-policy-unlock-time`,
+`vc.administration-sso-password-lifetime`,
+`vc.administration-sso-password-policy`,
+`vc.administration-sso-password-reuse`, `vc.events-database-retention`,
+`vc.supported`, `vc.vami-backup`, `vc.vami-updates`,
+`vm.remove-unnecessary-devices`, the 14 `vm.tools-*` controls.
+
+**SCG 6.7 unscored controls.**
+
+- Unmatched 6.7 controls (no newer control means the same thing, so
+  they keep 6.7-native ids and have no read recipe):
+  `esx.config-snmp` (6.7 passes SNMP that is off OR properly
+  configured), `esx.enable-ad-auth`, `esx.enable-strict-lockdown-mode`
+  (newer guides baseline normal lockdown), `vm.disable-independent-nonpersistent`,
+  `vm.disconnect-devices-floppy`, `vm.disconnect-devices-parallel`,
+  `vm.disconnect-devices-serial` (newer guides fold all three into
+  `vm.remove-unnecessary-devices`; kept separate here). All Cannot or
+  Haven't-yet; none is ever a pass.
+- `vm.dvfilter`: the 6.7 key is written as a pattern
+  (`ethernetX.filterX.name = filtername`), not a real key, so it is
+  manual_audit.
+- Matched, unscored for the same reason as their newer row:
+  `esx.ad-auth-proxy`, `esx.firewall-restrict-access`,
+  `esx.iscsi-mutual-chap`, `esx.lockdown-exception-users`,
+  `esx.updates`, `esx.vib-acceptance-level-supported`,
+  `vds.vds-health-check-disable`.
+- One unmatched 6.7 control IS scored: `vm.minimize-console-vnc-use`
+  reads the VM advanced setting `RemoteDisplay.vnc.enabled` (expected
+  FALSE). It has no newer counterpart, but the read is the ordinary VM
+  advanced-setting path.
+
+**Recipes inherited from the 8.0 lineage are not verified on 6.7 / 7.0
+hosts.** The vim25 paths, esxcli namespaces, service keys, and VAMI
+endpoints were wire-checked (where they were checked at all) against
+8.x / 9.x. On a 6.7 or 7.0 host or vCenter a path that does not exist
+reads as UNREADABLE, never a pass (for example the `/api/appliance/*` VAMI endpoints
+that older 7.0 vCenter builds serve under `/rest/`), so the risk is
+coverage, not correctness. Treat 6.7 / 7.0 coverage as claimed, not
+proven, until a live 6.7 / 7.0 run.
+
+**Known false fails carried into the new profiles (not fixed here).**
+Scored controls whose expected value is prose that no real value can
+equal: 7.0 `esx.annotations-welcomemessage`, `esx.logs-remote`,
+`vc.etc-issue` (the same rows as 8.0), 6.7 `esx.logs-remote`,
+`esx.lockdown-dcui-access`, `esx.account-password-policies`,
+`vm.transparentpagesharing-inter-vm-enabled`. A host that has the
+setting fails; a host without it skips. These are false fails, never
+false passes; scheduled for the engine change that makes the profiles
+selectable. (7.0 `esx.etc-issue` carries the key as `Config.Etc.Issue`;
+8.0 has `Config.Etc.issue` and the settings lookup is case-sensitive, so
+the 7.0 row is expected to skip rather than fail. Not live-verified.)
+
+---
+
 ## Partial-coverage controls (audited, but read the caveat)
 
 Several reclassified controls are audited with **less than full fidelity**.
@@ -62,7 +257,7 @@ also embedded in each control's description in the profile CSV.
 | control_id | What is checked | What is NOT checked |
 |---|---|---|
 | `dvpg.network-restrict-port-level-overrides` | `config.policy.securityPolicyOverrideAllowed` is disabled (1 of ~7 override flags) | block / teaming / vlan / shaping / vendorConfig / ipfix / trafficFilter per-port overrides |
-| `vm.virtual-hardware` | `config.version` equals the SCG baseline string exactly (`vmx-19` / `vmx-21`) | "version N **or newer**" — a higher-than-baseline VM reads as non-compliant |
+| `vm.virtual-hardware` (8.0, 9.0) | `config.version` equals the SCG baseline string exactly (`vmx-21` / `vmx-19`) | "version N **or newer**": a higher-than-baseline VM reads as non-compliant. (7.0 and 9.1 phrase the baseline as a floor, `vmx-13 or newer` / `vmx-17 or higher`, and since build 57 are compared as a minimum: `vmx-M` passes iff M >= N.) |
 | `esx.timekeeping-services` (8.0) | ntpd service is **running** (`service_state:ntpd:running`, build 38) | ntpd **start policy** = `on` (start-with-host); PTP as an alternative time source |
 | `esx.time` (9.0) | ntpd service is **running** — the NTP daemon-running half only (`service_state:ntpd:running`, build 38) | the NTP **source-list** half (`config.dateTimeInfo.ntpConfig.server` non-empty); ntpd start policy = `on`; PTP. This control row already carries the daemon-running recipe and a CSV row holds one recipe, so the source-list half **cannot** be added to this row — it stays documented-partial here, NOT separately scored. (Its distinct 8.0 sibling `esx.timekeeping-sources` IS fully audited via `(non-empty)`, build 39.) |
 | `esx.snmp` (9.0) | snmpd service is **not running** (`service_state:snmpd:running`, build 38) | per-version SNMP config (the title also names disabling SNMP v1/v2 specifically); the running-flag check enforces the broader "SNMP deactivated" intent |
@@ -107,7 +302,7 @@ vCenter SOAP/REST endpoint. (14 controls in 8.0, 14 in 9.0.)
 `vm.tools-prevent-recustomization`, `vm.tools-remove-feature`,
 `vm.tools-upgrade`. (`vm.tools-updates` needs a lifecycle DB, also manual.)
 
-### ESXi SSH daemon (`sshd_config`) — the FIPS-enable flag only
+### ESX SSH daemon (`sshd_config`): the FIPS-enable flag only
 
 The SSH daemon's *config parameters* (ciphers, gateway-ports, idle
 timeouts, banner, rhosts, forwarding, tunnels, user-environment) are now
@@ -118,7 +313,7 @@ which has no list/get read recipe wired:
 
 `esx.ssh-fips` (`system security fips140 ssh get` — no recipe wired yet).
 
-### ESXi host — no PropertyCollector path / per-account / kernel boot
+### ESX host: no PropertyCollector path / per-account / kernel boot
 
 `esx.entropy` (kernel boot param),
 `esx.firewall-restrict-access` (per-ruleset IP allowlist — env-specific),
@@ -165,9 +360,21 @@ decisions requiring operator judgment).
 The bulk of `ClusterComputeResource` controls live on the vSAN Management
 SDK (`com.vmware.vim.vsan.binding`), which is NOT on this adapter's
 classpath (per-pak classloader isolation; see
-`context/investigations/2026-05-29-vsan-management-sdk-gap.md`). Two vSAN
-controls ARE audited today via plain vim25 (`cluster.managed-disk-claim`,
-`cluster.object-checksum`). The rest cannot be read:
+`context/investigations/2026-05-29-vsan-management-sdk-gap.md`). One vSAN
+control is audited today via plain vim25 (`cluster.managed-disk-claim`),
+and only on clusters where vSAN is actually enabled (build 74: the gate
+reads `vsanConfigInfo.enabled`; before, vCenter 9.x's
+`vsanConfigInfo` element on every cluster made non-vSAN clusters score
+vSAN controls, a false pass on `cluster.managed-disk-claim`).
+`cluster.object-checksum` is manual review since build 74: its vim25
+field (`defaultConfig.checksumEnabled`) is not populated by vCenter 9.x,
+and the SCG audit point is a per-storage-policy SPBM attribute on vSAN
+OSA (always on for ESA), which needs an SPBM reader this adapter does not
+have. Note for whoever implements it: the canonical row's
+`expected_value=false` against a field named `checksumEnabled` is
+polarity-inverted (the SCG wants checksums ON; its "Disabled" refers to
+the "Disable object checksum" policy attribute being unset). The rest
+cannot be read:
 
 `cluster.encryption-rest` / `cluster.data-at-rest`,
 `cluster.encryption-transit-esa` / `-osa` / `cluster.data-in-transit`,
@@ -220,7 +427,7 @@ therefore stay **manual**, mirroring the vSAN SDK classpath gap above:
 `vc.account-lockout-reset`, `vc.password-history`,
 `vc.password-max-age` (9.0).
 
-> These are the vCenter-level SSO policy controls. The ESXi-host equivalents
+> These are the vCenter-level SSO policy controls. The ESX-host equivalents
 > (`esx.account-lockout`, `esx.account-password-history`,
 > `esx.account-lockout-duration`, `esx.account-lockout-max-attempts`,
 > `esx.password-max-age`, etc.) are `Security.*` advanced settings and ARE
@@ -264,10 +471,10 @@ field). Everything below reuses that reader but with field names that have
 not yet been confirmed against a live host.
 
 Safe-by-construction: if a derived field/row name is wrong, the read
-returns `null` → the `UNREADABLE` sentinel (counted in `unreadable_count`,
-excluded from every score). A wrong field name can therefore produce a
-coverage gap, **never a false `pass`**. But until a live run confirms
-them, treat the coverage here as *claimed, not proven*. A live ESXi 8.0
+returns `null` → the `UNREADABLE` sentinel (counted in `unreadable_count` and, since build 63, counted as failing in the score, raising the
+"Compliance data not collected" alert). A wrong field name can therefore
+produce a coverage gap that lowers the score, **never a false `pass`**. But until a live run confirms
+them, treat the coverage here as *claimed, not proven*. A live ESX 8.0
 run is exactly what promotes these to proven coverage.
 
 ### List-command row selectors (highest uncertainty)
@@ -311,7 +518,7 @@ These two controls are **scored** (non-empty `read_recipe`, `vim_property`
 kind) but the vim25 path or the runtime spec type was **derived from the
 API reference / documentation, not observed on a live object**. Safe-by-
 construction: a wrong path or an unrecognized spec type resolves to
-UNREADABLE (counted in `unreadable_count`, excluded from every score) —
+UNREADABLE (counted in `unreadable_count` and, since build 63, counted as failing in the score),
 **never** a false `pass`. A live 8.0 (and 9.0) DVS/DVPG run promotes these
 to proven coverage.
 
@@ -337,8 +544,8 @@ JSON field per endpoint.
 
 Safe-by-construction (the cardinal trap, restated for REST): any auth
 failure, non-200, 404, timeout, JSON parse error, **absent field**, or
-**empty list** folds to `UNREADABLE` (counted in `unreadable_count`,
-excluded from every score) — **never** a false `pass`. This matters most
+**empty list** folds to `UNREADABLE` (counted in `unreadable_count` and, since build 63, counted as failing in the score),
+**never** a false `pass`. This matters most
 for the "should be disabled" controls: a failed GET of `access/ssh` does
 **not** become "ssh disabled → compliant". A wrong documentation-derived
 field name therefore produces a coverage gap, never a false pass. The
@@ -372,7 +579,10 @@ imminent live 8.0 run is exactly what promotes these to proven coverage.
 > field names. Once confirmed, delete this section.
 >
 > Caveat compounding: the 8.0 SSH cluster has never been directly
-> exercised (devel runs 9.0). The upcoming 8.0 run is the confirmation.
+> exercised. As of 2026-09-23 the devel instances are configured fixed
+> `VMware_SCG_9.1` and every devel host runs ESX 9.1.1, so no 8.0 run
+> exists yet; a live 8.0 host (fixed `VMware_SCG_8.0`, or Auto against an
+> 8.0 host) is the confirmation.
 
 ---
 
@@ -465,7 +675,7 @@ the SSO admin SDK + WS-Trust client are absent from the classpath, so those
 | ~~`dvpg.network-vgt`~~ **WIRED — build 40** | `vlan_id_not:config.defaultPortConfig.vlan` is now scored; the `TrunkVlanSpec` assumption is unconfirmed — see "Wired — pending live field-name verification" above. |
 | ~~`vds.network-restrict-port-mirroring`~~ **WIRED — build 40** | `list_empty:config.vspanSession` is now scored; the path-vs-`config.mirrorPortConfigs` assumption is unconfirmed — see "Wired — pending live field-name verification" above. |
 | `esx.lockdown-exception-users` | `HostAccessManager.retrieveLockdownExceptions()` is a managed-object method call, not a property — needs an `access_manager` style. |
-| `esx.hardware-tpm` (9.0) | TPM physical presence is not in vim25; only TPM *in use* is inferable from `config.encryptionState.mode` (partial). |
+| `esx.hardware-tpm` (9.0) | TPM physical presence is not in vim25; only TPM *in use* is inferable (build 74: `esx.tpm-configuration` reads it through `esxcli system settings encryption get`, field `Mode`; vim25 `runtime.stateEncryption.protectionMode` is the equivalent). |
 | `vc.drs` (9.0) | `drsConfig.enabled` is readable, but the control wants DRS config *quality*, not just on/off (partial). |
 
 > **Total "Haven't yet": ~46 new-style + ~16 other-API + ~24 uncertain.**

@@ -44,9 +44,11 @@ import java.util.List;
  * <p><b>Correctness invariants preserved from v1 (golden comparison gate).</b>
  * Same property/stat keys, same value semantics, same MOID stitching identity
  * rules, and the cardinal "unreadable is NOT compliant" rule: a value the
- * adapter failed to read is never folded into a per-resource or fleet score —
- * it is surfaced as an explicit unreadable signal, and sentinel (zero-divisor)
- * scores are gated out of every average by the {@code totalCount > 0} guard.
+ * adapter failed to read never passes. Since build 63 (owner decision) it
+ * counts against the score like a failure (ControlEvaluator.score), is
+ * counted separately in unreadable_count, and raises the per-kind
+ * "Compliance data not collected" alert; the zero-divisor placeholder of an
+ * object with nothing attempted is never pushed or averaged.
  */
 public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
@@ -58,30 +60,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile SuiteApiStitcher suiteStitcher;
 	private volatile ComplianceStitcher stitcher;
 
-	// Fix #2 (Task #17): track the profile active in the PREVIOUS cycle so a
-	// profile switch can be detected and the stale-key warning emitted.
-	// In-memory only: a restart resets to null and we skip cleanup on the
-	// first post-restart cycle.
-	private volatile String previousProfileName;
+	// Build 59 (review N3): benchmark applied to each object last cycle,
+	// used only for the B2 "version unreadable" fallback. Emptied only by a
+	// collector restart or an instance edit. See LastBenchmarkMemory.
+	private final LastBenchmarkMemory memory = new LastBenchmarkMemory();
 
-	// Task #16 — last-known per-host compliance score, keyed by the stable host
-	// MOID (hostInfo.moid), NOT the display name (a host can be renamed). Scott's
-	// decision: the world avg_host_score should use a host's LAST-KNOWN score
-	// when the host is channel-unreadable THIS cycle, so an unreadable host does
-	// not silently shrink the denominator and flatter the average. A host with NO
-	// last-known score (never successfully read since this collector process
-	// started) stays excluded entirely.
-	//
-	// IN-MEMORY ONLY — survives across collect cycles within one collector
-	// process but does NOT survive a collector restart. COLLECTOR-RESTART CAVEAT:
-	// after a restart the cache is empty, so the first cycle(s) average only the
-	// hosts readable that cycle (readable-only), exactly as build 48 did, until
-	// every host has been read at least once and the cache re-warms. This is the
-	// honest degraded behavior — we never invent a score we have never observed.
-	// Concurrent-collect safe: collect() runs once per cycle for the single
-	// ComplianceWorld resource, but use a ConcurrentHashMap defensively.
-	private final java.util.concurrent.ConcurrentHashMap<String, Double>
-			lastKnownHostScore = new java.util.concurrent.ConcurrentHashMap<>();
+	// Build 59 (review W1): objects pushed this cycle with a decided
+	// benchmark; cleaned at the end of the cycle from live values.
+	private final java.util.List<PendingCleanup> pendingCleanup =
+			new java.util.ArrayList<>();
+
+	// Profiles in use this cycle, by name (all bundled in Auto mode, the one
+	// fixed profile otherwise), and this cycle's conf dir.
+	private volatile java.util.Map<String, BenchmarkProfile> profilesByName;
+	private volatile String cycleConfDir;
 
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
@@ -118,16 +110,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		String profile = getIdentifier(resourceConfig, "benchmark_profile");
 		String customPath = getIdentifier(resourceConfig, "custom_profile_path");
 		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
+		String readAppliance = getIdentifier(resourceConfig,
+				ComplianceConfig.READ_APPLIANCE_KEY);
 		String username = getCredentialField(resourceConfig, "username");
 		String password = getCredentialField(resourceConfig, "password");
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, customPath, allowInsecure);
+				profile, customPath, allowInsecure, readAppliance);
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
-				config.allowInsecure);
+				sslContextFor(config));
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
@@ -136,6 +130,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				config.allowInsecure);
 
 		this.benchmarkLoader = new BenchmarkLoader();
+		// HOLD (owner decision pending): "Read vCenter appliance settings".
+		// Off = the vami_api controls load as manual review for this
+		// instance (no score, no per-control alert, not attempted).
+		this.benchmarkLoader.setApplianceReads(config.readApplianceSettings);
+		// An instance edit re-runs configure and may change the benchmark
+		// mode (e.g. fixed -> Auto): forget last cycle's benchmarks so the
+		// B2 fallback never reuses a benchmark chosen under the old mode.
+		memory.clear();
 
 		// Ambient Suite API stitching — reads maintenanceuser.properties,
 		// decrypts via the platform SDK Crypt, targets https://localhost/
@@ -160,7 +162,31 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
 				+ " profile=" + config.benchmarkProfile
 				+ " allowInsecure=" + config.allowInsecure
+				+ " readApplianceSettings=" + config.readApplianceSettings
 				+ " stitcher=" + (stitcher != null));
+	}
+
+	/**
+	 * Build 74: the TLS context for the REST clients (VAMI appliance API and
+	 * Test Connection), with the same trust decision as the SOAP client:
+	 * trust-all only on the explicit allowInsecure opt-out, otherwise the
+	 * PLATFORM context (it used to be the JDK default context, which does not
+	 * trust a lab or enterprise CA, so every VAMI read failed on vCenters
+	 * whose certificate the platform trusts). Null (JDK default) only when no
+	 * platform context is available, e.g. a bare Test Connection instance.
+	 */
+	private javax.net.ssl.SSLContext sslContextFor(ComplianceConfig cfg) {
+		if (cfg.allowInsecure) {
+			return insecureSslContext();
+		}
+		try {
+			return getPlatformSslContext();
+		} catch (RuntimeException e) {
+			logWarn("Platform SSL context unavailable for the vCenter REST "
+					+ "client; using the JDK default trust store: "
+					+ e.getMessage());
+			return null;
+		}
 	}
 
 	/**
@@ -241,7 +267,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
-					testCfg.allowInsecure);
+					sslContextFor(testCfg));
 			testApi.login();
 			try {
 				SimpleJson hosts = testApi.listHosts();
@@ -349,9 +375,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * The per-cycle collection body. Runs once for the {@code ComplianceWorld}
-	 * resource. Walks vSphere inventory, evaluates the active profile, pushes
-	 * per-resource compliance onto matched VMWARE resources via the stitcher,
-	 * and emits the world-level fleet rollups onto {@code out}.
+	 * resource. Walks vSphere inventory, selects a benchmark per object (v3),
+	 * evaluates, pushes per-object compliance onto matched VMWARE resources,
+	 * and pushes the per-vCenter rollup onto this instance's vCenter object.
+	 *
+	 * <p><b>v3 (build 57) world change.</b> ComplianceWorld is ONE resource
+	 * shared by every adapter instance (identifier
+	 * {@code world_id=compliance_world}), so any per-instance number pushed
+	 * there is last-writer-wins across vCenters. It now carries only
+	 * {@code Summary|last_scan_timestamp} (adapter liveness: the last scan by
+	 * any instance). Fleet numbers live in the per-vCenter rollup
+	 * ({@link ComplianceRollup}) on each {@code VMwareAdapter Instance}.
 	 */
 	private void collectWorld(ResourceConfig worldRc, List<MetricData> out)
 			throws Exception {
@@ -359,109 +393,137 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		Path confDir = getAdapterDescribeFile(ADAPTER_KIND, "describe.xml")
 				.getParent();   // <adaptersHome>/<kind>/conf
-		BenchmarkProfile profile = benchmarkLoader.load(
-				config.benchmarkProfile,
-				config.customProfilePath,
-				confDir.toString());
-		if (!profile.name.equals(config.benchmarkProfile)) {
-			logWarn("Profile load divergence: requested='"
-					+ config.benchmarkProfile + "' resolved='"
-					+ profile.name + "' — metric tree and profile_name will "
-					+ "use the resolved name");
-		}
+		cycleConfDir = confDir.toString();
+		cycleReasons = new UnreadableReasons();
+		BenchmarkSelector selector = buildSelector(cycleConfDir);
+		pendingCleanup.clear();
 
 		logInfo("stitcher=" + (stitcher != null));
 		if (stitcher != null) {
 			loadStitcherResources();
 		}
 
-		detectProfileChange(profile.name, confDir.toString());
-
-		HostStats hostStats = collectHosts(profile);
-		VmStats vmStats = collectVms(profile);
-		VCenterStats vcStats = collectVCenter(profile);
-		DvsStats dvsStats = collectDvs(profile);
-		DvpgStats dvpgStats = collectDvpg(profile);
-		ClusterStats clusterStats = collectClusters(profile);
-
-		long ts = System.currentTimeMillis();
-
-		pushWorldMetric(out, "Summary|total_hosts",
-				(double) hostStats.total, ts);
-		// No-sentinel contract: only publish averages when at least one host
-		// produced real signal.
-		if (hostStats.scored > 0) {
-			pushWorldMetric(out, "Summary|avg_host_score",
-					hostStats.scoreSum / hostStats.scored, ts);
-			pushWorldMetric(out, "Summary|hosts_below_threshold",
-					(double) hostStats.belowThreshold, ts);
-		} else {
-			logWarn("No hosts produced real compliance signal "
-					+ "(all totalCount==0); skipping Summary|avg_host_score "
-					+ "and Summary|hosts_below_threshold so the scoreboard "
-					+ "reads 'no data' rather than a sentinel value");
+		String vcVersion = null;
+		try {
+			vcVersion = vsphere.getVCenterVersion();
+		} catch (Exception e) {
+			logWarn("Could not read the vCenter version: " + e.getMessage());
 		}
-		// Build 50 (review W1): first-class world-level staleness visibility.
-		// Count of hosts whose avg_host_score contribution came from the
-		// last-known cache this cycle (channel-unreadable but folded their
-		// last-known score). 0 when every averaged host was read live. Pushed
-		// EVERY cycle so an operator can see "N of M averaged hosts are stale"
-		// rather than inferring it from an indirect control count.
-		pushWorldMetric(out, "Summary|hosts_scored_stale",
-				(double) hostStats.staleScored, ts);
-
-		pushWorldMetric(out, "Summary|total_vms", (double) vmStats.total, ts);
-		if (vmStats.scored > 0) {
-			pushWorldMetric(out, "Summary|avg_vm_score",
-					vmStats.scoreSum / vmStats.scored, ts);
-			pushWorldMetric(out, "Summary|vms_below_threshold",
-					(double) vmStats.belowThreshold, ts);
+		if (selector.isAuto()) {
+			logInfo("Auto (by version): vCenter version=" + vcVersion
+					+ " governs vCenter / cluster / vDS / portgroup benchmark "
+					+ "choice");
 		}
 
-		pushWorldMetric(out, "Summary|total_vcenters",
-				(double) vcStats.total, ts);
-		if (vcStats.scored > 0) {
-			pushWorldMetric(out, "Summary|avg_vcenter_score",
-					vcStats.scoreSum / vcStats.scored, ts);
-			pushWorldMetric(out, "Summary|vcenters_below_threshold",
-					(double) vcStats.belowThreshold, ts);
+		ComplianceRollup rollup = new ComplianceRollup();
+		CycleStats cs = new CycleStats();
+		java.util.Set<String> seen = new java.util.HashSet<>();
+
+		java.util.Map<String, String> hostVersions =
+				collectHosts(selector, rollup, cs, seen);
+		collectVms(selector, hostVersions, rollup, cs, seen);
+		ComplianceStitcher.HostEntry vcEntry =
+				collectVCenter(selector, vcVersion, rollup, cs, seen);
+		collectDvs(selector, vcVersion, rollup, cs, seen);
+		collectDvpg(selector, vcVersion, rollup, cs, seen);
+		collectClusters(selector, vcVersion, rollup, cs, seen);
+
+		// Forget applied-profile history for objects no longer in inventory.
+		memory.retain(seen);
+		cleanStaleControls(cs);
+		if (cycleReasons.total() > 0) {
+			// Build 74: why controls were unreadable, once per cycle (the
+			// per-control detail is at DEBUG).
+			logInfo("Unreadable controls this cycle by reason: "
+					+ cycleReasons.summary());
 		}
 
-		int totalUnreadable = hostStats.unreadable
-				+ vmStats.unreadable
-				+ vcStats.unreadable
-				+ dvsStats.unreadable
-				+ dvpgStats.unreadable
-				+ clusterStats.unreadable;
-		pushWorldMetric(out, "Summary|total_unreadable_controls",
-				(double) totalUnreadable, ts);
-		if (totalUnreadable > 0) {
-			logWarn("Profile '" + profile.name + "' declares " + totalUnreadable
-					+ " vim_property control instance(s) this adapter could "
-					+ "not read this cycle (declared-but-unreadable). These are "
-					+ "excluded from every compliance score. This is a coverage "
-					+ "signal, not non-compliance.");
+		pushRollup(vcEntry, rollup);
+
+		if (cs.unreadable > 0) {
+			logWarn(cs.unreadable + " control instance(s) could not be read "
+					+ "this cycle (declared-but-unreadable). They count as "
+					+ "failing in each object's score, each affected object "
+					+ "is non-compliant, and its \"Compliance data not "
+					+ "collected\" alert fires.");
 		}
 
-		pushWorldProperty(out, "Summary|profile_name", profile.name);
 		pushWorldProperty(out, "Summary|last_scan_timestamp",
 				Instant.now().toString());
 
 		logInfo("ComplianceAdapter collection complete: "
-				+ hostStats.total + " hosts, "
-				+ vmStats.total + " VMs, "
-				+ (vcStats.matched ? "1" : "0") + " vCenter, "
-				+ dvsStats.total + " DVS, "
-				+ dvpgStats.total + " DVPG, "
-				+ clusterStats.total + " ClusterComputeResource");
-
-		previousProfileName = profile.name;
+				+ cs.hosts + " hosts, "
+				+ cs.vms + " VMs, "
+				+ (vcEntry != null ? "1" : "0") + " vCenter pushed, "
+				+ cs.dvs + " DVS, "
+				+ cs.dvpg + " DVPG, "
+				+ cs.clusters + " ClusterComputeResource, "
+				+ cs.noBenchmark + " object(s) without a benchmark, "
+				+ cs.versionUnreadable + " with an unreadable version, "
+				+ cs.cleanedKeys + " stale per-control key(s) marked "
+				+ "not evaluated on " + cs.cleanedObjects + " object(s)");
 	}
 
-	/** Append a numeric world metric (non-property MetricKey). */
-	private static void pushWorldMetric(List<MetricData> out,
-			String key, double value, long ts) {
-		out.add(new MetricData(new MetricKey(key), ts, value));
+	/**
+	 * Build the per-cycle benchmark selector. {@code Auto (by version)}
+	 * loads every bundled profile once (cached by the loader) and selects
+	 * per object; any other value forces that profile for every object.
+	 */
+	private BenchmarkSelector buildSelector(String confDir) {
+		if (config.isAuto()) {
+			java.util.Map<String, BenchmarkProfile> all =
+					benchmarkLoader.loadAll(confDir);
+			profilesByName = all;
+			logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
+					+ all.size() + " bundled profiles loaded; "
+					+ benchmarkLoader.lastManualReviewApplied()
+					+ " controls set to manual review (prose expected values, standard-switch controls))");
+			return BenchmarkSelector.auto(all);
+		}
+		BenchmarkProfile profile = benchmarkLoader.load(
+				config.benchmarkProfile,
+				config.customProfilePath,
+				confDir);
+		if (!profile.name.equals(config.benchmarkProfile)) {
+			logWarn("Profile load divergence: requested='"
+					+ config.benchmarkProfile + "' resolved='"
+					+ profile.name + "': profile_name will use the resolved "
+					+ "name");
+		}
+		java.util.Map<String, BenchmarkProfile> one = new java.util.HashMap<>();
+		one.put(profile.name, profile);
+		profilesByName = one;
+		logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
+				+ "object (" + benchmarkLoader.lastManualReviewApplied()
+				+ " controls set to manual review (prose expected values, standard-switch controls))");
+		return BenchmarkSelector.fixed(profile);
+	}
+
+	/** Push the per-vCenter rollup onto this instance's vCenter object. */
+	private void pushRollup(ComplianceStitcher.HostEntry vcEntry,
+			ComplianceRollup rollup) {
+		if (stitcher == null) {
+			return;
+		}
+		if (vcEntry == null) {
+			logWarn("No VMwareAdapter Instance resolved for "
+					+ config.vcenterHost + ": the per-vCenter compliance "
+					+ "rollup (VCF-CF Compliance|Rollup|*) is NOT pushed this "
+					+ "cycle");
+			return;
+		}
+		java.util.Map<String, Double> stats = rollup.toStats();
+		if (!rollup.incompleteKinds().isEmpty()) {
+			logWarn("Inventory listing failed this cycle for "
+					+ rollup.incompleteKinds() + ": their Rollup keys, and the "
+					+ "cross-kind Rollup|All and Rollup|Benchmark keys, are NOT "
+					+ "pushed this cycle (previous values kept rather than "
+					+ "under-counted)");
+		}
+		stitcher.pushStats(vcEntry.resourceId, stats,
+				System.currentTimeMillis());
+		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
+				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")");
 	}
 
 	/** Append a string world property (isProperty=true MetricKey). */
@@ -528,384 +590,525 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
-	// ----- Profile-change detection (Fix #2) ------------------------------
+	// ----- Per-object decision plumbing (build 58) ------------------------
 
-	private void detectProfileChange(String currentProfileName,
-			String confDir) {
-		if (previousProfileName == null) {
-			return;
+	/**
+	 * Benchmark decision for one object: {@link ComplianceDecisions#decide}
+	 * with the object's benchmark from last cycle, so an unreadable version
+	 * reuses it instead of dropping the object (review B2).
+	 */
+	private ComplianceDecisions.Decision decide(BenchmarkSelector selector,
+			BenchmarkSelector.Kind kind, String moid, String version) {
+		String key = moid == null ? null
+				: LastBenchmarkMemory.key(kind, moid);
+		ComplianceDecisions.Decision d = ComplianceDecisions.decide(selector,
+				kind, version, memory.previous(key), profilesByName);
+		if (d.reusedPrevious) {
+			logWarn(kind.rollupName + " " + moid + ": governing "
+					+ kind.product + " version unreadable this cycle; scoring "
+					+ "against last cycle's benchmark " + d.profileName);
 		}
-		if (previousProfileName.equals(currentProfileName)) {
-			return;
-		}
-
-		List<String> oldControlKeys =
-				enumerateOldProfileControlKeys(previousProfileName, confDir);
-
-		int stitchedResources = stitcher == null ? 0
-				: stitcher.countOfKind("HostSystem")
-				+ stitcher.countOfKind("VirtualMachine")
-				+ stitcher.countOfKind("VMwareAdapter Instance")
-				+ stitcher.countOfKind("VmwareDistributedVirtualSwitch")
-				+ stitcher.countOfKind("DistributedVirtualPortgroup");
-
-		logWarn("Profile change detected: previous='" + previousProfileName
-				+ "' current='" + currentProfileName + "'. "
-				+ oldControlKeys.size() + " per-control property key(s) under "
-				+ "namespace 'VCF-CF Compliance|" + previousProfileName
-				+ "|*' will linger on each of " + stitchedResources
-				+ " stitched resource(s) until VCF Ops retention ages them "
-				+ "out. TOOLSET GAP: the public Suite API PropertyContent "
-				+ "schema has no per-property state field, so this adapter "
-				+ "cannot signal state=NotExisting on the old keys.");
+		return d;
 	}
 
-	private List<String> enumerateOldProfileControlKeys(
-			String oldProfileName, String confDir) {
-		java.util.List<String> keys = new java.util.ArrayList<>();
-		if (oldProfileName == null || oldProfileName.isEmpty()) {
-			return keys;
+	/**
+	 * Version unreadable and no previous benchmark (review B2; build 65 W1):
+	 * nothing collected. Score 0 (build 63 rule), non-compliant,
+	 * collection_failed = 1 (raises "Compliance data not collected"),
+	 * counted as scored 0 in the rollup's unknown bucket, never
+	 * no_benchmark, no alert cleanup, benchmark memory untouched.
+	 */
+	private void recordVersionUnreadable(BenchmarkSelector.Kind kind,
+			String name, ComplianceDecisions.Decision d, String resourceId,
+			ComplianceRollup rollup, CycleStats cs) {
+		cs.versionUnreadable++;
+		rollup.recordVersionUnreadable(kind);
+		logWarn(kind.rollupName + " " + name + ": " + d.profileName
+				+ " and no previous benchmark; nothing collected: score 0, "
+				+ "non-compliant, collection_failed=1");
+		if (resourceId != null) {
+			long ts = System.currentTimeMillis();
+			stitcher.pushProperties(resourceId,
+					ComplianceDecisions.profileNameProps(d.profileName), ts);
+			stitcher.pushStats(resourceId,
+					ComplianceDecisions.versionUnreadableStats(), ts);
 		}
-		if ("Custom".equalsIgnoreCase(oldProfileName)) {
-			logInfo("Skipping old-profile key enumeration: previous profile "
-					+ "was 'Custom' and the old custom CSV path is not retained "
-					+ "across config changes");
-			return keys;
+	}
+
+	/** Record + push an object whose READABLE version has no benchmark. */
+	private void recordNoBenchmark(BenchmarkSelector.Kind kind, String name,
+			String moid, ComplianceDecisions.Decision d, String resourceId,
+			ComplianceRollup rollup, CycleStats cs) {
+		cs.noBenchmark++;
+		rollup.recordNoBenchmark(kind);
+		logInfo(kind.rollupName + " " + name + ": " + d.profileName
+				+ " (no benchmark, not scored)");
+		if (resourceId != null) {
+			pushNoBenchmark(resourceId, d.profileName);
 		}
-		try {
-			BenchmarkLoader tmpLoader = new BenchmarkLoader();
-			BenchmarkProfile oldProfile = tmpLoader.load(oldProfileName,
-					null, confDir);
-			String prefix = "VCF-CF Compliance|" + oldProfile.name + "|";
-			for (BenchmarkProfile.Control c : oldProfile.controls) {
-				String ctrlPrefix = prefix + c.controlId;
-				keys.add(ctrlPrefix + "|Actual");
-				keys.add(ctrlPrefix + "|Expected");
-				keys.add(ctrlPrefix + "|Description");
-				keys.add(ctrlPrefix + "|Compliant");
+		afterPush(kind, moid, d, resourceId, cs,
+				java.util.Collections.<String>emptySet());
+	}
+
+	/**
+	 * After an object with a decided benchmark (scored, or no benchmark):
+	 * remember the benchmark for the B2 fallback, and queue the object for
+	 * this cycle's stale-control cleanup when it was pushed.
+	 */
+	private void afterPush(BenchmarkSelector.Kind kind, String moid,
+			ComplianceDecisions.Decision d, String resourceId, CycleStats cs,
+			java.util.Set<String> pushed) {
+		if (moid == null) return;
+		String prev = memory.record(LastBenchmarkMemory.key(kind, moid),
+				d.profileName);
+		if (prev != null && !prev.equals(d.profileName)) {
+			logInfo(kind.rollupName + " " + moid + ": benchmark changed '"
+					+ prev + "' -> '" + d.profileName + "'");
+		}
+		if (resourceId != null && stitcher != null) {
+			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
+					d.profileName, pushed));
+		}
+	}
+
+	/** One object queued for end-of-cycle cleanup. */
+	private static final class PendingCleanup {
+		final BenchmarkSelector.Kind kind;
+		final String resourceId;
+		final BenchmarkProfile profile;   // null: no benchmark
+		final String profileName;
+		// Build 76: control ids whose Compliant value was pushed this cycle.
+		final java.util.Set<String> pushed;
+
+		PendingCleanup(BenchmarkSelector.Kind kind, String resourceId,
+				BenchmarkProfile profile, String profileName,
+				java.util.Set<String> pushed) {
+			this.kind = kind;
+			this.resourceId = resourceId;
+			this.profile = profile;
+			this.profileName = profileName;
+			this.pushed = pushed;
+		}
+	}
+
+	/**
+	 * Build 59 (review W1 on build 58): per-control cleanup from LIVE values,
+	 * every cycle. For each pushed object, the candidates are the bundled
+	 * controls outside its current benchmark
+	 * ({@link ComplianceDecisions#candidateControlIds}); their latest
+	 * {@code Compliant} values are bulk-read from VCF Ops (requests sized by
+	 * URL length, see ComplianceDecisions#latestCompliantPaths), and only a candidate whose latest value is 0 is set to -1
+	 * ({@link ComplianceDecisions#staleZeroControls}). No key is ever
+	 * created, a cleaned key is not touched again, and a missed or failed
+	 * cleanup is retried next cycle. If a bulk read fails, that batch is
+	 * skipped this cycle (logged), with no fallback.
+	 */
+	private void cleanStaleControls(CycleStats cs) {
+		if (stitcher == null || pendingCleanup.isEmpty()) return;
+		java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
+		if (bundled == null) return;
+		java.util.Map<BenchmarkSelector.Kind, java.util.List<PendingCleanup>>
+				byKind = new java.util.EnumMap<>(BenchmarkSelector.Kind.class);
+		for (PendingCleanup p : pendingCleanup) {
+			byKind.computeIfAbsent(p.kind, k -> new java.util.ArrayList<>())
+					.add(p);
+		}
+		for (java.util.Map.Entry<BenchmarkSelector.Kind,
+				java.util.List<PendingCleanup>> e : byKind.entrySet()) {
+			java.util.List<PendingCleanup> objs = e.getValue();
+			for (int i = 0; i < objs.size(); i += CLEANUP_BATCH) {
+				cleanBatch(e.getKey(), objs.subList(i,
+						Math.min(objs.size(), i + CLEANUP_BATCH)),
+						bundled.values(), cs);
 			}
-		} catch (RuntimeException e) {
-			logWarn("Could not load old profile '" + oldProfileName
-					+ "' to enumerate stale keys: " + e.getMessage());
 		}
-		return keys;
+		pendingCleanup.clear();
+		// Build 60 (review W1): one line per cycle with what the read
+		// returned, so a read that silently returns nothing is visible and
+		// not mistaken for "nothing stale".
+		logInfo("Stale-control cleanup read: " + cs.cleanupQueried
+				+ " object(s) with candidate controls queried in "
+				+ cs.cleanupRequests + " request(s); " + cs.cleanupValues
+				+ " Compliant value(s) returned; " + cs.cleanedKeys
+				+ " stale 0(s) set to -1 on " + cs.cleanedObjects
+				+ " object(s); " + cs.cleanupSkipped
+				+ " object(s) skipped (read failed)");
+		if (cs.cleanupSkipped > 0) {
+			logWarn("Stale-control cleanup skipped for " + cs.cleanupSkipped
+					+ " object(s) this cycle (latest-value read failed); "
+					+ "retrying next cycle");
+		}
+	}
+
+	// Objects per cleanup batch; requests within a batch are sized by URL
+	// length, so this only bounds the candidate union and memory.
+	private static final int CLEANUP_BATCH = 500;
+
+	private void cleanBatch(BenchmarkSelector.Kind kind,
+			java.util.List<PendingCleanup> batch,
+			java.util.Collection<BenchmarkProfile> bundled, CycleStats cs) {
+		// Build 76: the plan is per object and based on what was actually
+		// pushed this cycle (ComplianceDecisions.cleanupPlan): a control in
+		// the object's benchmark but not pushed (not applicable, e.g. vSAN
+		// controls on a non-vSAN cluster) retires a lingering 0 OR 1; a
+		// control outside the benchmark retires a lingering 0.
+		java.util.Map<String, ComplianceDecisions.CleanupPlan> plans =
+				new java.util.LinkedHashMap<>();
+		java.util.Set<String> allCandidates = new java.util.TreeSet<>();
+		for (PendingCleanup p : batch) {
+			ComplianceDecisions.CleanupPlan plan =
+					ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed,
+							bundled);
+			if (!plan.isEmpty()) {
+				plans.put(p.resourceId, plan);
+				allCandidates.addAll(plan.queryIds());
+			}
+		}
+		if (plans.isEmpty()) return;
+		java.util.Map<String, java.util.Set<String>> candidates =
+				new java.util.LinkedHashMap<>();
+		for (java.util.Map.Entry<String, ComplianceDecisions.CleanupPlan> e
+				: plans.entrySet()) {
+			candidates.put(e.getKey(), e.getValue().queryIds());
+		}
+		ComplianceStitcher.LatestRead read = stitcher.latestCompliant(
+				new java.util.ArrayList<>(candidates.keySet()), allCandidates);
+		cs.cleanupQueried += candidates.size();
+		cs.cleanupRequests += read.requests;
+		cs.cleanupValues += read.valuesReturned;
+		if (read.failed()) {
+			cs.cleanupSkipped += candidates.size();
+			logWarn("Stale-control cleanup read failed for a batch of "
+					+ candidates.size() + " " + kind.rollupName + " object(s) "
+					+ "after " + read.requests + " request(s) and "
+					+ read.valuesReturned + " value(s) returned: " + read.error
+					+ "; batch skipped this cycle");
+			return;
+		}
+		java.util.Map<String, java.util.Map<String, Double>> latest =
+				read.values;
+		long ts = System.currentTimeMillis();
+		for (PendingCleanup p : batch) {
+			ComplianceDecisions.CleanupPlan plan = plans.get(p.resourceId);
+			if (plan == null) continue;
+			java.util.Set<String> stale = ComplianceDecisions.staleControls(
+					plan, latest.get(p.resourceId));
+			if (stale.isEmpty()) continue;
+			stitcher.pushProperties(p.resourceId,
+					ComplianceDecisions.orphanProps(stale, p.profileName), ts);
+			stitcher.pushStats(p.resourceId,
+					ComplianceDecisions.orphanStats(stale), ts);
+			cs.cleanedObjects++;
+			cs.cleanedKeys += stale.size();
+			logInfo(kind.rollupName + " resource " + p.resourceId + ": "
+					+ stale.size() + " control(s) not evaluated this cycle under "
+					+ p.profileName + " still held a 0 or 1; set to -1 (not "
+					+ "evaluated)");
+		}
+	}
+
+	/**
+	 * Every bundled profile (cached by the loader), for cleanup in both
+	 * modes. Null on a load failure: cleanup is skipped and retried, the
+	 * collection itself is never failed over it.
+	 */
+	private java.util.Map<String, BenchmarkProfile> bundledForCleanup() {
+		try {
+			return benchmarkLoader.loadAll(cycleConfDir);
+		} catch (RuntimeException e) {
+			logWarn("Could not load the bundled profiles for per-control "
+					+ "cleanup (retrying next cycle): " + e.getMessage());
+			return null;
+		}
 	}
 
 	// ----- Per-kind collectors --------------------------------------------
 
-	private HostStats collectHosts(BenchmarkProfile profile) throws Exception {
-		HostStats stats = new HostStats();
+	/**
+	 * Hosts. Returns host MOID -> ESX version (null values allowed) so VMs
+	 * can follow their host in Auto mode.
+	 */
+	private java.util.Map<String, String> collectHosts(
+			BenchmarkSelector selector, ComplianceRollup rollup,
+			CycleStats cs, java.util.Set<String> seen) throws Exception {
+		java.util.Map<String, String> hostVersions = new java.util.HashMap<>();
 		java.util.List<VSphereClient.HostInfo> hosts = vsphere.getHosts();
 		if (hosts.isEmpty()) {
 			logWarn("No hosts returned from vCenter SOAP");
-			return stats;
+			return hostVersions;
 		}
 		logInfo("vSphere SOAP: " + hosts.size() + " hosts");
-
-		java.util.List<BenchmarkProfile.Control> hostControls =
-				profile.hostControls();
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			String hostId = hostInfo.moid;
 			String hostName = hostInfo.name;
+			cs.hosts++;
+			if (hostId != null) {
+				seen.add(LastBenchmarkMemory.key(
+						BenchmarkSelector.Kind.HOST, hostId));
+			}
 
-			// Build 47 — connection-state guard. A host whose vCenter link is
+			String version = null;
+			if (selector.isAuto()) {
+				try {
+					version = vsphere.getHostProductVersion(hostInfo.moRef);
+				} catch (Exception e) {
+					logWarn("Host " + hostName + ": could not read the ESX "
+							+ "version (" + e.getMessage() + ")");
+				}
+			}
+			if (hostId != null) hostVersions.put(hostId, version);
+
+			ComplianceStitcher.HostEntry he = stitcher == null ? null
+					: stitcher.matchHost(hostName, hostId);
+			String resourceId = he == null ? null : he.resourceId;
+
+			ComplianceDecisions.Decision d = decide(selector,
+					BenchmarkSelector.Kind.HOST, hostId,
+					BenchmarkSelector.governingVersion(
+							BenchmarkSelector.Kind.HOST, null, version));
+			if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+				recordVersionUnreadable(BenchmarkSelector.Kind.HOST, hostName,
+						d, resourceId, rollup, cs);
+				continue;
+			}
+			if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
+				recordNoBenchmark(BenchmarkSelector.Kind.HOST, hostName, hostId,
+						d, resourceId, rollup, cs);
+				continue;
+			}
+			java.util.List<BenchmarkProfile.Control> hostControls =
+					d.profile.hostControls();
+
+			// Build 47: connection-state guard. A host whose vCenter link is
 			// down at read time (disconnected / notResponding) cannot be read
-			// honestly: its OptionManager MoRef is gone and esxcli/vim reads
-			// fail. Scoring the partial subset that still resolves from
-			// vCenter's cache yields a flattering, dishonest partial score
-			// (the build-46 esx04 regression). Mark EVERY control for the host
-			// UNREADABLE for this cycle instead — one loud WARN, no score.
+			// honestly; scoring the subset that still resolves from vCenter's
+			// cache yields a flattering partial score (the build-46 esx04
+			// regression). Mark EVERY control UNREADABLE instead (build 63:
+			// which scores the host 0, nothing was collected).
 			String connState;
 			try {
 				connState = vsphere.getHostConnectionState(hostInfo.moRef);
 			} catch (Exception e) {
 				connState = null;  // unknown -> proceed with normal evaluation
 			}
+
+			ControlEvaluator.ComplianceResult cr;
+			boolean wholeHostUnreadable = false;
 			if (isDisconnectedState(connState)) {
 				logWarn("Host " + hostName + ": connectionState='" + connState
-						+ "' — host not fully connected to vCenter; ALL "
+						+ "': host not fully connected to vCenter; ALL "
 						+ "compliance controls marked UNREADABLE this cycle "
 						+ "(no partial score emitted)");
-				ControlEvaluator.ComplianceResult advUnread =
-						ControlEvaluator.evaluateControlsUnreadable(
-								hostControls, hostName);
-				ControlEvaluator.ComplianceResult vimUnread =
-						unreadableVimResult(hostControls, hostName);
-				ControlEvaluator.ComplianceResult cr =
-						mergeResults(advUnread, vimUnread);
-				stats.unreadable += cr.unreadableCount;
-				stats.total++;  // total attempted; not scored (totalCount==0)
-				// Task #16: fold this host's LAST-KNOWN score into the world
-				// average so an unreadable host keeps the denominator full
-				// (never a flattering shrink). No-op when the host was never
-				// read since process start.
-				applyLastKnownForUnreadableHost(hostId, hostName, stats);
-
-				logInfo("Host " + hostName + ": UNREADABLE (connectionState='"
-						+ connState + "', " + cr.unreadableCount
-						+ " controls)");
-
-				if (stitcher != null) {
-					ComplianceStitcher.HostEntry he =
-							stitcher.matchHost(hostName, hostId);
-					if (he != null) {
-						pushComplianceViaClient(he.resourceId, cr, profile.name);
+				cr = wholeUnreadable(hostControls, hostName);
+				wholeHostUnreadable = true;
+				noteUnreadable(hostName, "host-not-connected: connectionState="
+						+ connState, cr.unreadableCount);
+			} else {
+				java.util.Map<String, String> advSettings = null;
+				boolean advUnreadable = false;
+				String advReason = null;
+				try {
+					advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
+				} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
+					// Build 48: null OptionManager MoRef means the host
+					// disconnected between the connectionState check and this
+					// read (a flap). Treat the WHOLE host as unreadable.
+					logWarn("Host " + hostName + ": advanced-settings channel "
+							+ "UNREADABLE (" + e.getMessage() + "); host "
+							+ "flapped between connection check and read; ALL "
+							+ "compliance controls marked UNREADABLE this cycle "
+							+ "(no partial score emitted)");
+					wholeHostUnreadable = true;
+					advReason = "advanced-settings-unreadable: host flapped ("
+							+ e.getMessage() + ")";
+				} catch (Exception e) {
+					// Any other read failure (SOAP fault, transport) is a read
+					// failure, not an empty result: treat as unreadable.
+					advUnreadable = true;
+					advReason = "advanced-settings-unreadable: "
+							+ e.getClass().getSimpleName() + ": " + e.getMessage();
+					logWarn("Host " + hostName + ": failed to read advanced "
+							+ "settings (" + e.getMessage() + "); all "
+							+ "advanced_setting controls marked UNREADABLE this "
+							+ "cycle (not dropped from the denominator)");
+				}
+				if (wholeHostUnreadable) {
+					cr = wholeUnreadable(hostControls, hostName);
+					noteUnreadable(hostName, advReason, cr.unreadableCount);
+				} else {
+					ControlEvaluator.ComplianceResult advCr = advUnreadable
+							? ControlEvaluator.evaluateControlsUnreadable(
+									hostControls, hostName)
+							: ControlEvaluator.evaluateControls(
+									hostControls, advSettings, hostName);
+					if (advUnreadable) {
+						noteUnreadable(hostName, advReason,
+								advCr.unreadableCount);
 					}
-				}
-				continue;
-			}
-
-			java.util.Map<String, String> advSettings = null;
-			boolean advUnreadable = false;
-			try {
-				advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
-			} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
-				// Build 48 — null OptionManager MoRef means the host
-				// disconnected between the connectionState check above and this
-				// read (a flap). A half-connected host must never produce a
-				// score: its cached vim/esxcli reads are equally suspect, so
-				// scoring them live (the build-46/47 partial-score shape) is
-				// dishonest. Treat the WHOLE host as unreadable, identical to
-				// the connection-state branch above — fold every control
-				// (advanced_setting + vim/esxcli) to UNREADABLE, emit no score,
-				// and continue. logWarn routes through the framework base.
-				logWarn("Host " + hostName + ": advanced-settings channel "
-						+ "UNREADABLE (" + e.getMessage() + ") — host flapped "
-						+ "between connection check and read; ALL compliance "
-						+ "controls marked UNREADABLE this cycle (no partial "
-						+ "score emitted)");
-				ControlEvaluator.ComplianceResult advUnread =
-						ControlEvaluator.evaluateControlsUnreadable(
-								hostControls, hostName);
-				ControlEvaluator.ComplianceResult vimUnread =
-						unreadableVimResult(hostControls, hostName);
-				ControlEvaluator.ComplianceResult cr =
-						mergeResults(advUnread, vimUnread);
-				stats.unreadable += cr.unreadableCount;
-				stats.total++;  // total attempted; not scored (totalCount==0)
-				// Task #16: fold this host's last-known score into the world
-				// average (see connection-state branch above).
-				applyLastKnownForUnreadableHost(hostId, hostName, stats);
-
-				logInfo("Host " + hostName + ": UNREADABLE (adv-settings flap, "
-						+ cr.unreadableCount + " controls)");
-
-				if (stitcher != null) {
-					ComplianceStitcher.HostEntry he =
-							stitcher.matchHost(hostName, hostId);
-					if (he != null) {
-						pushComplianceViaClient(he.resourceId, cr, profile.name);
-					}
-				}
-				continue;
-			} catch (Exception e) {
-				// Any other read failure (SOAP fault, transport) is likewise a
-				// read failure, not an empty result — treat as unreadable.
-				advUnreadable = true;
-				logWarn("Host " + hostName + ": failed to read advanced "
-						+ "settings (" + e.getMessage() + ") — all "
-						+ "advanced_setting controls marked UNREADABLE this "
-						+ "cycle (not dropped from the denominator)");
-			}
-
-			ControlEvaluator.ComplianceResult advCr = advUnreadable
-					? ControlEvaluator.evaluateControlsUnreadable(
-							hostControls, hostName)
-					: ControlEvaluator.evaluateControls(
-							hostControls, advSettings, hostName);
-			ControlEvaluator.ComplianceResult vimCr =
-					evaluateVimForResource(hostInfo.moRef, hostControls,
-							hostName);
-			ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vimCr);
-			stats.unreadable += cr.unreadableCount;
-
-			stats.total++;
-			if (cr.totalCount > 0) {
-				stats.scored++;
-				stats.scoreSum += cr.score;
-				if (cr.score < 95.0) stats.belowThreshold++;
-				// Task #16: remember this host's score so a future cycle in
-				// which the host is unreadable can still contribute it to the
-				// world average. Keyed by stable MOID.
-				// Build 50 (review W2): null-guard the write to match the read
-				// side (applyLastKnownForUnreadableHost). ConcurrentHashMap.put
-				// throws NPE on a null key; the per-host loop has no per-host
-				// try/catch and collectHosts propagates, so an unguarded put on
-				// a (theoretical) null MOID would abort the whole cycle.
-				if (hostId != null) {
-					lastKnownHostScore.put(hostId, cr.score);
+					ControlEvaluator.ComplianceResult vimCr =
+							evaluateVimForResource(hostInfo.moRef, hostControls,
+									hostName);
+					cr = mergeResults(advCr, vimCr);
 				}
 			}
+			cs.unreadable += cr.unreadableCount;
+			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
+					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			logInfo("Host " + hostName + ": score="
-					+ String.format("%.1f", cr.score) + "% ("
-					+ cr.passCount + " pass, " + cr.failCount + " fail, "
-					+ cr.totalCount + " total)");
-
-			if (stitcher != null) {
-				ComplianceStitcher.HostEntry he =
-						stitcher.matchHost(hostName, hostId);
-				if (he != null) {
-					pushComplianceViaClient(he.resourceId, cr, profile.name);
-				}
+			if (wholeHostUnreadable && cr.attempted() > 0) {
+				// Build 63: nothing collected -> score 0 (owner decision),
+				// counted in the host average like any other score.
+				logInfo("Host " + hostName + ": UNREADABLE (" + cr.unreadableCount
+						+ " controls), score 0");
+			} else if (cr.attempted() > 0) {
+				logInfo("Host " + hostName + " [" + d.profileName + "]: score="
+						+ String.format("%.1f", cr.score) + "% ("
+						+ cr.passCount + " pass, " + cr.failCount + " fail, "
+						+ cr.unreadableCount + " unreadable, "
+						+ cr.totalCount + " total)");
 			}
+
+			if (resourceId != null) {
+				pushComplianceViaClient(resourceId, cr, d.profileName);
+			}
+			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
+					ComplianceDecisions.pushedIds(cr));
 		}
-		// Build 50 (review N1): evict last-known-score entries for hosts no
-		// longer in the current inventory, so the cache cannot grow unboundedly
-		// across host churn (a removed host would otherwise linger forever).
-		// The current getHosts() set is authoritative for "what exists"; a host
-		// absent this cycle because it is merely unreadable is NOT removed —
-		// getHosts() still enumerates it (the connectionState/flap branches keep
-		// it in `hosts`), so only genuinely de-inventoried hosts are pruned.
-		evictAbsentHostScores(hosts);
-		return stats;
+		return hostVersions;
 	}
 
-	/**
-	 * Build 50 (review N1) — prune {@link #lastKnownHostScore} keys not present
-	 * in the current inventory set. Keeps the map bounded by the live host count
-	 * across long-running collectors with host churn. A host that is unreadable
-	 * this cycle still appears in {@code hosts} (it is enumerated, just not
-	 * scored), so its cached score survives; only hosts removed from vCenter
-	 * entirely are evicted.
-	 */
-	private void evictAbsentHostScores(
-			java.util.List<VSphereClient.HostInfo> hosts) {
-		java.util.Set<String> live = new java.util.HashSet<>();
-		for (VSphereClient.HostInfo h : hosts) {
-			if (h.moid != null) live.add(h.moid);
-		}
-		int before = lastKnownHostScore.size();
-		lastKnownHostScore.keySet().retainAll(live);
-		int evicted = before - lastKnownHostScore.size();
-		if (evicted > 0) {
-			logInfo("Evicted " + evicted + " last-known host score(s) for "
-					+ "host(s) no longer in inventory (cache now "
-					+ lastKnownHostScore.size() + " entries)");
-		}
+	/** Every advanced_setting and vim/esxcli control folded to UNREADABLE. */
+	private static ControlEvaluator.ComplianceResult wholeUnreadable(
+			java.util.List<BenchmarkProfile.Control> controls, String name) {
+		return mergeResults(
+				ControlEvaluator.evaluateControlsUnreadable(controls, name),
+				unreadableVimResult(controls, name));
 	}
 
-	/**
-	 * Task #16 — when a host is channel-unreadable this cycle, fold its
-	 * last-known score (if any) into the world {@code avg_host_score} so the
-	 * denominator stays full and an unreadable host does not silently flatter
-	 * the fleet average. A host with no last-known score (never read since
-	 * process start) is left excluded — we never invent a score we have not
-	 * observed. Mutates {@code stats.scored} / {@code stats.scoreSum} /
-	 * {@code stats.belowThreshold} (the world-rollup inputs) only; it does NOT
-	 * touch {@code stats.total} (already incremented by the caller) and does NOT
-	 * change the per-host wire push, which stays build-48 (no score stat pushed
-	 * for a totalCount==0 host).
-	 */
-	private void applyLastKnownForUnreadableHost(String hostId, String hostName,
-			HostStats stats) {
-		Double last = (hostId == null) ? null : lastKnownHostScore.get(hostId);
-		if (last == null) {
-			logInfo("Host " + hostName + ": unreadable and no last-known score "
-					+ "(never read since collector start) — excluded from the "
-					+ "world avg_host_score this cycle");
-			return;
-		}
-		stats.scored++;
-		stats.staleScored++;
-		stats.scoreSum += last;
-		if (last < 95.0) stats.belowThreshold++;
-		logInfo("Host " + hostName + ": unreadable this cycle — contributing "
-				+ "last-known score " + String.format("%.1f", last)
-				+ "% to the world avg_host_score (denominator kept full)");
-	}
-
-	private VmStats collectVms(BenchmarkProfile profile) {
-		VmStats stats = new VmStats();
+	private void collectVms(BenchmarkSelector selector,
+			java.util.Map<String, String> hostVersions, ComplianceRollup rollup,
+			CycleStats cs, java.util.Set<String> seen) {
 		java.util.List<VSphereClient.VmInfo> vms;
 		try {
 			vms = vsphere.getVms();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate VMs: " + e.getMessage());
-			return stats;
+			rollup.markIncomplete(BenchmarkSelector.Kind.VM);
+			return;
 		}
 		if (vms.isEmpty()) {
 			logInfo("No VMs returned from vCenter SOAP");
-			return stats;
+			return;
 		}
 		logInfo("vSphere SOAP: " + vms.size() + " VMs");
 
-		java.util.List<BenchmarkProfile.Control> vmControls =
-				profile.vmControls();
-
 		for (VSphereClient.VmInfo vm : vms) {
-			java.util.Map<String, String> extra;
-			try {
-				extra = vsphere.getVmExtraConfig(vm.moRef);
-			} catch (Exception e) {
-				logWarn("Failed to read extraConfig for " + vm.name + ": "
-						+ e.getMessage());
-				extra = new java.util.HashMap<>();
+			cs.vms++;
+			if (vm.moid != null) {
+				seen.add(LastBenchmarkMemory.key(
+						BenchmarkSelector.Kind.VM, vm.moid));
 			}
+			String hostVersion = selector.isAuto()
+					? vmHostVersion(vm, hostVersions) : null;
 
-			ControlEvaluator.ComplianceResult advCr =
-					ControlEvaluator.evaluateControls(vmControls, extra, vm.name);
+			ComplianceStitcher.HostEntry he = stitcher == null ? null
+					: stitcher.matchVm(vm.name, vm.moid);
+			String resourceId = he == null ? null : he.resourceId;
+
+			ComplianceDecisions.Decision d = decide(selector,
+					BenchmarkSelector.Kind.VM, vm.moid,
+					BenchmarkSelector.governingVersion(
+							BenchmarkSelector.Kind.VM, null, hostVersion));
+			if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+				recordVersionUnreadable(BenchmarkSelector.Kind.VM, vm.name, d,
+						resourceId, rollup, cs);
+				continue;
+			}
+			if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
+				recordNoBenchmark(BenchmarkSelector.Kind.VM, vm.name, vm.moid,
+						d, resourceId, rollup, cs);
+				continue;
+			}
+			java.util.List<BenchmarkProfile.Control> vmControls =
+					d.profile.vmControls();
+
+			ControlEvaluator.ComplianceResult advCr;
+			try {
+				java.util.Map<String, String> extra =
+						vsphere.getVmExtraConfig(vm.moRef);
+				advCr = ControlEvaluator.evaluateControls(vmControls, extra,
+						vm.name);
+			} catch (Exception e) {
+				// v3 fix: a FAILED extraConfig read used to fall back to an
+				// empty map, which scored every "X or Undefined" control as a
+				// pass. A failed read is unreadable, never compliant.
+				logWarn("Failed to read extraConfig for " + vm.name + ": "
+						+ e.getMessage() + "; advanced_setting controls "
+						+ "marked UNREADABLE this cycle");
+				advCr = ControlEvaluator.evaluateControlsUnreadable(vmControls,
+						vm.name);
+				noteUnreadable(vm.name, "extraconfig-unreadable: "
+						+ e.getClass().getSimpleName() + ": " + e.getMessage(),
+						advCr.unreadableCount);
+			}
 			ControlEvaluator.ComplianceResult vimCr =
 					evaluateVimForResource(vm.moRef, vmControls, vm.name);
 			ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vimCr);
-			stats.unreadable += cr.unreadableCount;
+			cs.unreadable += cr.unreadableCount;
+			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
+					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			stats.total++;
-			if (cr.totalCount > 0) {
-				stats.scored++;
-				stats.scoreSum += cr.score;
-				if (cr.score < 95.0) stats.belowThreshold++;
+			if (resourceId != null) {
+				pushComplianceViaClient(resourceId, cr, d.profileName);
 			}
-
-			if (stitcher != null) {
-				ComplianceStitcher.HostEntry he =
-						stitcher.matchVm(vm.name, vm.moid);
-				if (he != null) {
-					pushComplianceViaClient(he.resourceId, cr, profile.name);
-				}
-			}
+			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
+					ComplianceDecisions.pushedIds(cr));
 		}
-		logInfo("VM compliance: " + stats.total + " VMs seen, "
-				+ stats.scored + " with real signal");
-		return stats;
+		logInfo("VM compliance: " + cs.vms + " VMs seen");
 	}
 
-	private VCenterStats collectVCenter(BenchmarkProfile profile) {
-		VCenterStats stats = new VCenterStats();
-		java.util.Map<String, String> vcSettings;
-		try {
-			vcSettings = vsphere.getVCenterAdvancedSettings();
-		} catch (Exception e) {
-			logWarn("Failed to read vCenter advanced settings: "
-					+ e.getMessage());
-			return stats;
+	/**
+	 * The ESX version of the host a VM runs on (Auto mode). The host MOID
+	 * comes from the bulk VM enumeration (review N1); only when that was
+	 * unavailable is runtime.host read per VM. The version itself is
+	 * resolved by {@link ComplianceDecisions#resolveVmHostVersion}.
+	 */
+	private String vmHostVersion(VSphereClient.VmInfo vm,
+			java.util.Map<String, String> hostVersions) {
+		String hostMoid = vm.hostMoid;
+		if (!vm.hostRead) {
+			try {
+				hostMoid = vsphere.getVmHostMoid(vm.moRef);
+			} catch (Exception e) {
+				logWarn("VM " + vm.name + ": could not read runtime.host ("
+						+ e.getMessage() + ")");
+				return null;
+			}
 		}
-		logInfo("vCenter advanced settings: " + vcSettings.size() + " entries");
+		return ComplianceDecisions.resolveVmHostVersion(hostMoid, hostVersions,
+				moid -> {
+					try {
+						return vsphere.getHostProductVersion(
+								new VSphereClient.MoRef("HostSystem", moid));
+					} catch (Exception e) {
+						logWarn("VM " + vm.name + ": could not read the version "
+								+ "of host " + moid + " (" + e.getMessage() + ")");
+						return null;
+					}
+				});
+	}
 
-		java.util.List<BenchmarkProfile.Control> vcControls =
-				profile.vCenterControls();
+	private ComplianceStitcher.HostEntry collectVCenter(
+			BenchmarkSelector selector, String vcVersion,
+			ComplianceRollup rollup, CycleStats cs,
+			java.util.Set<String> seen) {
 		String resourceName = config.vcenterHost;
+		String moid = "vcenter";
+		seen.add(LastBenchmarkMemory.key(BenchmarkSelector.Kind.VCENTER,
+				moid));
 
-		ControlEvaluator.ComplianceResult advCr =
-				ControlEvaluator.evaluateControls(
-						vcControls, vcSettings, resourceName);
-		ControlEvaluator.ComplianceResult vamiCr =
-				evaluateVamiForVCenter(vcControls, resourceName);
-		ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vamiCr);
-		logInfo("vCenter " + resourceName + ": score="
-				+ String.format("%.1f", cr.score) + "% ("
-				+ cr.passCount + " pass, " + cr.failCount + " fail, "
-				+ cr.totalCount + " total)");
-
-		stats.total++;
-		stats.unreadable += cr.unreadableCount;
-		if (cr.totalCount > 0) {
-			stats.scored++;
-			stats.scoreSum += cr.score;
-			if (cr.score < 95.0) stats.belowThreshold++;
-		}
-
+		ComplianceStitcher.HostEntry he = null;
 		if (stitcher != null) {
 			String vcInstanceUuid = null;
 			try {
@@ -914,202 +1117,264 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				logWarn("Could not read vCenter instance UUID for stitcher "
 						+ "lookup: " + e.getMessage());
 			}
-			ComplianceStitcher.HostEntry he =
-					stitcher.matchVCenterAdapterInstance(
-							resourceName, vcInstanceUuid);
-			if (he != null) {
-				pushComplianceViaClient(he.resourceId, cr, profile.name);
-				stats.matched = true;
-				logInfo("Pushed vCenter compliance data to " + he.hostName
-						+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
-						+ ", vcInstanceUuid=" + vcInstanceUuid + ")");
-			} else {
+			he = stitcher.matchVCenterAdapterInstance(resourceName,
+					vcInstanceUuid);
+			if (he == null) {
 				logWarn("Could not resolve VMwareAdapter Instance for "
 						+ resourceName + " (vcInstanceUuid=" + vcInstanceUuid
-						+ ") — vCenter compliance rollups will NOT appear");
+						+ "): vCenter compliance and the per-vCenter rollup "
+						+ "will NOT be pushed");
 			}
 		}
-		return stats;
+		String resourceId = he == null ? null : he.resourceId;
+
+		ComplianceDecisions.Decision d = decide(selector,
+				BenchmarkSelector.Kind.VCENTER, moid,
+				BenchmarkSelector.governingVersion(
+						BenchmarkSelector.Kind.VCENTER, vcVersion, null));
+		if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+			recordVersionUnreadable(BenchmarkSelector.Kind.VCENTER,
+					resourceName, d, resourceId, rollup, cs);
+			return he;
+		}
+		if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
+			recordNoBenchmark(BenchmarkSelector.Kind.VCENTER, resourceName,
+					moid, d, resourceId, rollup, cs);
+			return he;
+		}
+		java.util.List<BenchmarkProfile.Control> vcControls =
+				d.profile.vCenterControls();
+
+		ControlEvaluator.ComplianceResult advCr;
+		try {
+			java.util.Map<String, String> vcSettings =
+					vsphere.getVCenterAdvancedSettings();
+			logInfo("vCenter advanced settings: " + vcSettings.size()
+					+ " entries");
+			advCr = ControlEvaluator.evaluateControls(vcControls, vcSettings,
+					resourceName);
+		} catch (Exception e) {
+			// v3: a failed read is unreadable, which the vCenter object and
+			// the rollup must show (previously the vCenter was skipped).
+			logWarn("Failed to read vCenter advanced settings: "
+					+ e.getMessage() + "; advanced_setting controls marked "
+					+ "UNREADABLE this cycle");
+			advCr = ControlEvaluator.evaluateControlsUnreadable(vcControls,
+					resourceName);
+			noteUnreadable(resourceName, "vcenter-settings-unreadable: "
+					+ e.getClass().getSimpleName() + ": " + e.getMessage(),
+					advCr.unreadableCount);
+		}
+		ControlEvaluator.ComplianceResult vamiCr =
+				evaluateVamiForVCenter(vcControls, resourceName);
+		ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vamiCr);
+		logInfo("vCenter " + resourceName + " [" + d.profileName + "]: score="
+				+ String.format("%.1f", cr.score) + "% ("
+				+ cr.passCount + " pass, " + cr.failCount + " fail, "
+				+ cr.unreadableCount + " unreadable, "
+				+ cr.totalCount + " total)");
+
+		cs.unreadable += cr.unreadableCount;
+		rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER, d.bucket,
+				cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
+
+		if (resourceId != null) {
+			pushComplianceViaClient(resourceId, cr, d.profileName);
+			logInfo("Pushed vCenter compliance data to " + he.hostName
+					+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
+					+ ")");
+		}
+		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs,
+				ComplianceDecisions.pushedIds(cr));
+		return he;
 	}
 
-	private DvsStats collectDvs(BenchmarkProfile profile) {
-		DvsStats stats = new DvsStats();
+	private void collectDvs(BenchmarkSelector selector, String vcVersion,
+			ComplianceRollup rollup, CycleStats cs,
+			java.util.Set<String> seen) {
+		if (stitcher == null) return;   // nothing to push onto; skip the reads
 		java.util.List<VSphereClient.DvsInfo> switches;
 		try {
 			switches = vsphere.getDvSwitches();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVS: " + e.getMessage());
-			return stats;
+			rollup.markIncomplete(BenchmarkSelector.Kind.VDS);
+			return;
 		}
 		if (switches.isEmpty()) {
 			logInfo("No DVS returned from vCenter SOAP");
-			return stats;
+			return;
 		}
 		logInfo("vSphere SOAP: " + switches.size() + " DVS");
-
-		java.util.List<BenchmarkProfile.Control> dvsControls =
-				profile.dvsControls();
-		int evaluableCount = countEvaluable(dvsControls, "vim_property");
-
 		for (VSphereClient.DvsInfo dvs : switches) {
-			stats.total++;
-			if (stitcher == null) continue;
-			ComplianceStitcher.HostEntry he =
-					stitcher.matchDvs(dvs.name, dvs.moid);
-			if (he == null) continue;
-
-			if (evaluableCount == 0) {
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			java.util.Map<String, Object> secPol;
-			try {
-				secPol = vsphere.readVimProperties(dvs.moRef, dvsControls);
-			} catch (Exception e) {
-				logWarn("Failed to read vim properties for DVS " + dvs.name
-						+ ": " + e.getMessage());
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			ControlEvaluator.ComplianceResult cr =
-					ControlEvaluator.evaluateVimProperties(
-							dvsControls, secPol, dvs.name,
-							VSphereClient.UNREADABLE);
-			stats.unreadable += cr.unreadableCount;
-			pushOrProfileName(he.resourceId, cr, profile.name);
+			cs.dvs++;
+			ComplianceStitcher.HostEntry he = stitcher.matchDvs(dvs.name,
+					dvs.moid);
+			collectVimObject(BenchmarkSelector.Kind.VDS, dvs.moRef, dvs.name,
+					dvs.moid, he, selector, vcVersion, rollup, cs, seen);
 		}
-		return stats;
 	}
 
-	private DvpgStats collectDvpg(BenchmarkProfile profile) {
-		DvpgStats stats = new DvpgStats();
+	private void collectDvpg(BenchmarkSelector selector, String vcVersion,
+			ComplianceRollup rollup, CycleStats cs,
+			java.util.Set<String> seen) {
+		if (stitcher == null) return;
 		java.util.List<VSphereClient.DvpgInfo> pgs;
 		try {
 			pgs = vsphere.getDvPortgroups();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVPG: " + e.getMessage());
-			return stats;
+			rollup.markIncomplete(BenchmarkSelector.Kind.PORTGROUP);
+			return;
 		}
 		if (pgs.isEmpty()) {
 			logInfo("No DVPG returned from vCenter SOAP");
-			return stats;
+			return;
 		}
 		logInfo("vSphere SOAP: " + pgs.size() + " DVPG");
-
-		java.util.List<BenchmarkProfile.Control> dvpgControls =
-				profile.dvpgControls();
-		int evaluableCount = countEvaluable(dvpgControls, "vim_property");
-
 		for (VSphereClient.DvpgInfo pg : pgs) {
-			stats.total++;
-			if (stitcher == null) continue;
-			ComplianceStitcher.HostEntry he =
-					stitcher.matchDvpg(pg.name, pg.moid);
-			if (he == null) continue;
-
-			if (evaluableCount == 0) {
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			java.util.Map<String, Object> secPol;
-			try {
-				secPol = vsphere.readVimProperties(pg.moRef, dvpgControls);
-			} catch (Exception e) {
-				logWarn("Failed to read vim properties for DVPG " + pg.name
-						+ ": " + e.getMessage());
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			ControlEvaluator.ComplianceResult cr =
-					ControlEvaluator.evaluateVimProperties(
-							dvpgControls, secPol, pg.name,
-							VSphereClient.UNREADABLE);
-			stats.unreadable += cr.unreadableCount;
-			pushOrProfileName(he.resourceId, cr, profile.name);
+			cs.dvpg++;
+			ComplianceStitcher.HostEntry he = stitcher.matchDvpg(pg.name,
+					pg.moid);
+			collectVimObject(BenchmarkSelector.Kind.PORTGROUP, pg.moRef,
+					pg.name, pg.moid, he, selector, vcVersion, rollup, cs,
+					seen);
 		}
-		return stats;
 	}
 
 	/**
-	 * ClusterComputeResource (vSAN) collector. Walks every cluster, probes
-	 * vSAN presence (non-vSAN clusters get profile_name only — vSAN controls
-	 * are genuinely N/A, not a coverage gap), reads the small slice of vSAN
-	 * config plain vim25 exposes, and evaluates. The bulk of SCG's cluster
-	 * controls require the vSAN Management SDK (not on this classpath) and
-	 * stay manual_audit — CLASSPATH GAP, documented in the build report.
+	 * ClusterComputeResource (vSAN) collector. Non-vSAN clusters get
+	 * profile_name only: vSAN controls are genuinely N/A, not a coverage
+	 * gap. Most SCG cluster controls need the vSAN Management SDK (not on
+	 * this classpath) and stay manual_audit (CLASSPATH GAP).
 	 */
-	private ClusterStats collectClusters(BenchmarkProfile profile) {
-		ClusterStats stats = new ClusterStats();
+	private void collectClusters(BenchmarkSelector selector, String vcVersion,
+			ComplianceRollup rollup, CycleStats cs,
+			java.util.Set<String> seen) {
+		if (stitcher == null) return;
 		java.util.List<VSphereClient.ClusterInfo> clusters;
 		try {
 			clusters = vsphere.getClusters();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate ClusterComputeResource: "
 					+ e.getMessage());
-			return stats;
+			rollup.markIncomplete(BenchmarkSelector.Kind.CLUSTER);
+			return;
 		}
 		if (clusters.isEmpty()) {
 			logInfo("No ClusterComputeResource returned from vCenter SOAP");
-			return stats;
+			return;
 		}
 		logInfo("vSphere SOAP: " + clusters.size()
 				+ " ClusterComputeResource");
-
-		java.util.List<BenchmarkProfile.Control> clusterControls =
-				profile.clusterControls();
-		int evaluableCount = countEvaluable(clusterControls, "vim_property");
-
 		for (VSphereClient.ClusterInfo cluster : clusters) {
-			stats.total++;
-			if (stitcher == null) continue;
-			ComplianceStitcher.HostEntry he =
-					stitcher.matchCluster(cluster.name, cluster.moid);
-			if (he == null) continue;
-
-			if (evaluableCount == 0) {
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			boolean vsanPresent;
-			try {
-				vsanPresent = vsphere.hasVsanConfig(cluster.moRef);
-			} catch (Exception e) {
-				logWarn("Failed to probe vSAN config for cluster "
-						+ cluster.name + ": " + e.getMessage());
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-			if (!vsanPresent) {
-				logInfo("Cluster " + cluster.name + " has no vsanConfigInfo "
-						+ "(non-vSAN cluster), pushing profile_name only");
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			java.util.Map<String, Object> vsanCfg;
-			try {
-				vsanCfg = vsphere.readVimProperties(
-						cluster.moRef, clusterControls);
-			} catch (Exception e) {
-				logWarn("Failed to read vSAN config for cluster "
-						+ cluster.name + ": " + e.getMessage());
-				pushProfileNamePropertyOnly(he.resourceId, profile.name);
-				continue;
-			}
-
-			ControlEvaluator.ComplianceResult cr =
-					ControlEvaluator.evaluateVimProperties(
-							clusterControls, vsanCfg, cluster.name,
-							VSphereClient.UNREADABLE);
-			stats.unreadable += cr.unreadableCount;
-			pushOrProfileName(he.resourceId, cr, profile.name);
+			cs.clusters++;
+			ComplianceStitcher.HostEntry he = stitcher.matchCluster(
+					cluster.name, cluster.moid);
+			collectVimObject(BenchmarkSelector.Kind.CLUSTER, cluster.moRef,
+					cluster.name, cluster.moid, he, selector, vcVersion,
+					rollup, cs, seen);
 		}
-		return stats;
+	}
+
+	/**
+	 * Shared body for the vim-property kinds (vDS, portgroup, cluster), all
+	 * governed by the vCenter version (the object's own version, e.g. a vDS
+	 * at 9.0.0 under a 9.1.1 vCenter, is deliberately not read). Evaluated
+	 * whether or not the VMWARE resource is matched this cycle, so the
+	 * rollup counts every inventory object. A FAILED read (vim properties,
+	 * or the cluster vSAN probe) folds every evaluable control to UNREADABLE.
+	 */
+	private void collectVimObject(BenchmarkSelector.Kind kind,
+			VSphereClient.MoRef moRef, String name, String moid,
+			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
+			String vcVersion, ComplianceRollup rollup, CycleStats cs,
+			java.util.Set<String> seen) {
+		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
+		String resourceId = he == null ? null : he.resourceId;
+
+		ComplianceDecisions.Decision d = decide(selector, kind, moid,
+				BenchmarkSelector.governingVersion(kind, vcVersion, null));
+		if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+			recordVersionUnreadable(kind, name, d, resourceId, rollup, cs);
+			return;
+		}
+		if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
+			recordNoBenchmark(kind, name, moid, d, resourceId, rollup, cs);
+			return;
+		}
+		java.util.List<BenchmarkProfile.Control> controls =
+				ComplianceDecisions.sliceFor(d.profile, kind);
+		ControlEvaluator.ComplianceResult cr;
+		// Review N4: gate on vim_property AND esxcli, the same kinds
+		// BenchmarkSelector.evaluatedFor and the alert generator admit here.
+		if (countEvaluable(controls, "vim_property")
+				+ countEvaluable(controls, "esxcli") == 0) {
+			cr = emptyResult(name);
+		} else if (kind == BenchmarkSelector.Kind.CLUSTER) {
+			Boolean vsan = probeVsan(moRef, name);
+			if (vsan == null) {
+				cr = null;                    // probe failed: unreadable
+			} else if (!vsan) {
+				cr = emptyResult(name);       // non-vSAN: genuinely N/A
+			} else {
+				cr = readAndEvaluateVim(moRef, controls, name);
+			}
+		} else {
+			cr = readAndEvaluateVim(moRef, controls, name);
+		}
+		if (cr == null) {
+			cr = unreadableVimResult(controls, name);
+			noteUnreadable(name, lastObjectFailure, cr.unreadableCount);
+		}
+		cs.unreadable += cr.unreadableCount;
+		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
+				cr.unreadableCount, cr.score);
+		if (resourceId != null) {
+			pushOrProfileName(resourceId, cr, d.profileName);
+		}
+		afterPush(kind, moid, d, resourceId, cs,
+				ComplianceDecisions.pushedIds(cr));
+	}
+
+	/**
+	 * vSAN presence for a cluster: TRUE when vSAN is configured, FALSE for a
+	 * non-vSAN cluster (vSAN controls genuinely N/A), NULL when the probe
+	 * itself failed (unreadable, never "not vSAN").
+	 */
+	private Boolean probeVsan(VSphereClient.MoRef moRef, String name) {
+		try {
+			boolean enabled = vsphere.hasVsanConfig(moRef);
+			if (!enabled) {
+				logInfo("Cluster " + name + ": vSAN not enabled; vSAN "
+						+ "controls not applicable (profile_name only)");
+			}
+			return enabled;
+		} catch (Exception e) {
+			logWarn("Failed to probe vSAN config for cluster " + name + ": "
+					+ e.getMessage() + "; vSAN controls marked UNREADABLE");
+			lastObjectFailure = "vsan-probe-failed: " + e.getMessage();
+			return null;
+		}
+	}
+
+	/** Read + evaluate vim controls; null on a failed read (unreadable). */
+	private ControlEvaluator.ComplianceResult readAndEvaluateVim(
+			VSphereClient.MoRef moRef,
+			java.util.List<BenchmarkProfile.Control> controls, String name) {
+		java.util.Map<String, Object> values;
+		try {
+			values = vsphere.readVimProperties(moRef, controls);
+		} catch (Exception e) {
+			logWarn("Failed to read vim properties for " + name + ": "
+					+ e.getMessage() + "; controls marked UNREADABLE");
+			lastObjectFailure = "exception: " + e.getClass().getSimpleName()
+					+ ": " + e.getMessage();
+			return null;
+		}
+		noteReadReasons(name, controls, values, vsphere.lastReadReasons());
+		return ControlEvaluator.evaluateVimProperties(controls, values, name,
+				VSphereClient.UNREADABLE);
 	}
 
 	// ----- shared push / evaluation helpers -------------------------------
@@ -1182,14 +1447,66 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		try {
 			values = vsphere.readVimProperties(moRef, controls);
 		} catch (Exception e) {
+			// v3 cardinal fix: a failed read is UNREADABLE (counted, object
+			// non-compliant), not a silent skip that shrinks the denominator.
 			logWarn("Failed to read vim properties for " + resourceName + ": "
 					+ e.getMessage()
-					+ " — vim_property controls skipped this cycle "
-					+ "(advanced_setting results preserved)");
-			return emptyResult(resourceName);
+					+ ": vim_property / esxcli controls marked UNREADABLE this "
+					+ "cycle (advanced_setting results preserved)");
+			ControlEvaluator.ComplianceResult u =
+					unreadableVimResult(controls, resourceName);
+			noteUnreadable(resourceName, "exception: " + e.getClass()
+					.getSimpleName() + ": " + e.getMessage(), u.unreadableCount);
+			return u;
 		}
+		noteReadReasons(resourceName, controls, values,
+				vsphere.lastReadReasons());
 		return ControlEvaluator.evaluateVimProperties(
 				controls, values, resourceName, VSphereClient.UNREADABLE);
+	}
+
+	// ----- unreadable diagnostics (build 74) ------------------------------
+
+	/** This cycle's unreadable reasons; reset at the start of each cycle. */
+	private volatile UnreadableReasons cycleReasons = new UnreadableReasons();
+
+	/** Why the last whole-object vim read (or vSAN probe) failed. */
+	private volatile String lastObjectFailure;
+
+	private volatile com.integrien.alive.common.adapter3.Logger debugLog;
+
+	private void logDebug(String message) {
+		com.integrien.alive.common.adapter3.Logger l = debugLog;
+		if (l == null) {
+			l = componentLogger(ComplianceAdapter.class);
+			debugLog = l;
+		}
+		if (l != null && l.isDebugEnabled()) {
+			l.debug(message);
+		}
+	}
+
+	/** Record {@code count} unreadable controls on one object for a reason. */
+	private void noteUnreadable(String resourceName, String reason, int count) {
+		if (count <= 0) return;
+		cycleReasons.record(reason, count);
+		logDebug("Unreadable on " + resourceName + ": " + count
+				+ " control(s): " + reason);
+	}
+
+	/** Record the per-control reasons of one readVimProperties call. */
+	private void noteReadReasons(String resourceName,
+			java.util.List<BenchmarkProfile.Control> controls,
+			java.util.Map<String, Object> values,
+			java.util.Map<String, String> reasons) {
+		for (BenchmarkProfile.Control c : controls) {
+			if (values.get(c.parameter) != VSphereClient.UNREADABLE) continue;
+			String why = reasons.get(c.parameter);
+			if (why == null) why = "unknown: no reason recorded";
+			cycleReasons.record(why, 1);
+			logDebug("Unreadable " + c.controlId + " on " + resourceName
+					+ " (" + c.readRecipe + "): " + why);
+		}
 	}
 
 	private ControlEvaluator.ComplianceResult evaluateVamiForVCenter(
@@ -1202,43 +1519,43 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		VamiApiClient client = new VamiApiClient(
 				config.baseUrl(), config.username, config.password,
-				config.allowInsecure);
-
-		java.util.Map<String, Object> values = new java.util.HashMap<>();
-		for (BenchmarkProfile.Control c : controls) {
-			if (!"vami_api".equals(c.parameterKind) || !c.isEvaluable()) {
-				continue;
+				sslContextFor(config), this::logWarn);
+		try {
+			java.util.Map<String, Object> values = new java.util.HashMap<>();
+			for (BenchmarkProfile.Control c : controls) {
+				if (!"vami_api".equals(c.parameterKind) || !c.isEvaluable()) {
+					continue;
+				}
+				VamiRecipe r = VamiRecipe.parse(c.readRecipe);
+				if (r == null) {
+					values.put(c.configParameter, VSphereClient.UNREADABLE);
+					noteUnreadableControl(resourceName, c,
+							"recipe-malformed: " + c.readRecipe);
+					continue;
+				}
+				Object read = client.readField(r);
+				if (read == VamiApiClient.FAILED || read == null) {
+					values.put(c.configParameter, VSphereClient.UNREADABLE);
+					String why = client.failureReason(r.appliancePath, r.field);
+					noteUnreadableControl(resourceName, c,
+							why != null ? why : "vami-failed: " + c.readRecipe);
+				} else {
+					values.put(c.configParameter, read);
+				}
 			}
-			String[] parsed = parseVamiRecipe(c.readRecipe);
-			if (parsed == null) {
-				values.put(c.configParameter, VSphereClient.UNREADABLE);
-				continue;
-			}
-			Object read = client.readField(parsed[0], parsed[1]);
-			if (read == VamiApiClient.FAILED || read == null) {
-				values.put(c.configParameter, VSphereClient.UNREADABLE);
-			} else {
-				values.put(c.configParameter, read);
-			}
+			return ControlEvaluator.evaluateVimProperties(
+					controls, values, resourceName, VSphereClient.UNREADABLE);
+		} finally {
+			// Build 74: end the appliance session every cycle.
+			client.close();
 		}
-
-		return ControlEvaluator.evaluateVimProperties(
-				controls, values, resourceName, VSphereClient.UNREADABLE);
 	}
 
-	private static String[] parseVamiRecipe(String recipe) {
-		if (recipe == null) return null;
-		String r = recipe.trim();
-		if (!r.startsWith("vami:")) return null;
-		String rest = r.substring("vami:".length());
-		int lastColon = rest.lastIndexOf(':');
-		if (lastColon <= 0 || lastColon >= rest.length() - 1) {
-			return null;
-		}
-		String appliancePath = rest.substring(0, lastColon).trim();
-		String field = rest.substring(lastColon + 1).trim();
-		if (appliancePath.isEmpty() || field.isEmpty()) return null;
-		return new String[]{appliancePath, field};
+	private void noteUnreadableControl(String resourceName,
+			BenchmarkProfile.Control c, String why) {
+		cycleReasons.record(why, 1);
+		logDebug("Unreadable " + c.controlId + " on " + resourceName + " ("
+				+ c.readRecipe + "): " + why);
 	}
 
 	/** Zero-count, score=100 sentinel result (no controls evaluated). */
@@ -1259,9 +1576,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.List<ControlEvaluator.ControlResult> merged =
 				new java.util.ArrayList<>(a.controlResults);
 		merged.addAll(b.controlResults);
-		double score = total > 0 ? ((double) pass / total) * 100.0 : 100.0;
-		return new ControlEvaluator.ComplianceResult(
-				a.hostname, pass, fail, total, unreadable, score, merged);
+		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
+				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				merged);
 	}
 
 	private static int countEvaluable(
@@ -1273,109 +1590,63 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		return n;
 	}
 
+	/**
+	 * An object with a benchmark but nothing evaluable against it (non-vSAN
+	 * cluster, a slice with zero evaluable controls): profile_name, both
+	 * flags 0, and zeroed counters (review W2) so a previous cycle's values
+	 * never linger. No score (never a sentinel).
+	 */
 	private void pushProfileNamePropertyOnly(String resourceId,
 			String profileName) {
 		long ts = System.currentTimeMillis();
-		java.util.LinkedHashMap<String, String> props =
-				new java.util.LinkedHashMap<>();
-		props.put("VCF-CF Compliance|profile_name", profileName);
-		stitcher.pushProperties(resourceId, props, ts);
+		stitcher.pushProperties(resourceId,
+				ComplianceDecisions.profileNameProps(profileName), ts);
+		stitcher.pushStats(resourceId,
+				ComplianceDecisions.nothingEvaluatedStats(), ts);
 		logInfo("Pushed profile_name='" + profileName + "' to resource="
 				+ resourceId);
 	}
 
 	/**
-	 * Publish first-class rollups + per-control raw onto a matched VMWARE
-	 * resource. Key set and value semantics match v1 (the golden-comparison
-	 * contract) for every resource that evaluated at least one control
-	 * ({@code totalCount > 0}).
-	 *
-	 * <p><b>Build 48 score gate (deviation from byte-identical v1).</b> When
-	 * {@code totalCount == 0} — every control unreadable, or a profile slice
-	 * with zero evaluable controls — {@code score} / {@code pass_count} /
-	 * {@code fail_count} are OMITTED rather than pushed as the zero-divisor
-	 * sentinel {@code score=100}. Only {@code total_count=0} +
-	 * {@code unreadable_count} are pushed, so the per-host compliance symptoms
-	 * see "no data" rather than a flattering green sentinel (the cardinal
-	 * "unreadable is NOT compliant" rule). This is intentionally NOT
-	 * byte-identical to v1 for the {@code totalCount == 0} corner; v1 emitted
-	 * the sentinel. No shipped profile produces a healthy host/VM with zero
-	 * evaluable controls (every resource carries many advanced_setting + vim
-	 * controls), so on real data this gate only ever fires for genuinely
-	 * unreadable resources.
+	 * A readable version with no SCG in this pak (Auto mode):
+	 * profile_name = "no benchmark for <product> X.Y", no_benchmark = 1,
+	 * non_compliant = 0, counters zeroed (review W2), no score and no
+	 * per-control results.
+	 */
+	private void pushNoBenchmark(String resourceId, String label) {
+		long ts = System.currentTimeMillis();
+		stitcher.pushProperties(resourceId,
+				ComplianceDecisions.profileNameProps(label), ts);
+		stitcher.pushStats(resourceId, ComplianceDecisions.noBenchmarkStats(),
+				ts);
+	}
+
+	/**
+	 * Publish per-control results and aggregates onto a matched VMWARE
+	 * resource. Keys are profile-free
+	 * ({@code VCF-CF Compliance|<control_id>|...}); the payload is built by
+	 * {@link ComplianceDecisions#complianceStats} /
+	 * {@link ComplianceDecisions#complianceProps}: Compliant 1 / 0 / -1,
+	 * score whenever a control was attempted (build 63: unreadable counts
+	 * as failing),
+	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.
 	 */
 	private void pushComplianceViaClient(String resourceId,
 			ControlEvaluator.ComplianceResult cr, String profileName) {
 		long ts = System.currentTimeMillis();
-		String prefix = "VCF-CF Compliance|" + profileName;
-
-		java.util.LinkedHashMap<String, String> props =
-				new java.util.LinkedHashMap<>();
-		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
-			String ctrlPrefix = prefix + "|" + ctrl.scgId;
-			props.put(ctrlPrefix + "|Actual", ctrl.actual);
-			props.put(ctrlPrefix + "|Expected", ctrl.expected);
-			props.put(ctrlPrefix + "|Description", ctrl.description);
-		}
-		props.put("VCF-CF Compliance|profile_name", profileName);
-
-		java.util.LinkedHashMap<String, Double> stats =
-				new java.util.LinkedHashMap<>();
-		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
-			String ctrlPrefix = prefix + "|" + ctrl.scgId;
-			stats.put(ctrlPrefix + "|Compliant", ctrl.compliant ? 1.0 : 0.0);
-		}
-		// Build 48 — no-sentinel per-resource push. A totalCount==0 result is
-		// a host nothing could be scored on (every control unreadable); its
-		// cr.score is the zero-divisor sentinel 100.0 from
-		// evaluateControlsUnreadable. Pushing that sentinel as
-		// VCF-CF Compliance|score lands a green "100" on the resource and the
-		// per-host compliance symptoms (LT 95 / LT 80) read it as fully
-		// compliant -> a blind host masquerades as perfect. Mirror the world
-		// rollup's scored>0 discipline (line ~330): when totalCount==0, OMIT
-		// score/pass_count/fail_count entirely and push only total_count=0 +
-		// unreadable_count, so the symptoms see 'no data', not a sentinel.
-		// Absent is the only honest per-resource value here (score=0 would
-		// false-trip CRITICAL and is equally dishonest).
-		if (cr.totalCount > 0) {
-			stats.put("VCF-CF Compliance|score", cr.score);
-			stats.put("VCF-CF Compliance|pass_count", (double) cr.passCount);
-			stats.put("VCF-CF Compliance|fail_count", (double) cr.failCount);
-		}
-		stats.put("VCF-CF Compliance|total_count", (double) cr.totalCount);
-		stats.put("VCF-CF Compliance|unreadable_count",
-				(double) cr.unreadableCount);
-
-		stitcher.pushProperties(resourceId, props, ts);
-		stitcher.pushStats(resourceId, stats, ts);
+		stitcher.pushProperties(resourceId,
+				ComplianceDecisions.complianceProps(cr, profileName), ts);
+		stitcher.pushStats(resourceId, ComplianceDecisions.complianceStats(cr),
+				ts);
 	}
 
-	// ----- per-kind stat holders ------------------------------------------
-
-	private static final class HostStats {
-		int total; int scored; double scoreSum; int belowThreshold;
-		int unreadable;
-		// Build 50 (review W1): count of hosts whose contribution to
-		// avg_host_score came from lastKnownHostScore this cycle (i.e. the host
-		// was channel-unreadable but folded its last-known score). 0 when every
-		// scored host was read live this cycle. Subset of `scored`.
-		int staleScored;
+	/** Per-cycle counters for the completion log line. */
+	private static final class CycleStats {
+		int hosts; int vms; int dvs; int dvpg; int clusters;
+		int noBenchmark; int versionUnreadable; int unreadable;
+		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
+		int cleanupQueried; int cleanupRequests; int cleanupValues;
 	}
-
-	private static final class VmStats {
-		int total; int scored; double scoreSum; int belowThreshold;
-		int unreadable;
-	}
-
-	private static final class VCenterStats {
-		boolean matched;
-		int total; int scored; double scoreSum; int belowThreshold;
-		int unreadable;
-	}
-
-	private static final class DvsStats { int total; int unreadable; }
-	private static final class DvpgStats { int total; int unreadable; }
-	private static final class ClusterStats { int total; int unreadable; }
 
 	// -----------------------------------------------------------------------
 	// onDiscard

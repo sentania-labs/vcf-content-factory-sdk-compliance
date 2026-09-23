@@ -1,6 +1,6 @@
 # VCF Content Factory Compliance — Reference
 
-Generated from `describe.xml` and `resources.properties` for build 1.0.0.50.
+Generated from `describe.xml` and `resources.properties`.
 
 ## Adapter
 
@@ -23,7 +23,7 @@ Generated from `describe.xml` and `resources.properties` for build 1.0.0.50.
 | Field | Key | Default | Required |
 |---|---|---|---|
 | vCenter Host / IP | `vcenter_host` | — | Yes |
-| Compliance Profile | `benchmark_profile` | VMware_SCG_8.0 | Yes |
+| Compliance Profile | `benchmark_profile` | Auto (by version) | Yes |
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | — | No |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | false | No |
 
@@ -39,11 +39,11 @@ Generated from `describe.xml` and `resources.properties` for build 1.0.0.50.
 
 | Key | Label | Type | Unit | Monitored |
 |---|---|---|---|---|
-| `total_hosts` | Total Hosts Scanned | metric | — | yes |
-| `avg_host_score` | Average Host Compliance Score | metric | % | yes |
-| `hosts_below_threshold` | Hosts Below Threshold | metric | — | yes |
-| `hosts_scored_stale` | Hosts Scored From Stale Cache | metric | — | yes |
-| `profile_name` | Active Profile | property | — | — |
 | `last_scan_timestamp` | Last Scan Timestamp | property | — | — |
 
 ---
+
+The keys the adapter pushes onto VMWARE resources (per control, per
+object, and the per-vCenter rollup) are not declared in describe.xml;
+they are listed in the repo README under "Keys pushed onto VMWARE
+resources".

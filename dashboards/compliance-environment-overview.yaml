@@ -1,0 +1,303 @@
+id: 155743b0-15e0-40e4-acd3-05f68f8684d4
+name: "[VCF Content Factory] Compliance Environment Overview"
+description: >
+  Top-level page of the compliance four-dashboard set. Answers how
+  compliant the environment is, which object types and vCenters drag it
+  down, and which SCG versions are in play, all without a click.
+  Replaces the retired Compliance Fleet Overview (its ComplianceWorld
+  Summary metrics are last-writer-wins across the three adapter
+  instances sharing one ComplianceWorld; this dashboard reads
+  per-vCenter rollups stitched onto each VMWARE VMwareAdapter Instance
+  instead, plus environment-wide super metrics on vSphere World). The
+  per-kind dashboards (ESX Hosts, VMs, vCenter & Networking) are where
+  a user acts on a single object. See
+  knowledge/designs/dashboards/compliance-environment-overview.md.
+
+released: false
+version: "1.0.0"
+hidden: true
+
+widgets:
+
+  # ── W1: Environment Compliance scoreboard (self-provider, pinned
+  #     vSphere World) ─────────────────────────────────────────────────
+
+  - id: env_compliance_scoreboard
+    type: Scoreboard
+    title: "Environment Compliance"
+    coords: {x: 1, y: 1, w: 8, h: 4}
+    self_provider: true
+    pin:
+      adapter_kind: VMWARE
+      resource_kind: "vSphere World"
+    box_columns: 4
+    metrics:
+      # Average Score: lower is worse. Scoreboard color thresholds are
+      # ascending-only (>= yellow/orange/red = worse; see loader
+      # MetricSpec docstring and knowledge/lessons/
+      # scoreboard-partial-bounds-render-unknown.md), so the wireframe's
+      # "red < 80, orange < 90, yellow < 95" cannot be expressed here.
+      # Left uncolored (color_method: 1). Reported as a TOOLSET GAP.
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_a3292c87-15b7-4fcd-beea-1b4510b3ca02"
+        metric_name: "[VCF Content Factory] Compliance Average Score"
+        label: "Average Score"
+        unit: "%"
+        color_method: 1
+      # Non-Compliant Objects: higher is worse, matches Scoreboard's
+      # native ascending semantics. Wireframe specifies only "yellow >=
+      # 1"; orange/red steps below are authored judgment (not in the
+      # wireframe), scaled for an environment-wide count.
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_349307c4-2af7-4d83-90d2-1ad4f60138bf"
+        metric_name: "[VCF Content Factory] Compliance Non-Compliant Objects"
+        label: "Non-Compliant"
+        color_method: 0
+        yellow_bound: 1
+        orange_bound: 5
+        red_bound: 20
+      # Without Benchmark: wireframe specifies only "orange >= 1"; yellow
+      # is set equal to orange so any count at all is at least orange
+      # (an object with no matching SCG is a coverage gap, not a soft
+      # warning). Red step is authored judgment.
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_8200eed9-6aa3-480d-bd7e-2b1fa81b8ee5"
+        metric_name: "[VCF Content Factory] Compliance Objects Without Benchmark"
+        label: "Without Benchmark"
+        color_method: 0
+        yellow_bound: 1
+        orange_bound: 1
+        red_bound: 5
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_c72131ad-ee25-4e89-8190-1c93d78eeb5a"
+        metric_name: "[VCF Content Factory] Compliance Objects Scored"
+        label: "Objects Scored"
+        color_method: 1
+
+  # ── W2: About this dashboard ─────────────────────────────────────────
+
+  - id: about_text
+    type: TextDisplay
+    title: "About This Dashboard"
+    coords: {x: 9, y: 1, w: 4, h: 4}
+    text: >
+      <p><b>Non-compliant</b> means an object has at least one failing
+      or unreadable control. Unreadable counts as non-compliant, never
+      as passing.</p>
+      <p><b>Without benchmark</b> means the object's version has no
+      matching Security Configuration Guide in this pak; it is counted,
+      never scored.</p>
+      <p>Drill into a single object type: Compliance ESX Hosts,
+      Compliance VMs, Compliance vCenter &amp; Networking.</p>
+
+  # ── W3/W4: per-vCenter rollups (self-provider, pinned vSphere World,
+  #     children VMwareAdapter Instance) ───────────────────────────────
+
+  - id: vcenter_object_type_view
+    type: View
+    title: "Compliance by vCenter and Object Type"
+    coords: {x: 1, y: 5, w: 12, h: 8}
+    self_provider: true
+    # Owner decision: keep the default (true) explicit so W6 populates
+    # with the first vCenter's alerts on load instead of sitting blank.
+    select_first_row: true
+    pin:
+      adapter_kind: VMWARE
+      resource_kind: "vSphere World"
+    view: "[VCF Content Factory] Compliance by vCenter and Object Type"
+
+  - id: scg_version_view
+    type: View
+    title: "Objects by SCG Version"
+    coords: {x: 1, y: 13, w: 6, h: 7}
+    self_provider: true
+    pin:
+      adapter_kind: VMWARE
+      resource_kind: "vSphere World"
+    view: "[VCF Content Factory] Compliance Objects by SCG Version"
+
+  # ── W5: Environment Score Trend (self-provider, pinned vSphere World)
+
+  - id: env_score_trend
+    type: MetricChart
+    title: "Environment Score Trend"
+    coords: {x: 7, y: 13, w: 6, h: 7}
+    self_provider: true
+    pin:
+      adapter_kind: VMWARE
+      resource_kind: "vSphere World"
+    metrics:
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_a3292c87-15b7-4fcd-beea-1b4510b3ca02"
+        metric_name: "[VCF Content Factory] Compliance Average Score"
+        color_method: 2
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+        metric_key: "Super Metric|sm_349307c4-2af7-4d83-90d2-1ad4f60138bf"
+        metric_name: "[VCF Content Factory] Compliance Non-Compliant Objects"
+        color_method: 2
+
+  # ── W6: Open Compliance Alerts (interaction-driven from W3; all 144
+  #     generated per-control compliance alerts, the hand-written
+  #     "Host Compliance Score Degraded" alert is deliberately excluded)
+
+  - id: open_compliance_alerts
+    type: AlertList
+    title: "Open Compliance Alerts"
+    coords: {x: 1, y: 20, w: 12, h: 7}
+    criticality: [2, 3, 4]
+    mode: all
+    depth: 1
+    alert_definitions:
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_managed_disk_claim"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_mac_learning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reset_port"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_vgt"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_auto_unlock_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_dcui"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout_duration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout_max_attempts"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_history"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_max_days"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_policies"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_vpxuser"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ad_admin_group_autoadd"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ad_admin_validate_interval"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_api_soap_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ceip_disable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_cpu_hyperthread_warning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_dcui_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_cim"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_mob"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_shell"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_slp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_snmp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_disable_accounts_dcui"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_firewall_incoming_default"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_forensic_snapshots"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_hardware_virtual_nic"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_host_client_session_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_hw_virtual_nic"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_key_persistence"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_lockdown_dcui_access"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_lockdown_mode"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_local"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_local_capacity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_filter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_forwarding_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_forwarding_tls_x509"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_level"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_local"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_local_capacity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_remote"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_filter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_level"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_remote_tls"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_remote_tls_x509"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_memeagerzero"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_memory_tiering_encryption"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_bpdu"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_dvfilter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_rpf_promisc"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_password_complexity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_password_max_age"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_secureboot_enforcement"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_session_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_interactive_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_warning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_snmp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_fips_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_gateway_ports"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_host_based_auth"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_idle_timeout_count"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_idle_timeout_interval"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_login_banner"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_rhosts"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_stream_local_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_tcp_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_tunnels"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_user_environment"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_timekeeping_services"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_timekeeping_sources"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_profile"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_protocols"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tpm_configuration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tpm_trusted_binaries"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_transparent_page_sharing"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vib_trusted_binaries"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vmotion_encryption_offload"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_events_remote_logging"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_fips_enable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_log_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_logs_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_tls_profile"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_access_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_administration_password_expiration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_password_max_age"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_syslog"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_length"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_rotation"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_nioc"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_netflow_usage"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_port_mirroring"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_copy"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_paste"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_shrink"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_wiper"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_non_essential_3d_features"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_dvfilter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_efi_boot_types"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_ft_encrypted"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_device_connectable_deactivate"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_tools_dnd_deactivate"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_console_connections"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_setinfo_size"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_enable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_retention"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_rotation_size"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_minimize_console_vnc_use"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_pci_passthrough"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_restrict_host_info"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_secure_boot"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_transparentpagesharing_inter_vm_enabled"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_virtual_hardware"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmotion_encrypted"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmrc_lock"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_host"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vm"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vcenter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_cluster"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vds"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_portgroup"
+
+interactions:
+  - from: vcenter_object_type_view
+    to: open_compliance_alerts
+    type: resourceId

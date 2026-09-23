@@ -11,9 +11,10 @@
   credentials). The account needs **read-only** access — the adapter only
   reads configuration; it performs no writes or remediation.
 - One or more **compliance benchmark profiles**. The pack bundles the
-  VMware Security Configuration Guide (SCG) 8.0, 9.0, and 9.1; a custom
-  profile is supplied as a canonical-schema CSV staged on the collector
-  appliance.
+  VMware Security Configuration Guide (SCG) 6.7, 7.0, 8.0, 9.0, and 9.1
+  and by default (`Auto (by version)`) picks one per object by version;
+  a custom profile is supplied as a canonical-schema CSV staged on the
+  collector appliance.
 
 ## Permissions Required
 
@@ -69,8 +70,9 @@ for:
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile | `benchmark_profile` | Yes | — | Select a bundled SCG profile (8.0 / 9.0 / 9.1), or `Custom`. |
+| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object, or `Custom`. Existing instances keep their stored choice on upgrade. |
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
+| Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Read-only access. |
 | Password | `password` | Yes | — | vCenter account password (masked). |
@@ -86,20 +88,39 @@ for:
    `allowInsecure=true`.
 6. Click **Validate Connection**, then **Add**.
 7. On the first collection cycle the adapter discovers its Compliance
-   World and begins pushing per-host results onto the existing VMWARE
-   HostSystem and vCenter resources.
+   World and begins pushing results onto the existing VMWARE hosts, VMs,
+   vCenter, clusters, distributed switches and portgroups.
+8. **Enable the four compliance super metrics.** Edit the policy active on
+   `vSphere World` (in the policy editor, Metrics and Properties, filter
+   on "Compliance") and enable
+   Compliance Objects Scored, Compliance Non-Compliant Objects, Compliance
+   Objects Without Benchmark and Compliance Average Score. Without this
+   the Environment Overview's score tiles and trend stay empty. Whether
+   the pak import already enables them is unconfirmed (to be checked at
+   the devel install); check and enable if needed.
+9. Open **[VCF Content Factory] Compliance Environment Overview**. The
+   four bundled dashboards:
+
+| Dashboard | What it is for |
+|---|---|
+| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
+| [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
 ## Troubleshooting
 
 - **vCenter SOAP fails with a TLS validation error** — the vCenter
   certificate is not trusted. Import it into the platform trust store, or
   set `allowInsecure=true`. See the TLS section.
-- **A host shows no compliance score / "no data"** — the host was
-  unreadable this cycle (e.g. disconnected or not responding). This is the
-  honest no-data state, not a failure to push; the adapter never
-  publishes a sentinel score for an unreadable host. Check host
-  connection state in vCenter.
-- **Fleet `hosts_scored_stale` is non-zero** — some hosts in the fleet
-  average were scored from a last-known cached value rather than a live
-  read this cycle. Expected transiently after a collector restart (the
-  cache re-warms) or while hosts are intermittently unreachable.
+- **"Compliance data not collected" alert, or a host scoring 0** (build
+  63): the adapter could not read some or all of the object's settings,
+  and unreadable settings count as failing. A disconnected or
+  not-responding host scores 0. Check the object's connection state in
+  vCenter, the adapter account's read permissions, and the adapter log for
+  read errors naming the object; `unreadable_count` and the controls whose
+  `Compliant` is -1 with Actual "(unreadable)" show which settings. The
+  alert clears on the first cycle in which everything is read.
+- **An object shows no compliance score / "no data"**: nothing was
+  attempted on it (its version has no bundled SCG, `no_benchmark` = 1, or
+  a non-vSAN cluster with no evaluable controls).

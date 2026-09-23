@@ -78,6 +78,19 @@ public final class VSphereClient {
 	private volatile MoRef settingOptionMgr;   // ServiceContent.setting
 	private volatile String aboutInstanceUuid;
 	private volatile String aboutFullName;
+	private volatile String aboutVersion;      // ServiceContent.about.version
+
+	// Build 74 diagnostics. lastFault: the faultstring (with HTTP status) of
+	// the most recent failed SOAP call. readFailure: why the current recipe
+	// read returned nothing, set at the point of failure (category first,
+	// see UnreadableReasons). lastReasons: parameter -> reason for the
+	// unreadable controls of the most recent readVimProperties call.
+	private volatile String lastFault;
+	private volatile String readFailure;
+	private final Map<String, String> lastReasons = new HashMap<>();
+	private final java.util.Set<String> warnedEsxciFields =
+			java.util.Collections.newSetFromMap(
+					new java.util.concurrent.ConcurrentHashMap<>());
 
 	// esxcli reader (build 36) — rides THIS vCenter session. Rebuilt on
 	// every (re)connect so it carries the live cookie and a fresh per-cycle
@@ -156,6 +169,7 @@ public final class VSphereClient {
 		if (about != null) {
 			this.aboutInstanceUuid = childText(about, "instanceUuid");
 			this.aboutFullName = childText(about, "fullName");
+			this.aboutVersion = childText(about, "version");
 		}
 		if (sessionManager == null || propertyCollector == null
 				|| rootFolder == null) {
@@ -204,6 +218,7 @@ public final class VSphereClient {
 		settingOptionMgr = null;
 		aboutInstanceUuid = null;
 		aboutFullName = null;
+		aboutVersion = null;
 		esxcli = null;
 	}
 
@@ -240,8 +255,8 @@ public final class VSphereClient {
 		ensureConnected();
 		List<HostInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("HostSystem")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new HostInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new HostInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " hosts");
 		if (result.isEmpty()) {
@@ -252,12 +267,38 @@ public final class VSphereClient {
 		return result;
 	}
 
+	/**
+	 * VMs with name and host MOID. Build 58 (review N1): {@code name} and
+	 * {@code runtime.host} come back in the ONE container-view
+	 * RetrieveProperties, not one extra round trip per VM. If the bulk read
+	 * returns nothing the pre-58 walk (listView + per-VM name) is used and
+	 * {@link VmInfo#hostRead} is false, so the caller reads the host per VM.
+	 */
 	public List<VmInfo> getVms() throws Exception {
 		ensureConnected();
 		List<VmInfo> result = new ArrayList<>();
-		for (MoRef ref : listView("VirtualMachine")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new VmInfo(ref, name, ref.value));
+		List<ViewRow> rows = null;
+		MoRef view = createContainerView("VirtualMachine");
+		if (view != null) {
+			try {
+				rows = retrieveViewRows(view, "VirtualMachine",
+						"name", "runtime.host");
+			} finally {
+				destroyViewQuietly(view);
+			}
+		}
+		if (rows != null && !rows.isEmpty()) {
+			for (ViewRow row : rows) {
+				String name = row.values.get("name");
+				if (name == null) name = nameOrMoid(row.ref);
+				result.add(new VmInfo(row.ref, name, row.ref.value,
+						row.values.get("runtime.host"), true));
+			}
+		} else {
+			for (MoRef ref : listView("VirtualMachine")) {
+				String name = nameOrMoid(ref);
+				result.add(new VmInfo(ref, name, ref.value));
+			}
 		}
 		logInfo("vSphere SOAP: " + result.size() + " VMs");
 		return result;
@@ -276,8 +317,8 @@ public final class VSphereClient {
 			refs = listView("DistributedVirtualSwitch");
 		}
 		for (MoRef ref : refs) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new DvsInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new DvsInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " DVS");
 		return result;
@@ -287,8 +328,8 @@ public final class VSphereClient {
 		ensureConnected();
 		List<DvpgInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("DistributedVirtualPortgroup")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new DvpgInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new DvpgInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " DVPG");
 		return result;
@@ -298,11 +339,28 @@ public final class VSphereClient {
 		ensureConnected();
 		List<ClusterInfo> result = new ArrayList<>();
 		for (MoRef ref : listView("ClusterComputeResource")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new ClusterInfo(ref, name, ref.value));
+			String name = nameOrMoid(ref);
+			result.add(new ClusterInfo(ref, name, ref.value));
 		}
 		logInfo("vSphere SOAP: " + result.size() + " Clusters");
 		return result;
+	}
+
+	/**
+	 * Build 77: an object's display name, or its MOID when the name read
+	 * fails (logged). An object is never dropped from inventory because one
+	 * property read faulted: it is still evaluated, and it still stitches by
+	 * MOID.
+	 */
+	private String nameOrMoid(MoRef ref) throws Exception {
+		String name = getStringProperty(ref, "name");
+		if (name == null) {
+			logWarn("vSphere SOAP: name of " + ref.type + " " + ref.value
+					+ " unreadable" + (lastFault != null ? " (" + lastFault + ")"
+					: "") + "; using its MOID");
+			return ref.value;
+		}
+		return name;
 	}
 
 	// -----------------------------------------------------------------------
@@ -380,19 +438,16 @@ public final class VSphereClient {
 	 */
 	public Map<String, String> getVmExtraConfig(MoRef vmRef) throws Exception {
 		ensureConnected();
-		Map<String, String> result = new HashMap<>();
-		Element val = getRawPropertyElement(vmRef, "config.extraConfig");
-		if (val == null) return result;
-		// extraConfig is an array of OptionValue; each child element carries
-		// <key> and <value>.
-		for (Element item : childElements(val)) {
-			String key = childText(item, "key");
-			String value = childText(item, "value");
-			if (key != null && value != null) {
-				result.put(key, value);
-			}
-		}
-		return result;
+		// Build 77: a failed read THROWS (VimOptions.ReadFault) instead of
+		// returning an empty map, which the evaluator would read as "nothing
+		// set" and pass every "X or Undefined" control. Empty now means only
+		// "read OK, property unset".
+		lastFault = null;
+		Document resp = retrieveProperties(vmRef.type, vmRef.value,
+				"config.extraConfig");
+		return VimOptions.fromPropertyOptions(resp, "config.extraConfig",
+				"RetrieveProperties config.extraConfig on " + vmRef.value,
+				lastFault);
 	}
 
 	/**
@@ -401,32 +456,30 @@ public final class VSphereClient {
 	 */
 	public Map<String, String> getVCenterAdvancedSettings() throws Exception {
 		ensureConnected();
-		if (settingOptionMgr == null) return new HashMap<>();
+		if (settingOptionMgr == null) {
+			// Build 77: no setting manager means the vCenter settings cannot
+			// be read at all; never an empty "nothing set" map.
+			throw new VimOptions.ReadFault("vCenter setting manager "
+					+ "(ServiceContent.setting) missing");
+		}
 		return queryOptions(settingOptionMgr);
 	}
 
 	private Map<String, String> queryOptions(MoRef optionMgr) throws Exception {
-		Map<String, String> result = new HashMap<>();
 		String body =
 				"<QueryOptions xmlns=\"urn:vim25\">"
 				+ "<_this type=\"" + xmlEscape(optionMgr.type) + "\">"
 				+ xmlEscape(optionMgr.value) + "</_this>"
 				+ "</QueryOptions>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/QueryOptions", true);
-		if (resp == null) return result;
-		// Each <returnval> is an OptionValue with <key> and <value>. Deep
-		// search — the returnvals are nested under Envelope > Body >
-		// QueryOptionsResponse, not direct children of the document element
-		// (build 44 fix, same defect class as the inventory walk).
-		for (Element rv : descendantsByLocalName(resp.getDocumentElement(),
-				"returnval")) {
-			String key = childText(rv, "key");
-			String value = childText(rv, "value");
-			if (key != null && value != null) {
-				result.put(key, value);
-			}
-		}
-		return result;
+		// Build 77: a SOAP fault (host stopped responding after the
+		// connection check, session fault) THROWS instead of returning an
+		// empty map; callers fold the advanced-setting controls to
+		// UNREADABLE. Returnvals are nested under Envelope > Body >
+		// QueryOptionsResponse (deep search, build 44).
+		return VimOptions.fromQueryOptions(resp,
+				"QueryOptions on " + optionMgr.value, lastFault);
 	}
 
 	// -----------------------------------------------------------------------
@@ -443,24 +496,73 @@ public final class VSphereClient {
 		return aboutFullName;
 	}
 
+	/**
+	 * v3: vCenter product version ({@code ServiceContent.about.version},
+	 * e.g. {@code "8.0.3"}). Governs benchmark choice for the vCenter,
+	 * clusters, distributed switches and portgroups. Null when the about
+	 * block carried no version (never guessed).
+	 */
+	public String getVCenterVersion() throws Exception {
+		ensureConnected();
+		return aboutVersion;
+	}
+
+	/**
+	 * v3: a host's ESX product version (e.g. {@code "8.0.3"} for 8.0 U3).
+	 * Reads {@code summary.config.product.version} first (vCenter keeps it
+	 * for disconnected hosts too), then {@code config.product.version}.
+	 * Null when neither resolves; the caller treats null as "version
+	 * unreadable", never as a default version.
+	 */
+	public String getHostProductVersion(MoRef hostRef) throws Exception {
+		ensureConnected();
+		if (hostRef == null) return null;
+		String v = getStringProperty(hostRef, "summary.config.product.version");
+		if (v == null) {
+			v = getStringProperty(hostRef, "config.product.version");
+		}
+		return v;
+	}
+
+	/**
+	 * v3: the MOID of the host a VM is registered on
+	 * ({@code runtime.host}). Null when unset (e.g. an orphaned VM).
+	 */
+	public String getVmHostMoid(MoRef vmRef) throws Exception {
+		ensureConnected();
+		if (vmRef == null) return null;
+		MoRef host = getMoRefProperty(vmRef, "runtime.host");
+		return host == null ? null : host.value;
+	}
+
 	// -----------------------------------------------------------------------
 	// vSAN presence probe (ClusterComputeResource.configurationEx)
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Whether a cluster has a vSAN config object at all. Distinguishes a
-	 * NON-vSAN cluster (vSAN controls genuinely N/A → skip silently) from a
-	 * vSAN cluster where a field read back null (a real coverage gap →
-	 * unreadable). Returns false when {@code configurationEx} or its
-	 * {@code vsanConfigInfo} child is absent. DOM walk; never casts.
+	 * Whether vSAN is ENABLED on a cluster (build 74: {@link VsanGate}).
+	 * False means the vSAN controls are not applicable (no score, no
+	 * unreadable). Throws when {@code configurationEx} cannot be read, so the
+	 * caller folds the controls to UNREADABLE. DOM walk; never casts.
 	 */
 	public boolean hasVsanConfig(MoRef clusterRef) throws Exception {
 		ensureConnected();
-		if (clusterRef == null) return false;
+		if (clusterRef == null) {
+			throw new Exception("no cluster MoRef");
+		}
 		Element configEx = getRawPropertyElement(clusterRef, "configurationEx");
-		if (configEx == null) return false;
-		Element vsanCfg = firstDirectChild(configEx, "vsanConfigInfo");
-		return vsanCfg != null;
+		if (configEx == null) {
+			// Build 74: every cluster has configurationEx; a null here is a
+			// FAILED read (SOAP fault / missing propSet), not "no vSAN".
+			// Throwing makes the caller fold the vSAN controls to
+			// UNREADABLE instead of quietly calling them not applicable.
+			throw new Exception("configurationEx unreadable"
+					+ (lastFault != null ? " (" + lastFault + ")" : ""));
+		}
+		// Build 74: vSAN enabled only when vsanConfigInfo/enabled is true.
+		// vCenter 9.x returns vsanConfigInfo (enabled=false) on non-vSAN
+		// clusters too, so "element present" scored them on vSAN controls.
+		return VsanGate.vsanEnabled(configEx);
 	}
 
 	// -----------------------------------------------------------------------
@@ -493,6 +595,9 @@ public final class VSphereClient {
 			List<BenchmarkProfile.Control> controls) throws Exception {
 		ensureConnected();
 		Map<String, Object> result = new HashMap<>();
+		synchronized (lastReasons) {
+			lastReasons.clear();
+		}
 		if (moRef == null || controls == null) return result;
 
 		for (BenchmarkProfile.Control c : controls) {
@@ -505,14 +610,38 @@ public final class VSphereClient {
 				continue;
 			}
 			Object value;
+			readFailure = null;
+			lastFault = null;
 			try {
 				value = readByRecipe(moRef, recipe.trim());
 			} catch (Exception e) {
 				value = null;
+				readFailure = "exception: " + e.getClass().getSimpleName()
+						+ ": " + e.getMessage();
+			}
+			if (value == null) {
+				String why = readFailure;
+				if (why == null) {
+					why = lastFault != null ? "soap-fault: " + lastFault
+							: "value-absent: " + recipe.trim();
+				}
+				synchronized (lastReasons) {
+					lastReasons.put(c.parameter, why);
+				}
 			}
 			result.put(c.parameter, value != null ? value : UNREADABLE);
 		}
 		return result;
+	}
+
+	/**
+	 * Build 74: parameter -> reason for each control the most recent
+	 * {@link #readVimProperties} call could not read (a copy).
+	 */
+	public Map<String, String> lastReadReasons() {
+		synchronized (lastReasons) {
+			return new HashMap<>(lastReasons);
+		}
 	}
 
 	/**
@@ -524,11 +653,15 @@ public final class VSphereClient {
 	Object readByRecipe(MoRef moRef, String recipe) throws Exception {
 		int colon = recipe.indexOf(':');
 		if (colon <= 0 || colon >= recipe.length() - 1) {
+			readFailure = "recipe-malformed: " + recipe;
 			return null;
 		}
 		String style = recipe.substring(0, colon).trim();
 		String path = recipe.substring(colon + 1).trim();
-		if (path.isEmpty()) return null;
+		if (path.isEmpty()) {
+			readFailure = "recipe-malformed: " + recipe;
+			return null;
+		}
 
 		// esxcli and service_state carry a three-part grammar; handle before
 		// the generic dotted-path split.
@@ -556,6 +689,7 @@ public final class VSphereClient {
 			case "vlan_id_not":
 				return readVlanIdNotRecipe(moRef, segments);
 			default:
+				readFailure = "recipe-unknown-style: " + style;
 				return null;   // unknown style -> UNREADABLE, never a guess
 		}
 	}
@@ -564,6 +698,7 @@ public final class VSphereClient {
 
 	private Object readEsxcliRecipe(MoRef moRef, String path) throws Exception {
 		if (esxcli == null) {
+			readFailure = "esxcli-unavailable: no esxcli session";
 			return null;
 		}
 		int sep = path.lastIndexOf(':');
@@ -598,8 +733,25 @@ public final class VSphereClient {
 		} else {
 			value = esxcli.readField(hostMoid, namespaceCommand, fieldSpec);
 		}
-		if (value == null
-				|| EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
+		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
+			readFailure = "esxcli-command-failed: " + namespaceCommand
+					+ (lastFault != null ? " (" + lastFault + ")" : "");
+			return null;
+		}
+		if (value == null) {
+			java.util.Set<String> have = esxcli.structFields(hostMoid,
+					namespaceCommand);
+			readFailure = "esxcli-field-missing: " + namespaceCommand + " "
+					+ fieldSpec + (have.isEmpty() ? "" : " (fields: " + have + ")");
+			// Build 74: say so once per (command, field) per collector
+			// session; field names for some rows come from the vendor audit
+			// script and are not yet confirmed on the wire.
+			if (warnedEsxciFields.add(namespaceCommand + "|" + fieldSpec)) {
+				logWarn("esxcli " + namespaceCommand + ": field '" + fieldSpec
+						+ "' not in the result" + (have.isEmpty() ? ""
+						: " (fields returned: " + have + ")")
+						+ "; controls reading it are UNREADABLE");
+			}
 			return null;
 		}
 		String trimmed = value.trim();
@@ -659,7 +811,11 @@ public final class VSphereClient {
 		Element node = walkToNode(moRef, segments);
 		if (node == null) return null;
 		String text = elementText(node);
-		return (text == null || text.isEmpty()) ? null : text;
+		if (text == null || text.isEmpty()) {
+			readFailure = "empty-value: " + String.join(".", segments);
+			return null;
+		}
+		return text;
 	}
 
 	/**
@@ -672,7 +828,11 @@ public final class VSphereClient {
 			throws Exception {
 		Element node = walkToNode(moRef, segments);
 		if (node == null) return null;
-		return parseBool(elementText(node));
+		Boolean b = parseBool(elementText(node));
+		if (b == null) {
+			readFailure = "unparsable-value: " + String.join(".", segments);
+		}
+		return b;
 	}
 
 	/**
@@ -839,9 +999,18 @@ public final class VSphereClient {
 		int[] consumed = new int[1];
 		Element node = getLongestPrefixElement(moRef, segments,
 				segments.length, consumed);
+		if (node == null) {
+			noteNoPrefix(segments);
+			return null;
+		}
 		for (int i = consumed[0]; i < segments.length; i++) {
-			if (node == null) return null;
-			node = firstDirectChild(node, segments[i]);
+			Element next = firstDirectChild(node, segments[i]);
+			if (next == null) {
+				readFailure = "missing-element: '" + segments[i] + "' in "
+						+ String.join(".", segments);
+				return null;
+			}
+			node = next;
 		}
 		return node;
 	}
@@ -857,11 +1026,27 @@ public final class VSphereClient {
 		int[] consumed = new int[1];
 		Element node = getLongestPrefixElement(moRef, segments,
 				segments.length - 1, consumed);
+		if (node == null) {
+			noteNoPrefix(segments);
+			return null;
+		}
 		for (int i = consumed[0]; i < segments.length - 1; i++) {
-			if (node == null) return null;
-			node = firstDirectChild(node, segments[i]);
+			Element next = firstDirectChild(node, segments[i]);
+			if (next == null) {
+				readFailure = "missing-element: '" + segments[i] + "' in "
+						+ String.join(".", segments);
+				return null;
+			}
+			node = next;
 		}
 		return node;
+	}
+
+	private void noteNoPrefix(String[] segments) {
+		readFailure = lastFault != null
+				? "soap-fault: " + lastFault + " (" + String.join(".", segments) + ")"
+				: "missing-element: no prefix of " + String.join(".", segments)
+						+ " resolved";
 	}
 
 	/**
@@ -985,7 +1170,10 @@ public final class VSphereClient {
 	 */
 	private List<MoRef> listView(String type) throws Exception {
 		MoRef view = createContainerView(type);
-		if (view == null) return new ArrayList<>();
+		if (view == null) {
+			throw new VimOptions.ReadFault("CreateContainerView(" + type
+					+ ") returned no view");
+		}
 		try {
 			return retrieveViewMembers(view, type);
 		} finally {
@@ -1003,8 +1191,13 @@ public final class VSphereClient {
 				+ "<type>" + xmlEscape(type) + "</type>"
 				+ "<recursive>true</recursive>"
 				+ "</CreateContainerView>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/CreateContainerView", true);
-		if (resp == null) return null;
+		if (resp == null) {
+			// Build 77: a failed view is not an empty inventory.
+			throw new VimOptions.ReadFault("CreateContainerView(" + type
+					+ ") failed" + (lastFault != null ? ": " + lastFault : ""));
+		}
 		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
 		if (rv == null) return null;
 		String val = elementText(rv);
@@ -1044,11 +1237,13 @@ public final class VSphereClient {
 				+ "</objectSet>"
 				+ "</specSet>"
 				+ "</RetrieveProperties>";
+		lastFault = null;
 		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
 		if (resp == null) {
-			logWarn("listView(" + type + "): RetrieveProperties returned no "
-					+ "response (HTTP error / SOAP fault) — 0 entities");
-			return refs;
+			// Build 77: a failed listing is not an empty inventory.
+			throw new VimOptions.ReadFault("listView(" + type + "): "
+					+ "RetrieveProperties failed"
+					+ (lastFault != null ? ": " + lastFault : ""));
 		}
 		// Deep search: <returnval> (ObjectContent) entries are nested under
 		// Envelope > Body > RetrievePropertiesResponse — NOT direct children of
@@ -1073,6 +1268,73 @@ public final class VSphereClient {
 			refs.add(ref);
 		}
 		return refs;
+	}
+
+	/** One container-view object with the text of the requested paths. */
+	private static final class ViewRow {
+		final MoRef ref;
+		final Map<String, String> values = new HashMap<>();
+		ViewRow(MoRef ref) { this.ref = ref; }
+	}
+
+	/**
+	 * RetrieveProperties over a container view for several property paths
+	 * at once. A MoRef-valued path yields its MOID text. Null on a failed
+	 * call (caller falls back); a path absent for an object is simply
+	 * missing from that row.
+	 */
+	private List<ViewRow> retrieveViewRows(MoRef view, String type,
+			String... paths) throws Exception {
+		StringBuilder pathSet = new StringBuilder();
+		for (String p : paths) {
+			pathSet.append("<pathSet>").append(xmlEscape(p)).append("</pathSet>");
+		}
+		String body =
+				"<RetrieveProperties xmlns=\"urn:vim25\">"
+				+ "<_this type=\"PropertyCollector\">"
+				+ xmlEscape(propertyCollector.value) + "</_this>"
+				+ "<specSet>"
+				+ "<propSet>"
+				+ "<type>" + xmlEscape(type) + "</type>"
+				+ pathSet
+				+ "</propSet>"
+				+ "<objectSet>"
+				+ "<obj type=\"ContainerView\">"
+				+ xmlEscape(view.value) + "</obj>"
+				+ "<skip>true</skip>"
+				+ "<selectSet xsi:type=\"TraversalSpec\">"
+				+ "<name>view</name>"
+				+ "<type>ContainerView</type>"
+				+ "<path>view</path>"
+				+ "<skip>false</skip>"
+				+ "</selectSet>"
+				+ "</objectSet>"
+				+ "</specSet>"
+				+ "</RetrieveProperties>";
+		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
+		if (resp == null) return null;
+		List<ViewRow> rows = new ArrayList<>();
+		for (Element rv : descendantsByLocalName(resp.getDocumentElement(),
+				"returnval")) {
+			Element obj = firstDirectChild(rv, "obj");
+			if (obj == null) continue;
+			String value = elementText(obj);
+			if (value == null || value.trim().isEmpty()) continue;
+			String t = obj.getAttribute("type");
+			ViewRow row = new ViewRow(new MoRef(
+					t != null && !t.isEmpty() ? t : type, value.trim()));
+			for (Element propSet : childrenByLocalName(rv, "propSet")) {
+				String name = childText(propSet, "name");
+				Element val = firstDirectChild(propSet, "val");
+				if (name == null || val == null) continue;
+				String text = elementText(val);
+				if (text != null && !text.trim().isEmpty()) {
+					row.values.put(name, text.trim());
+				}
+			}
+			rows.add(row);
+		}
+		return rows;
 	}
 
 	private void destroyViewQuietly(MoRef view) {
@@ -1147,10 +1409,29 @@ public final class VSphereClient {
 		byte[] respBytes = drain(is);
 		conn.disconnect();
 		if (code < 200 || code >= 300) {
+			// Build 74: remember why (diagnostics only; the fault string is
+			// vCenter's message, never contains credentials).
+			lastFault = "HTTP " + code + faultString(respBytes);
 			return null;   // SOAP fault (500) / auth failure -> null upstream
 		}
 		if (respBytes == null || respBytes.length == 0) return null;
 		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
+	}
+
+	private static final java.util.regex.Pattern FAULTSTRING =
+			java.util.regex.Pattern.compile(
+					"<faultstring>(.*?)</faultstring>",
+					java.util.regex.Pattern.DOTALL);
+
+	/** " <faultstring>" from a SOAP fault body, or "". */
+	static String faultString(byte[] body) {
+		if (body == null || body.length == 0) return "";
+		java.util.regex.Matcher m = FAULTSTRING.matcher(
+				new String(body, StandardCharsets.UTF_8));
+		if (!m.find()) return "";
+		String f = m.group(1).trim();
+		if (f.length() > 200) f = f.substring(0, 200) + "...";
+		return " " + f;
 	}
 
 	private void captureCookie(HttpURLConnection conn) {
@@ -1466,11 +1747,23 @@ public final class VSphereClient {
 		public final MoRef moRef;
 		public final String name;
 		public final String moid;
+		// Build 58: host MOID from the bulk enumeration (null when the VM
+		// has no host); hostRead=false means the bulk read was unavailable
+		// and the caller must read runtime.host itself.
+		public final String hostMoid;
+		public final boolean hostRead;
 
 		public VmInfo(MoRef moRef, String name, String moid) {
+			this(moRef, name, moid, null, false);
+		}
+
+		public VmInfo(MoRef moRef, String name, String moid, String hostMoid,
+				boolean hostRead) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
+			this.hostMoid = hostMoid;
+			this.hostRead = hostRead;
 		}
 	}
 

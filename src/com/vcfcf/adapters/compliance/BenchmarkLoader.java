@@ -60,53 +60,244 @@ public final class BenchmarkLoader {
 	 */
 	static final String READ_RECIPE_COLUMN = "read_recipe";
 
+	/**
+	 * Every bundled profile name, oldest SCG first. v3 (build 57) loads
+	 * all of them once for "Auto (by version)" mode and selects one per
+	 * object; the fixed choices force one of them for every object.
+	 */
+	public static final List<String> BUNDLED_PROFILES = Arrays.asList(
+			"VMware_SCG_6.7",
+			"VMware_SCG_7.0",
+			"VMware_SCG_8.0",
+			"VMware_SCG_9.0",
+			"VMware_SCG_9.1"
+	);
+
+	/**
+	 * v3 manual-review overlay, relative to the pak's {@code profiles/}
+	 * directory. Columns {@code profile,control_id,reason}. Each row demotes
+	 * one control of one BUNDLED profile to non-evaluable (see
+	 * {@link BenchmarkProfile.Control#asManualReview()}). Custom profiles
+	 * are never overlaid: their author owns their expected values.
+	 */
+	static final String MANUAL_REVIEW_FILE = "manual_review.csv";
+
 	private volatile BenchmarkProfile cachedProfile;
 	private volatile String cachedProfileKey;
 
+	// HOLD (build 74): "Read vCenter appliance settings". When false, every
+	// vami_api control loads as manual review (see ComplianceConfig
+	// .readApplianceSettings). Defaults to true here so the loader on its own
+	// (tests, tooling) reads profiles exactly as written; the adapter sets it
+	// from the instance configuration.
+	private volatile boolean applianceReads = true;
+
+	/** Set the appliance-read setting; the cache is rebuilt on change. */
+	public void setApplianceReads(boolean read) {
+		if (read != applianceReads) {
+			applianceReads = read;
+			invalidate();
+		}
+	}
+
+	/**
+	 * vami_api controls demoted to manual review when appliance reads are
+	 * off. Counted in {@link BenchmarkProfile#manualReviewCount} too.
+	 */
+	static List<BenchmarkProfile.Control> applyApplianceSetting(
+			List<BenchmarkProfile.Control> controls, boolean read) {
+		if (read) return controls;
+		List<BenchmarkProfile.Control> out = new ArrayList<>(controls.size());
+		for (BenchmarkProfile.Control c : controls) {
+			out.add("vami_api".equals(c.parameterKind) ? c.asManualReview() : c);
+		}
+		return out;
+	}
+
+	private volatile Map<String, BenchmarkProfile> cachedAll;
+	private volatile String cachedAllKey;
+
+	// Overlay rows applied by the most recent load (diagnostics only).
+	private volatile int lastManualReviewApplied;
+
+	/**
+	 * Load every bundled profile (Auto mode). Cached per confDir; the
+	 * returned map is keyed by profile name in {@link #BUNDLED_PROFILES}
+	 * order. Any profile that fails to load throws: Auto mode never runs on
+	 * a partial benchmark set, because an object whose SCG failed to load
+	 * would otherwise fall into "no benchmark" and hide the broken install.
+	 */
+	public Map<String, BenchmarkProfile> loadAll(String confDir) {
+		String key = confDir + "|appliance=" + applianceReads;
+		Map<String, BenchmarkProfile> all = cachedAll;
+		if (all != null && key.equals(cachedAllKey)) {
+			return all;
+		}
+		Map<String, java.util.Set<String>> overlay = loadManualReview(confDir);
+		Map<String, BenchmarkProfile> out = new java.util.LinkedHashMap<>();
+		int applied = 0;
+		for (String name : BUNDLED_PROFILES) {
+			BenchmarkProfile p = loadBundled(name, confDir, overlay);
+			applied += countManualReview(p);
+			out.put(name, p);
+		}
+		all = java.util.Collections.unmodifiableMap(out);
+		cachedAll = all;
+		cachedAllKey = key;
+		lastManualReviewApplied = applied;
+		return all;
+	}
+
+	/** Overlay rows applied by the most recent load call. */
+	public int lastManualReviewApplied() {
+		return lastManualReviewApplied;
+	}
+
 	public BenchmarkProfile load(String profileName, String customPath,
 			String confDir) {
-		String key = profileName + "|" + customPath + "|" + confDir;
+		String key = profileName + "|" + customPath + "|" + confDir
+				+ "|appliance=" + applianceReads;
 		if (cachedProfile != null && key.equals(cachedProfileKey)) {
 			return cachedProfile;
 		}
 
-		List<String> lines;
-		String resolvedName;
-		String sourceForErrors;
+		BenchmarkProfile profile;
 		if ("Custom".equalsIgnoreCase(profileName) && customPath != null
 				&& !customPath.isEmpty()) {
-			lines = readFile(Paths.get(customPath));
-			resolvedName = "Custom";
-			sourceForErrors = customPath;
+			List<String> lines = readFile(Paths.get(customPath));
+			profile = new BenchmarkProfile("Custom", applyApplianceSetting(
+					parseCanonical(lines, customPath), applianceReads));
+			lastManualReviewApplied = countManualReview(profile);
 		} else {
-			resolvedName = resolveBundledProfileName(profileName);
-			String filename = bundledFilename(resolvedName);
-			Path readFrom = locateBundled(filename, confDir);
-			if (readFrom != null) {
-				lines = readFile(readFrom);
-				sourceForErrors = readFrom.toString();
-			} else {
-				// Fall back to classpath only as a last resort; in
-				// production the file is always present under confDir.
-				InputStream is = getClass().getResourceAsStream(
-						"/profiles/canonical/" + filename);
-				if (is == null) {
-					throw new RuntimeException(
-							"Canonical profile not found: " + filename
-							+ " (looked under confDir=" + confDir
-							+ " and classpath /profiles/canonical/)");
-				}
-				lines = readStream(is);
-				sourceForErrors = "classpath:/profiles/canonical/" + filename;
-			}
+			String resolvedName = resolveBundledProfileName(profileName);
+			profile = loadBundled(resolvedName, confDir,
+					loadManualReview(confDir));
+			lastManualReviewApplied = countManualReview(profile);
 		}
-
-		List<BenchmarkProfile.Control> controls =
-				parseCanonical(lines, sourceForErrors);
-		BenchmarkProfile profile = new BenchmarkProfile(resolvedName, controls);
 		cachedProfile = profile;
 		cachedProfileKey = key;
 		return profile;
+	}
+
+	/** Load one bundled profile by resolved name and apply the overlay. */
+	private BenchmarkProfile loadBundled(String resolvedName, String confDir,
+			Map<String, java.util.Set<String>> overlay) {
+		String filename = bundledFilename(resolvedName);
+		List<String> lines;
+		String sourceForErrors;
+		Path readFrom = locateBundled(filename, confDir);
+		if (readFrom != null) {
+			lines = readFile(readFrom);
+			sourceForErrors = readFrom.toString();
+		} else {
+			// Fall back to classpath only as a last resort; in
+			// production the file is always present under confDir.
+			InputStream is = getClass().getResourceAsStream(
+					"/profiles/canonical/" + filename);
+			if (is == null) {
+				throw new RuntimeException(
+						"Canonical profile not found: " + filename
+						+ " (looked under confDir=" + confDir
+						+ " and classpath /profiles/canonical/)");
+			}
+			lines = readStream(is);
+			sourceForErrors = "classpath:/profiles/canonical/" + filename;
+		}
+		List<BenchmarkProfile.Control> controls =
+				parseCanonical(lines, sourceForErrors);
+		return new BenchmarkProfile(resolvedName,
+				applyApplianceSetting(
+						applyManualReview(resolvedName, controls, overlay),
+						applianceReads));
+	}
+
+	/**
+	 * Demote every control named for {@code profileName} in the overlay to
+	 * manual review. Rows naming a control the profile does not carry are
+	 * ignored here (the unit test pins that every shipped row matches).
+	 */
+	static List<BenchmarkProfile.Control> applyManualReview(
+			String profileName, List<BenchmarkProfile.Control> controls,
+			Map<String, java.util.Set<String>> overlay) {
+		java.util.Set<String> ids = overlay == null ? null
+				: overlay.get(profileName);
+		if (ids == null || ids.isEmpty()) return controls;
+		List<BenchmarkProfile.Control> out = new ArrayList<>(controls.size());
+		for (BenchmarkProfile.Control c : controls) {
+			out.add(ids.contains(c.controlId) ? c.asManualReview() : c);
+		}
+		return out;
+	}
+
+	/** Diagnostic only: controls the overlay demoted in this profile. */
+	private static int countManualReview(BenchmarkProfile p) {
+		return p == null ? 0 : p.manualReviewCount;
+	}
+
+	/**
+	 * Read {@code <confDir>/profiles/manual_review.csv} (classpath fallback
+	 * {@code /profiles/manual_review.csv}).
+	 *
+	 * <p>Build 70: a missing overlay now FAILS the load (the adapter goes
+	 * Down with this message). The overlay no longer only demotes prose
+	 * expected values (whose failure mode was a false fail); it also demotes
+	 * the host-side standard-switch controls that would otherwise be read
+	 * from the distributed switch, and scoring those is a false PASS. A
+	 * broken install must be visible, never silently less safe.
+	 */
+	static Map<String, java.util.Set<String>> loadManualReview(String confDir) {
+		List<String> lines = null;
+		if (confDir != null && !confDir.isEmpty()) {
+			Path p = Paths.get(confDir, "profiles", MANUAL_REVIEW_FILE);
+			if (Files.exists(p)) {
+				lines = readFileStatic(p);
+			}
+		}
+		if (lines == null) {
+			InputStream is = BenchmarkLoader.class.getResourceAsStream(
+					"/profiles/" + MANUAL_REVIEW_FILE);
+			if (is != null) lines = readStreamStatic(is);
+		}
+		if (lines == null) {
+			throw new RuntimeException("profiles/" + MANUAL_REVIEW_FILE
+					+ " not found (looked under confDir=" + confDir
+					+ " and the classpath). It is required for the bundled "
+					+ "profiles: without it, standard-switch controls would "
+					+ "be scored from the distributed switch (false pass). "
+					+ "Reinstall the pak.");
+		}
+		return parseManualReview(lines);
+	}
+
+	static Map<String, java.util.Set<String>> parseManualReview(
+			List<String> lines) {
+		Map<String, java.util.Set<String>> out = new HashMap<>();
+		if (lines == null) return out;
+		List<String> records = stitchRecords(lines);
+		if (records.isEmpty()) return out;
+		String[] header = parseCsvLine(records.get(0));
+		int idxProfile = -1;
+		int idxControl = -1;
+		for (int i = 0; i < header.length; i++) {
+			String h = header[i].trim();
+			if ("profile".equals(h)) idxProfile = i;
+			if ("control_id".equals(h)) idxControl = i;
+		}
+		if (idxProfile < 0 || idxControl < 0) {
+			throw new RuntimeException(MANUAL_REVIEW_FILE
+					+ " is missing the profile / control_id header");
+		}
+		for (int i = 1; i < records.size(); i++) {
+			String rec = records.get(i);
+			if (rec.trim().isEmpty() || rec.trim().startsWith("#")) continue;
+			String[] f = parseCsvLine(rec);
+			String profile = field(f, idxProfile);
+			String control = field(f, idxControl);
+			if (profile.isEmpty() || control.isEmpty()) continue;
+			out.computeIfAbsent(profile, k -> new java.util.HashSet<>())
+					.add(control);
+		}
+		return out;
 	}
 
 	/**
@@ -135,6 +326,8 @@ public final class BenchmarkLoader {
 			case "VMware_SCG_9.1":
 			case "VMware_SCG_9.0":
 			case "VMware_SCG_8.0":
+			case "VMware_SCG_7.0":
+			case "VMware_SCG_6.7":
 				return profileName;
 			default:
 				if ("Custom".equalsIgnoreCase(profileName)) {
@@ -147,8 +340,8 @@ public final class BenchmarkLoader {
 				throw new RuntimeException(
 						"configured benchmark_profile '" + profileName
 						+ "' is not bundled in this version; choose "
-						+ "VMware_SCG_8.0 / VMware_SCG_9.0 / "
-						+ "VMware_SCG_9.1 or Custom");
+						+ "Auto (by version), VMware_SCG_6.7 / 7.0 / 8.0 / "
+						+ "9.0 / 9.1, or Custom");
 		}
 	}
 
@@ -161,6 +354,10 @@ public final class BenchmarkLoader {
 	 */
 	static String bundledFilename(String resolvedName) {
 		switch (resolvedName) {
+			case "VMware_SCG_6.7":
+				return "scg_6.7.csv";
+			case "VMware_SCG_7.0":
+				return "scg_7.0.csv";
 			case "VMware_SCG_9.1":
 				return "scg_9.1.csv";
 			case "VMware_SCG_9.0":
@@ -181,6 +378,16 @@ public final class BenchmarkLoader {
 	public void invalidate() {
 		cachedProfile = null;
 		cachedProfileKey = null;
+		cachedAll = null;
+		cachedAllKey = null;
+	}
+
+	private static List<String> readStreamStatic(InputStream is) {
+		return new BenchmarkLoader().readStream(is);
+	}
+
+	private static List<String> readFileStatic(Path path) {
+		return new BenchmarkLoader().readFile(path);
 	}
 
 	private List<String> readStream(InputStream is) {

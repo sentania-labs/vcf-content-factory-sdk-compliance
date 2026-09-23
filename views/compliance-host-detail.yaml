@@ -1,0 +1,60 @@
+id: 17b8d01a-587e-4f88-9c96-32ce952a4340
+name: "[VCF Content Factory] Compliance Host Detail"
+description: >
+  Per-host compliance scores, control counts and applied SCG benchmark
+  from the VCF-CF Compliance adapter (stitched onto VMWARE HostSystem).
+  Feeds ESX Hosts W2 (Host Compliance). Replaces Compliance Host
+  Overview. Score columns list every row, unfiltered: VCF Ops keeps a
+  metric's last value, so a host that moved to a version with no SCG
+  can show a retained score, identified by the No SCG flag column
+  beside it (owner accepted, 2026-09-23). Unreadable controls count as
+  failing in the score (adapter build 63); the Unreadable column shows
+  how many, and a "Compliance data not collected" alert explains why.
+  The totals row is sums only (issue #168). A score beside Controls
+  Evaluated = 0 is retained from an earlier cycle, not current. Sort by
+  Compliance Score ascending in the dashboard widget to surface
+  non-compliant hosts first.
+subject:
+  adapter_kind: VMWARE
+  resource_kind: HostSystem
+columns:
+  - attribute: summary|parentCluster
+    display_name: "Cluster"
+    is_property: true
+    is_string_attribute: true
+  - attribute: summary|parentVcenter
+    display_name: "vCenter"
+    is_property: true
+    is_string_attribute: true
+  - attribute: summary|version
+    display_name: "ESX Version"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|profile_name
+    display_name: "SCG Applied"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|score
+    display_name: "Compliance Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|total_count
+    display_name: "Controls Evaluated"
+  - attribute: VCF-CF Compliance|fail_count
+    display_name: "Failing"
+  - attribute: VCF-CF Compliance|unreadable_count
+    display_name: "Unreadable"
+  - attribute: VCF-CF Compliance|non_compliant
+    display_name: "Non-Compliant"
+  - attribute: VCF-CF Compliance|no_benchmark
+    display_name: "No SCG"
+
+summary:
+  display_name: "Totals"
+  aggregation: SUM
+  columns: [5, 6, 7, 8, 9]
+
+released: false
+version: "1.0.0"

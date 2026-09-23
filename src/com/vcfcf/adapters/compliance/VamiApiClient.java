@@ -3,13 +3,10 @@ package com.vcfcf.adapters.compliance;
 import com.vcfcf.adapter.json.SimpleJson;
 
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
@@ -48,68 +45,72 @@ import java.util.Map;
  */
 final class VamiApiClient {
 
-	/**
-	 * Sentinel returned by {@link #readField} when the GET failed (no
-	 * session, non-200, 404, timeout, parse error) OR the requested field
-	 * was absent in a successful response. Both fold to UNREADABLE upstream
-	 * — never a value, never a pass.
-	 */
 	static final Object FAILED = new Object() {
 		@Override public String toString() { return "(vami-failed)"; }
 	};
 
-	/** Field token meaning "the response body itself is the list/value". */
-	static final String SELF_LIST = "(list)";
+	static final String SELF_LIST = VamiRecipe.SELF_LIST;
 
 	private final HttpClient httpClient;
 	private final String baseUrl;
 	private final String username;
 	private final String password;
+	private final java.util.function.Consumer<String> warn;
 
 	private volatile String sessionId;
-	// Once a session attempt has failed this cycle, don't retry per-control.
-	private volatile boolean sessionFailed;
 	private volatile boolean sessionTried;
+	// Why the session failed (reason category first, see UnreadableReasons).
+	private volatile String sessionFailure;
 
-	// Per-cycle cache: appliance-path -> parsed body, or FAILED_JSON marker.
-	// A FAILED GET is cached so a second control on the same endpoint does
-	// not re-issue the request (mirrors EsxcliSoapClient.resultCache).
+	// Per-cycle cache: appliance-path -> parsed body, or a failure reason.
 	private final Map<String, Object> pathCache = new HashMap<>();
+	private final Map<String, String> pathFailure = new HashMap<>();
+	// Build 74: each failure is logged once per cycle (this client lives
+	// for one cycle), never with credentials.
+	private final java.util.Set<String> logged = new java.util.HashSet<>();
 
-	/** Cache marker for a failed GET (distinct from a successfully-parsed body). */
-	private static final Object FAILED_BODY = new Object();
-
+	/**
+	 * @param sslContext the TLS context to use: the platform context when
+	 *        allowInsecure=false (build 74; was the JDK default, which does
+	 *        not trust a lab or enterprise CA, so every VAMI read failed on
+	 *        such vCenters), the trust-all context when allowInsecure=true.
+	 *        Null falls back to the JDK default.
+	 * @param warn  receives one line per distinct failure (may be null)
+	 */
 	VamiApiClient(String baseUrl, String username, String password,
-			boolean allowInsecure) {
+			SSLContext sslContext, java.util.function.Consumer<String> warn) {
 		this.baseUrl = baseUrl;
 		this.username = username != null ? username : "";
 		this.password = password != null ? password : "";
-
+		this.warn = warn;
 		HttpClient.Builder builder = HttpClient.newBuilder()
 				.connectTimeout(Duration.ofSeconds(30));
-		if (allowInsecure) {
-			try {
-				SSLContext ctx = SSLContext.getInstance("TLS");
-				ctx.init(null, new TrustManager[]{new TrustAllManager()}, null);
-				builder.sslContext(ctx);
-			} catch (Exception e) {
-				// Can't configure insecure SSL — leave default factory; a
-				// cert failure on connect folds to a failed session, never
-				// a pass.
-			}
+		if (sslContext != null) {
+			builder.sslContext(sslContext);
 		}
 		this.httpClient = builder.build();
 	}
 
-	/**
-	 * Open the REST session if not already open. Returns the session id, or
-	 * {@code null} if the session could not be opened (cached for the cycle
-	 * so it isn't retried). Never throws.
-	 */
+	private void warnOnce(String key, String message) {
+		if (warn != null && logged.add(key)) {
+			warn.accept(message);
+		}
+	}
+
+	/** vAPI error_type from an error body, or null. */
+	private static String errorType(String body) {
+		try {
+			SimpleJson j = SimpleJson.parse(body);
+			if (j == null || j.isNull() || !j.isObject()) return null;
+			return j.get("error_type").asString(null);
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
 	private synchronized String ensureSession() {
 		if (sessionId != null) return sessionId;
-		if (sessionFailed) return null;
-		if (sessionTried && sessionId == null) return null;
+		if (sessionTried) return null;
 		sessionTried = true;
 		try {
 			String credentials = Base64.getEncoder().encodeToString(
@@ -124,7 +125,10 @@ final class VamiApiClient {
 			HttpResponse<String> resp = httpClient.send(req,
 					HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() != 200 && resp.statusCode() != 201) {
-				sessionFailed = true;
+				String et = errorType(resp.body());
+				sessionFailure = "vami-session: POST /api/session HTTP "
+						+ resp.statusCode() + (et != null ? " " + et : "");
+				warnOnce("session", "VAMI " + baseUrl + ": " + sessionFailure);
 				return null;
 			}
 			String body = resp.body();
@@ -136,43 +140,33 @@ final class VamiApiClient {
 				}
 			}
 			if (body == null || body.isEmpty()) {
-				sessionFailed = true;
+				sessionFailure = "vami-session: empty session token";
+				warnOnce("session", "VAMI " + baseUrl + ": " + sessionFailure);
 				return null;
 			}
 			sessionId = body;
 			return sessionId;
 		} catch (Exception e) {
-			// Auth failure / timeout / I/O — cache as failed so we don't
-			// retry per-control. UNREADABLE upstream, never a pass.
-			sessionFailed = true;
+			sessionFailure = "vami-session: " + e.getClass().getSimpleName()
+					+ ": " + e.getMessage();
+			warnOnce("session", "VAMI " + baseUrl + ": " + sessionFailure);
 			return null;
 		}
 	}
 
-	/**
-	 * GET an appliance endpoint and cache the parsed body for the cycle.
-	 * Returns the parsed {@link SimpleJson} on a 200, or {@code null} on
-	 * any failure (no session, non-200, 404, timeout, parse error). The
-	 * FAILED result is cached so a second control on the same endpoint
-	 * does not re-issue the GET.
-	 *
-	 * @param appliancePath path after {@code /api/appliance/}, e.g.
-	 *                      {@code access/ssh}
-	 */
 	private synchronized SimpleJson getEndpoint(String appliancePath) {
 		Object cached = pathCache.get(appliancePath);
-		if (cached == FAILED_BODY) return null;
 		if (cached instanceof SimpleJson) return (SimpleJson) cached;
+		if (pathFailure.containsKey(appliancePath)) return null;
 
 		String session = ensureSession();
 		if (session == null) {
-			pathCache.put(appliancePath, FAILED_BODY);
+			pathFailure.put(appliancePath, sessionFailure);
 			return null;
 		}
 		try {
-			String full = baseUrl + "/api/appliance/" + appliancePath;
 			HttpRequest req = HttpRequest.newBuilder()
-					.uri(URI.create(full))
+					.uri(URI.create(baseUrl + "/api/appliance/" + appliancePath))
 					.GET()
 					.header("vmware-api-session-id", session)
 					.header("Accept", "application/json")
@@ -180,105 +174,132 @@ final class VamiApiClient {
 					.build();
 			HttpResponse<String> resp = httpClient.send(req,
 					HttpResponse.BodyHandlers.ofString());
-			// Only a successful 200 yields a value. 401/403/404/5xx/anything
-			// else -> failed -> UNREADABLE upstream, never "disabled/compliant".
+			// Only a 200 yields a value; 401/403/404/5xx fold to UNREADABLE
+			// upstream, never "disabled / compliant".
 			if (resp.statusCode() != 200) {
-				pathCache.put(appliancePath, FAILED_BODY);
+				String et = errorType(resp.body());
+				String reason = "vami-http-" + resp.statusCode() + ": GET "
+						+ appliancePath + (et != null ? " " + et : "");
+				pathFailure.put(appliancePath, reason);
+				warnOnce("get:" + appliancePath, "VAMI " + baseUrl + ": " + reason);
 				return null;
 			}
 			SimpleJson parsed = SimpleJson.parse(resp.body());
-			if (parsed == null || parsed.isNull()) {
-				pathCache.put(appliancePath, FAILED_BODY);
+			if (parsed == null) {
+				String reason = "vami-parse: GET " + appliancePath
+						+ " body is not JSON";
+				pathFailure.put(appliancePath, reason);
+				warnOnce("get:" + appliancePath, "VAMI " + baseUrl + ": " + reason);
 				return null;
 			}
 			pathCache.put(appliancePath, parsed);
 			return parsed;
 		} catch (Exception e) {
-			pathCache.put(appliancePath, FAILED_BODY);
+			String reason = "vami-exception: GET " + appliancePath + " "
+					+ e.getClass().getSimpleName() + ": " + e.getMessage();
+			pathFailure.put(appliancePath, reason);
+			warnOnce("get:" + appliancePath, "VAMI " + baseUrl + ": " + reason);
 			return null;
 		}
 	}
 
 	/**
-	 * Read one field from one appliance endpoint.
-	 *
-	 * <p>Typing:
-	 * <ul>
-	 *   <li>{@code field == "(list)"} — the response body itself is treated
-	 *       as a list; returns the comma-joined element string (non-empty
-	 *       check upstream via {@code (non-empty)} mode). An empty list
-	 *       returns {@code null} → UNREADABLE (so "no syslog targets" is a
-	 *       coverage gap, never a false pass under the non-empty mode).</li>
-	 *   <li>a dotted field path — navigated via {@link SimpleJson#path}. A
-	 *       JSON boolean is returned as {@link Boolean}; a list as the
-	 *       comma-joined element string; a scalar (string/number) as its
-	 *       {@code String} form.</li>
-	 * </ul>
-	 *
-	 * <p>Returns {@link #FAILED} when the GET failed, when the body could
-	 * not be parsed, or when the navigated node is absent/null. Both
-	 * {@link #FAILED} and the empty-list {@code null} fold to UNREADABLE
-	 * upstream — NEVER a value, NEVER a pass. This is the cardinal trap for
-	 * the REST transport.
-	 *
-	 * @param appliancePath path after {@code /api/appliance/}
-	 * @param field         JSON field (dotted for nesting), or
-	 *                      {@link #SELF_LIST} when the body is itself the list
+	 * Read one field. Returns the value (Boolean / String; "" for an empty
+	 * list), or {@link #FAILED} when the read failed or the field is absent
+	 * ({@link #failureReason} / the returned reason say why).
 	 */
 	Object readField(String appliancePath, String field) {
+		return readField(VamiRecipe.parse("vami:" + appliancePath + ":" + field));
+	}
+
+	/**
+	 * Build 76: read one recipe, honouring its absent default
+	 * ({@link VamiRecipe#absentValue}) for a field missing from a successful
+	 * JSON-object body. HTTP / session failures and non-object bodies stay
+	 * {@link #FAILED}.
+	 */
+	Object readField(VamiRecipe recipe) {
+		if (recipe == null) return FAILED;
+		String appliancePath = recipe.appliancePath;
+		String field = recipe.field;
 		SimpleJson body = getEndpoint(appliancePath);
 		if (body == null) {
 			return FAILED;
 		}
-
-		if (SELF_LIST.equals(field)) {
-			return listOrNull(body);
+		if (VamiRecipe.SELF_LIST.equals(field)) {
+			if (!body.isList()) {
+				absent(appliancePath, field, "body is not a list");
+				return FAILED;
+			}
+			return VamiRecipe.listValue(texts(body));
 		}
-
-		SimpleJson node = body.path(field);
+		SimpleJson node;
+		if (VamiRecipe.SELF_VALUE.equals(field)) {
+			node = body;
+		} else {
+			node = body.isObject() ? body.path(field) : null;
+		}
 		if (node == null || node.isNull()) {
-			// Field absent in a successful response — UNREADABLE, never a
-			// guessed default. (Documentation-derived field name may be
-			// wrong; that is a coverage gap, not a pass.)
+			// Field absent in a successful response: UNREADABLE, never a
+			// guessed default, unless the recipe declares the vendor-defined
+			// meaning of absence (build 76, `?absent=`).
+			Object dflt = recipe.absentValue(body.isObject());
+			if (dflt != null) return dflt;
+			absent(appliancePath, field, "field '" + field + "' absent");
 			return FAILED;
 		}
 		if (node.isList()) {
-			return listOrNull(node);
+			return VamiRecipe.listValue(texts(node));
 		}
-		// A JSON boolean must surface as Boolean so the evaluator's boolean
-		// compare path handles it (e.g. access/ssh enabled, global-fips
-		// enabled). SimpleJson does not expose the raw type, so probe: a
-		// node whose string form is exactly "true"/"false" is a boolean.
-		String s = node.asString();
-		if (s == null) {
+		Object v = VamiRecipe.scalarValue(node.asString());
+		if (v == null) {
+			absent(appliancePath, field,
+					"field '" + field + "' has no scalar value");
 			return FAILED;
 		}
-		if ("true".equalsIgnoreCase(s)) return Boolean.TRUE;
-		if ("false".equalsIgnoreCase(s)) return Boolean.FALSE;
-		return s;
+		return v;
+	}
+
+	private synchronized void absent(String appliancePath, String field,
+			String what) {
+		String reason = "vami-field-missing: GET " + appliancePath + " " + what;
+		pathFailure.put(appliancePath + "#" + field, reason);
+		warnOnce("field:" + appliancePath + "#" + field,
+				"VAMI " + baseUrl + ": " + reason);
+	}
+
+	/** Why a FAILED from {@link #readField}(path, field) happened. */
+	synchronized String failureReason(String appliancePath, String field) {
+		String r = pathFailure.get(appliancePath);
+		return r != null ? r : pathFailure.get(appliancePath + "#" + field);
+	}
+
+	private static java.util.List<String> texts(SimpleJson list) {
+		java.util.List<String> out = new java.util.ArrayList<>();
+		for (SimpleJson item : list.asList()) {
+			out.add(item == null ? "" : item.asString());
+		}
+		return out;
 	}
 
 	/**
-	 * Join a JSON list node's elements on {@code ,}. Returns {@code null}
-	 * for an empty list (→ UNREADABLE upstream, so an empty list never
-	 * passes a {@code (non-empty)} control) or a non-list node.
+	 * Build 74: end the appliance session (it used to leak one idle session
+	 * per vCenter per cycle). Best effort, never throws.
 	 */
-	private static Object listOrNull(SimpleJson node) {
-		if (node == null || !node.isList()) return null;
-		java.util.List<SimpleJson> items = node.asList();
-		if (items.isEmpty()) return null;
-		StringBuilder sb = new StringBuilder();
-		for (int i = 0; i < items.size(); i++) {
-			if (i > 0) sb.append(',');
-			String s = items.get(i).asString();
-			sb.append(s != null ? s : "");
+	synchronized void close() {
+		String sid = sessionId;
+		sessionId = null;
+		if (sid == null) return;
+		try {
+			HttpRequest req = HttpRequest.newBuilder()
+					.uri(URI.create(baseUrl + "/api/session"))
+					.method("DELETE", HttpRequest.BodyPublishers.noBody())
+					.header("vmware-api-session-id", sid)
+					.timeout(Duration.ofSeconds(10))
+					.build();
+			httpClient.send(req, HttpResponse.BodyHandlers.discarding());
+		} catch (Exception ignored) {
+			// idle expiry is the safety net
 		}
-		return sb.toString();
-	}
-
-	private static final class TrustAllManager implements X509TrustManager {
-		@Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-		@Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-		@Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
 	}
 }

@@ -1,0 +1,132 @@
+id: 68e5872a-ba6d-43c7-8323-ee7a0e6b6924
+name: "[VCF Content Factory] Compliance vCenter & Networking"
+description: >
+  One page for the four low-count object types (vCenter, cluster, vDS,
+  portgroup: build 57 alerts 15/2/11/7). Four compact lists, one per
+  type, each worst first, all scoped by one picker. Selecting any row
+  in any list shows that object's failing controls and runbooks in a
+  single shared alert list. See
+  knowledge/designs/dashboards/compliance-vcenter-networking.md.
+
+released: false
+version: "1.0.0"
+hidden: true
+
+widgets:
+
+  # ── W1: Scope picker (World / vCenter) ───────────────────────────────
+
+  - id: scope_picker
+    type: ResourceList
+    title: "Scope"
+    coords: {x: 1, y: 1, w: 3, h: 12}
+    column_preset: name-only
+    resource_kinds:
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+      - adapter_kind: VMWARE
+        resource_kind: "VMwareAdapter Instance"
+
+  # ── W2: vCenter Servers, driven by W1 ────────────────────────────────
+
+  - id: vcenter_servers_view
+    type: View
+    title: "vCenter Servers"
+    coords: {x: 4, y: 1, w: 9, h: 5}
+    # sort_by_column / sort_by_dir (score ascending) requested in the
+    # brief are not implemented for View widgets (see TOOLSET GAP in
+    # the authoring report). Sort order is UI-set by the user.
+    view: "[VCF Content Factory] Compliance vCenter Servers"
+
+  # ── W3: Clusters, driven by W1 ───────────────────────────────────────
+
+  - id: clusters_view
+    type: View
+    title: "Clusters"
+    coords: {x: 4, y: 6, w: 9, h: 7}
+    view: "[VCF Content Factory] Compliance Clusters"
+
+  # ── W4: Distributed Switches, driven by W1 ───────────────────────────
+
+  - id: vds_view
+    type: View
+    title: "Distributed Switches"
+    coords: {x: 1, y: 13, w: 6, h: 7}
+    view: "[VCF Content Factory] Compliance Distributed Switches"
+
+  # ── W5: Distributed Portgroups, driven by W1 ─────────────────────────
+
+  - id: portgroups_view
+    type: View
+    title: "Distributed Portgroups"
+    coords: {x: 7, y: 13, w: 6, h: 7}
+    view: "[VCF Content Factory] Compliance Distributed Portgroups"
+
+  # ── W6: Failing Controls on Selected Object, driven by W2-W5 (last
+  #     selection wins, precedent: vSphere Network Configuration 2.0)
+
+  - id: failing_controls
+    type: AlertList
+    title: "Failing Controls on Selected Object"
+    coords: {x: 1, y: 20, w: 12, h: 7}
+    criticality: [2, 3, 4]
+    mode: all
+    depth: 1
+    alert_definitions:
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_events_remote_logging"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_fips_enable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_log_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_logs_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_tls_profile"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_access_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_administration_password_expiration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_password_max_age"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_syslog"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vami_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_length"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_rotation"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_managed_disk_claim"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_nioc"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_netflow_usage"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_port_mirroring"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_mac_learning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reset_port"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_vgt"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vcenter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_cluster"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vds"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_portgroup"
+
+interactions:
+  - from: scope_picker
+    to: vcenter_servers_view
+    type: resourceId
+  - from: scope_picker
+    to: clusters_view
+    type: resourceId
+  - from: scope_picker
+    to: vds_view
+    type: resourceId
+  - from: scope_picker
+    to: portgroups_view
+    type: resourceId
+  - from: vcenter_servers_view
+    to: failing_controls
+    type: resourceId
+  - from: clusters_view
+    to: failing_controls
+    type: resourceId
+  - from: vds_view
+    to: failing_controls
+    type: resourceId
+  - from: portgroups_view
+    to: failing_controls
+    type: resourceId
