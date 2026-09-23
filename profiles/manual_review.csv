@@ -36,3 +36,6 @@ VMware_SCG_9.0,vds.network-standard-reject-promiscuous-mode,standard-switch cont
 VMware_SCG_9.1,vds.network-standard-reject-forged-transmit,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
 VMware_SCG_9.1,vds.network-standard-reject-mac-changes,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
 VMware_SCG_9.1,vds.network-standard-reject-promiscuous-mode,standard-switch control (host vSwitch); was read from the distributed switch (false pass); no host-side reader yet
+VMware_SCG_8.0,cluster.object-checksum,needs an SPBM (storage policy) reader: the vim25 checksumEnabled field is not populated on vCenter 9.x and the SCG audit point is a per-policy attribute; expected value in the canonical row is also polarity-inverted
+VMware_SCG_9.0,cluster.object-checksum,needs an SPBM (storage policy) reader: the vim25 checksumEnabled field is not populated on vCenter 9.x and the SCG audit point is a per-policy attribute; expected value in the canonical row is also polarity-inverted
+VMware_SCG_9.1,cluster.object-checksum,needs an SPBM (storage policy) reader: the vim25 checksumEnabled field is not populated on vCenter 9.x and the SCG audit point is a per-policy attribute; expected value in the canonical row is also polarity-inverted

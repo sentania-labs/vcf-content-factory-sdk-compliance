@@ -13,6 +13,9 @@ Deltas (scripts/_adapter_deltas.py):
 1. `vds.network-reset-port` moves to DistributedVirtualPortgroup as
    `dvpg.network-reset-port` (its read is a portgroup-policy field; see
    `reset_port_to_portgroup`).
+2. Build 74: host encryption rows read
+   `esxcli:system.settings.encryption.get`, and the VAMI recipes are
+   fixed (`build74` in scripts/_adapter_deltas.py).
 
 The factory normalizer's own output is otherwise unchanged.
 """
@@ -48,6 +51,11 @@ def main(argv: list) -> int:
     if rc != 0:
         return rc
     n = deltas.rewrite(argv[2], base, deltas.reset_port_to_portgroup)
+    got = {}
+    deltas.rewrite(argv[2], base, lambda rows: got.update(
+        deltas.build74(rows)) or 0)
+    if got != {"encryption": 3, "vami": 3}:
+        raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
     print(f"[normalize_scg_v90] reset-port rows moved to portgroup: {n}",
           file=sys.stderr)
     return 0

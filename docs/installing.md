@@ -72,6 +72,7 @@ for:
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
 | Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object, or `Custom`. Existing instances keep their stored choice on upgrade. |
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
+| Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Read-only access. |
 | Password | `password` | Yes | — | vCenter account password (masked). |

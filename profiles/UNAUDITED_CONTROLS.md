@@ -104,6 +104,45 @@ dvportgroup / VDS guidelines), and the host-side VGT rows
 unscored. The distributed-switch equivalents
 (`dvpg.network-reject-*-dvportgroup`) remain scored.
 
+## Build 74 read-path fixes
+
+Source: knowledge/context/api-surface/compliance_config_encryption_and_vsan_checksum_reads.md
+and compliance_vami_appliance_api_read_path.md (vendor spec
+reference/docs/vcenter-9.1.1-appliance-api.json).
+
+- **Host configuration encryption** (`esx.tpm-configuration`,
+  `esx.secureboot-enforcement`, `esx.tpm-trusted-binaries`; 7.0 to 9.1):
+  the old recipes read `config.encryptionState.*`, which is not a vim25
+  field, so every host was UNREADABLE. They now read the SCG's own audit
+  command, `esxcli system settings encryption get` (fields `Mode`,
+  `RequireSecureBoot`, `RequireExecutablesOnlyFromInstalledVIBs`, taken
+  from the vendor SCG 9.1 audit script and **not yet seen on the wire**;
+  the reader matches field names case-insensitively and logs once if a
+  field is missing). A host without TPM now reads `Mode: NONE`, an honest
+  FAIL instead of UNREADABLE.
+- **vCenter appliance (VAMI) controls**: TLS now uses the platform trust
+  store (it used the JDK default, so any vCenter with a lab or enterprise
+  CA failed); `vc.ssh` / `vc.vami-access-ssh` read the bare boolean body
+  with the new `(value)` token; `vc.vami-password-max-age` /
+  `vc.vami-administration-password-expiration` read
+  `local-accounts/root:max_days_between_password_change` (the old
+  `local-accounts/policy` path does not exist). **Expected value
+  unverified:** the vendor spec says "If unset, password never expires",
+  so on a root account that never expires the field may be absent, which
+  reads UNREADABLE; the SCG expected value (`-1`) is left as it is until
+  a wire capture shows the real shape. `vc.fips-enable` (8.0, 9.0) reads
+  `system/global-fips` (not `system/security/global-fips`); the vendor
+  spec marks its `enabled` field deprecated as of vSphere API 9.0.0.0.
+  SCG 9.1 `vc.tls-ciphers` now expects `NIST_2024_TLS_13_ONLY`, the
+  vendor 9.1 baseline (source row `vcenter-9.tls-ciphers`); 8.0 and 9.0
+  keep `NIST_2024`.
+- **Appliance authorization (operator step):** reading the appliance API
+  needs the collection account in the vsphere.local SSO group
+  `SystemConfiguration.Administrators`, which also grants appliance write
+  access (there is no read-only appliance role). The HOLD setting "Read
+  vCenter appliance settings" (default off) makes these controls manual
+  review until an operator decides to grant it.
+
 ## Reset-port moved to the portgroup (build 72)
 
 `vds.network-reset-port` (SCG 7.0 / 8.0 / 9.0) read
@@ -189,8 +228,7 @@ row is scored), `esx.ad-auth-proxy`, `esx.firewall-restrict-access`,
 hosts.** The vim25 paths, esxcli namespaces, service keys, and VAMI
 endpoints were wire-checked (where they were checked at all) against
 8.x / 9.x. On a 6.7 or 7.0 host or vCenter a path that does not exist
-reads as UNREADABLE, never a pass (for example `config.encryptionState`
-for `esx.tpm-configuration`, or the `/api/appliance/*` VAMI endpoints
+reads as UNREADABLE, never a pass (for example the `/api/appliance/*` VAMI endpoints
 that older 7.0 vCenter builds serve under `/rest/`), so the risk is
 coverage, not correctness. Treat 6.7 / 7.0 coverage as claimed, not
 proven, until a live 6.7 / 7.0 run.
@@ -321,9 +359,21 @@ decisions requiring operator judgment).
 The bulk of `ClusterComputeResource` controls live on the vSAN Management
 SDK (`com.vmware.vim.vsan.binding`), which is NOT on this adapter's
 classpath (per-pak classloader isolation; see
-`context/investigations/2026-05-29-vsan-management-sdk-gap.md`). Two vSAN
-controls ARE audited today via plain vim25 (`cluster.managed-disk-claim`,
-`cluster.object-checksum`). The rest cannot be read:
+`context/investigations/2026-05-29-vsan-management-sdk-gap.md`). One vSAN
+control is audited today via plain vim25 (`cluster.managed-disk-claim`),
+and only on clusters where vSAN is actually enabled (build 74: the gate
+reads `vsanConfigInfo.enabled`; before, vCenter 9.x's
+`vsanConfigInfo` element on every cluster made non-vSAN clusters score
+vSAN controls, a false pass on `cluster.managed-disk-claim`).
+`cluster.object-checksum` is manual review since build 74: its vim25
+field (`defaultConfig.checksumEnabled`) is not populated by vCenter 9.x,
+and the SCG audit point is a per-storage-policy SPBM attribute on vSAN
+OSA (always on for ESA), which needs an SPBM reader this adapter does not
+have. Note for whoever implements it: the canonical row's
+`expected_value=false` against a field named `checksumEnabled` is
+polarity-inverted (the SCG wants checksums ON; its "Disabled" refers to
+the "Disable object checksum" policy attribute being unset). The rest
+cannot be read:
 
 `cluster.encryption-rest` / `cluster.data-at-rest`,
 `cluster.encryption-transit-esa` / `-osa` / `cluster.data-in-transit`,
@@ -624,7 +674,7 @@ the SSO admin SDK + WS-Trust client are absent from the classpath, so those
 | ~~`dvpg.network-vgt`~~ **WIRED — build 40** | `vlan_id_not:config.defaultPortConfig.vlan` is now scored; the `TrunkVlanSpec` assumption is unconfirmed — see "Wired — pending live field-name verification" above. |
 | ~~`vds.network-restrict-port-mirroring`~~ **WIRED — build 40** | `list_empty:config.vspanSession` is now scored; the path-vs-`config.mirrorPortConfigs` assumption is unconfirmed — see "Wired — pending live field-name verification" above. |
 | `esx.lockdown-exception-users` | `HostAccessManager.retrieveLockdownExceptions()` is a managed-object method call, not a property — needs an `access_manager` style. |
-| `esx.hardware-tpm` (9.0) | TPM physical presence is not in vim25; only TPM *in use* is inferable from `config.encryptionState.mode` (partial). |
+| `esx.hardware-tpm` (9.0) | TPM physical presence is not in vim25; only TPM *in use* is inferable (build 74: `esx.tpm-configuration` reads it through `esxcli system settings encryption get`, field `Mode`; vim25 `runtime.stateEncryption.protectionMode` is the equivalent). |
 | `vc.drs` (9.0) | `drsConfig.enabled` is readable, but the control wants DRS config *quality*, not just on/off (partial). |
 
 > **Total "Haven't yet": ~46 new-style + ~16 other-API + ~24 uncertain.**

@@ -59,7 +59,7 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual((len(syms), len(alerts), len(recs)), (n, n, n))
         # build 70: 6 standard-switch controls removed; build 72:
         # vds.network-reset-port folded into dvpg.network-reset-port
-        self.assertEqual(n, 137)
+        self.assertEqual(n, 136)   # build 74: cluster.object-checksum demoted
 
     def test_alert_shape(self):
         for a in self.root.iter(NS + "AlertDefinition"):
@@ -182,7 +182,8 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(len(recs), 1)
         text = self.props[recs[0].find(NS + "Description").get("nameKey")]
         for needle in ("unreadable_count", "-1", "permission", "disconnected",
-                       "not supported"):
+                       "not supported", "SystemConfiguration.Administrators",
+                       "WRITE access"):
             self.assertIn(needle, text)
 
     def test_severity_from_priority(self):

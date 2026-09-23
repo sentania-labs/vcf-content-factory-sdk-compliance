@@ -151,9 +151,37 @@ final class EsxcliSoapClient {
 		// caller must use the row-selecting overload). Build-36 callers
 		// only ever read get-struct fields, so this is unchanged for them.
 		if (parsed.struct != null) {
-			return parsed.struct.get(field);
+			return fieldIgnoreCase(parsed.struct, field);
 		}
 		return null;
+	}
+
+	/**
+	 * Build 74: exact field name first, then a case-insensitive match
+	 * (esxcli struct field names come from the vendor SCG audit script
+	 * for some rows, e.g. {@code system.settings.encryption.get}, and are
+	 * not yet confirmed on the wire). Null when absent either way.
+	 */
+	static String fieldIgnoreCase(Map<String, String> struct, String field) {
+		if (struct == null || field == null) return null;
+		String v = struct.get(field);
+		if (v != null) return v;
+		for (Map.Entry<String, String> e : struct.entrySet()) {
+			if (e.getKey() != null && e.getKey().equalsIgnoreCase(field)) {
+				return e.getValue();
+			}
+		}
+		return null;
+	}
+
+	/** Field names the command's struct actually carries (diagnostics). */
+	synchronized java.util.Set<String> structFields(String hostMoid,
+			String namespaceCommand) {
+		ParsedResult cached = resultCache.get(hostMoid + "|" + namespaceCommand);
+		if (cached == null || cached.struct == null) {
+			return java.util.Collections.emptySet();
+		}
+		return new java.util.TreeSet<>(cached.struct.keySet());
 	}
 
 	/**

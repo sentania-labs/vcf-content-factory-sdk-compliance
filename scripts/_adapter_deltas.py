@@ -54,3 +54,111 @@ def rewrite(path: str, base, delta) -> int:
     n = delta(rows)
     base.write_canonical(path, rows)
     return n
+
+
+# ---------------------------------------------------------------------------
+# Build 74 deltas (knowledge/context/api-surface/
+# compliance_config_encryption_and_vsan_checksum_reads.md and
+# compliance_vami_appliance_api_read_path.md).
+# ---------------------------------------------------------------------------
+
+# Host configuration encryption: `config.encryptionState` is not a vim25
+# field (HostConfigInfo has none; the data is HostRuntimeInfo.stateEncryption),
+# so every host read these as unreadable. Switch to the SCG's own audit
+# command, `esxcli system settings encryption get` (fields from the vendor
+# SCG 9.1 audit script tools/audit-esx-9.ps1; not yet seen on the wire, so
+# the esxcli reader matches field names case-insensitively). Template:
+# esx.key-persistence. Expected values unchanged (TPM / true / true).
+_ENCRYPTION = {
+    "esx.tpm-configuration": ("encryption.Mode", "Mode"),
+    "esx.secureboot-enforcement": ("encryption.RequireSecureBoot",
+                                   "RequireSecureBoot"),
+    "esx.tpm-trusted-binaries": (
+        "encryption.RequireExecutablesOnlyFromInstalledVIBs",
+        "RequireExecutablesOnlyFromInstalledVIBs"),
+}
+
+
+def encryption_to_esxcli(rows: List[Dict[str, str]]) -> int:
+    """Rewrite the host encryption rows present in this profile to the
+    esxcli recipe. Returns how many rows changed (0 is allowed: SCG 6.7 has
+    none)."""
+    n = 0
+    for r in rows:
+        spec = _ENCRYPTION.get(r["control_id"])
+        if spec is None:
+            continue
+        if not r.get("read_recipe", "").startswith(
+                "scalar:config.encryptionState.") and not r.get(
+                "read_recipe", "").startswith("bool:config.encryptionState."):
+            raise SystemExit(f"ERROR: {r['control_id']} read changed to "
+                             f"{r.get('read_recipe')!r}; review the "
+                             "encryption delta")
+        r["parameter"] = spec[0]
+        r["parameter_kind"] = "esxcli"
+        r["read_recipe"] = "esxcli:system.settings.encryption.get:" + spec[1]
+        n += 1
+    return n
+
+
+# vCenter appliance (VAMI) recipe fixes, keyed by control_id -> new
+# (parameter, read_recipe). Evidence: the vendor spec
+# reference/docs/vcenter-9.1.1-appliance-api.json.
+#  - access/ssh returns a bare boolean body: read it with the value-only
+#    token `(value)` (a `:enabled` field lookup on a boolean never resolves).
+#  - local-accounts/policy does not exist (it matched local-accounts/{username}
+#    for a user named "policy", a 404); the SCG control is about the ROOT
+#    account: local-accounts/root, field max_days_between_password_change.
+#    The spec says "If unset, password never expires"; the expected value
+#    for never-expires is not yet captured on the wire, so the SCG expected
+#    value is left as it is.
+#  - FIPS lives at system/global-fips (not system/security/global-fips).
+_VAMI_RECIPES = {
+    "vc.ssh": ("vami.access.ssh", "vami:access/ssh:(value)"),
+    "vc.vami-access-ssh": ("vami.access.ssh", "vami:access/ssh:(value)"),
+    "vc.vami-password-max-age": (
+        "vami.local-accounts.root.max-days-between-password-change",
+        "vami:local-accounts/root:max_days_between_password_change"),
+    "vc.vami-administration-password-expiration": (
+        "vami.local-accounts.root.max-days-between-password-change",
+        "vami:local-accounts/root:max_days_between_password_change"),
+    "vc.fips-enable": ("vami.system.global-fips.enabled",
+                       "vami:system/global-fips:enabled"),
+}
+
+
+def vami_recipes(rows: List[Dict[str, str]]) -> int:
+    """Apply the VAMI recipe fixes to the rows present in this profile."""
+    n = 0
+    for r in rows:
+        spec = _VAMI_RECIPES.get(r["control_id"])
+        if spec is None:
+            continue
+        if r.get("parameter_kind") != "vami_api":
+            raise SystemExit(f"ERROR: {r['control_id']} is no longer "
+                             "vami_api; review the VAMI delta")
+        r["parameter"], r["read_recipe"] = spec
+        n += 1
+    return n
+
+
+def tls_ciphers_91(rows: List[Dict[str, str]]) -> int:
+    """SCG 9.1 only: vc.tls-ciphers expected value. The vendor SCG 9.1
+    source (profiles/vmware_scg_9.1.csv, row vcenter-9.tls-ciphers,
+    "Baseline Suggested Value") is NIST_2024_TLS_13_ONLY, as is its
+    remediation command; the factory normalizer wrote NIST_2024 (the SCG
+    8.0 / 9.0 baseline, which stays)."""
+    n = 0
+    for r in rows:
+        if r["control_id"] == "vc.tls-ciphers":
+            r["expected_value"] = "NIST_2024_TLS_13_ONLY"
+            n += 1
+    if n != 1:
+        raise SystemExit("ERROR: expected one vc.tls-ciphers row in 9.1")
+    return n
+
+
+def build74(rows: List[Dict[str, str]]) -> Dict[str, int]:
+    """Apply the build-74 deltas common to 7.0 / 8.0 / 9.0 / 9.1."""
+    return {"encryption": encryption_to_esxcli(rows),
+            "vami": vami_recipes(rows)}

@@ -14,7 +14,7 @@ javac -d "$out" -sourcepath src:tests \
     tests/com/vcfcf/adapters/compliance/*.java
 for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
         ControlEvaluatorTest ComplianceRollupTest ComplianceDecisionsTest \
-        MixedVersionSimulationTest; do
+        MixedVersionSimulationTest Build74ReadPathsTest; do
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 python3 tests/test_generate_compliance_alerts.py

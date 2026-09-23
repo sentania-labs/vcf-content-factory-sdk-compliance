@@ -33,6 +33,7 @@ Full docset (overview, installing & configuring, inventory tree): [`docs/README.
 | Benchmark Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
 | Custom Profile Path | No | - | Filesystem path to CSV if Custom |
 | Allow Insecure SSL | No | false | Accept self-signed certificates |
+| Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 
 **Existing instances keep their stored profile on upgrade.** VCF Ops
 stores the configured value on each adapter instance, and a pak upgrade

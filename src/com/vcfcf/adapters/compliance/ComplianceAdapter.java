@@ -110,16 +110,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		String profile = getIdentifier(resourceConfig, "benchmark_profile");
 		String customPath = getIdentifier(resourceConfig, "custom_profile_path");
 		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
+		String readAppliance = getIdentifier(resourceConfig,
+				ComplianceConfig.READ_APPLIANCE_KEY);
 		String username = getCredentialField(resourceConfig, "username");
 		String password = getCredentialField(resourceConfig, "password");
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, customPath, allowInsecure);
+				profile, customPath, allowInsecure, readAppliance);
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
-				config.allowInsecure);
+				sslContextFor(config));
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
@@ -128,6 +130,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				config.allowInsecure);
 
 		this.benchmarkLoader = new BenchmarkLoader();
+		// HOLD (owner decision pending): "Read vCenter appliance settings".
+		// Off = the vami_api controls load as manual review for this
+		// instance (no score, no per-control alert, not attempted).
+		this.benchmarkLoader.setApplianceReads(config.readApplianceSettings);
 		// An instance edit re-runs configure and may change the benchmark
 		// mode (e.g. fixed -> Auto): forget last cycle's benchmarks so the
 		// B2 fallback never reuses a benchmark chosen under the old mode.
@@ -156,7 +162,31 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
 				+ " profile=" + config.benchmarkProfile
 				+ " allowInsecure=" + config.allowInsecure
+				+ " readApplianceSettings=" + config.readApplianceSettings
 				+ " stitcher=" + (stitcher != null));
+	}
+
+	/**
+	 * Build 74: the TLS context for the REST clients (VAMI appliance API and
+	 * Test Connection), with the same trust decision as the SOAP client:
+	 * trust-all only on the explicit allowInsecure opt-out, otherwise the
+	 * PLATFORM context (it used to be the JDK default context, which does not
+	 * trust a lab or enterprise CA, so every VAMI read failed on vCenters
+	 * whose certificate the platform trusts). Null (JDK default) only when no
+	 * platform context is available, e.g. a bare Test Connection instance.
+	 */
+	private javax.net.ssl.SSLContext sslContextFor(ComplianceConfig cfg) {
+		if (cfg.allowInsecure) {
+			return insecureSslContext();
+		}
+		try {
+			return getPlatformSslContext();
+		} catch (RuntimeException e) {
+			logWarn("Platform SSL context unavailable for the vCenter REST "
+					+ "client; using the JDK default trust store: "
+					+ e.getMessage());
+			return null;
+		}
 	}
 
 	/**
@@ -237,7 +267,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
-					testCfg.allowInsecure);
+					sslContextFor(testCfg));
 			testApi.login();
 			try {
 				SimpleJson hosts = testApi.listHosts();
@@ -364,6 +394,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		Path confDir = getAdapterDescribeFile(ADAPTER_KIND, "describe.xml")
 				.getParent();   // <adaptersHome>/<kind>/conf
 		cycleConfDir = confDir.toString();
+		cycleReasons = new UnreadableReasons();
 		BenchmarkSelector selector = buildSelector(cycleConfDir);
 		pendingCleanup.clear();
 
@@ -400,6 +431,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// Forget applied-profile history for objects no longer in inventory.
 		memory.retain(seen);
 		cleanStaleControls(cs);
+		if (cycleReasons.total() > 0) {
+			// Build 74: why controls were unreadable, once per cycle (the
+			// per-control detail is at DEBUG).
+			logInfo("Unreadable controls this cycle by reason: "
+					+ cycleReasons.summary());
+		}
 
 		pushRollup(vcEntry, rollup);
 
@@ -839,9 +876,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						+ "(no partial score emitted)");
 				cr = wholeUnreadable(hostControls, hostName);
 				wholeHostUnreadable = true;
+				noteUnreadable(hostName, "host-not-connected: connectionState="
+						+ connState, cr.unreadableCount);
 			} else {
 				java.util.Map<String, String> advSettings = null;
 				boolean advUnreadable = false;
+				String advReason = null;
 				try {
 					advSettings = vsphere.getAdvancedSettings(hostInfo.moRef);
 				} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
@@ -854,10 +894,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 							+ "compliance controls marked UNREADABLE this cycle "
 							+ "(no partial score emitted)");
 					wholeHostUnreadable = true;
+					advReason = "advanced-settings-unreadable: host flapped ("
+							+ e.getMessage() + ")";
 				} catch (Exception e) {
 					// Any other read failure (SOAP fault, transport) is a read
 					// failure, not an empty result: treat as unreadable.
 					advUnreadable = true;
+					advReason = "advanced-settings-unreadable: "
+							+ e.getClass().getSimpleName() + ": " + e.getMessage();
 					logWarn("Host " + hostName + ": failed to read advanced "
 							+ "settings (" + e.getMessage() + "); all "
 							+ "advanced_setting controls marked UNREADABLE this "
@@ -865,12 +909,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				}
 				if (wholeHostUnreadable) {
 					cr = wholeUnreadable(hostControls, hostName);
+					noteUnreadable(hostName, advReason, cr.unreadableCount);
 				} else {
 					ControlEvaluator.ComplianceResult advCr = advUnreadable
 							? ControlEvaluator.evaluateControlsUnreadable(
 									hostControls, hostName)
 							: ControlEvaluator.evaluateControls(
 									hostControls, advSettings, hostName);
+					if (advUnreadable) {
+						noteUnreadable(hostName, advReason,
+								advCr.unreadableCount);
+					}
 					ControlEvaluator.ComplianceResult vimCr =
 							evaluateVimForResource(hostInfo.moRef, hostControls,
 									hostName);
@@ -971,6 +1020,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						+ "marked UNREADABLE this cycle");
 				advCr = ControlEvaluator.evaluateControlsUnreadable(vmControls,
 						vm.name);
+				noteUnreadable(vm.name, "extraconfig-unreadable: "
+						+ e.getClass().getSimpleName() + ": " + e.getMessage(),
+						advCr.unreadableCount);
 			}
 			ControlEvaluator.ComplianceResult vimCr =
 					evaluateVimForResource(vm.moRef, vmControls, vm.name);
@@ -1080,6 +1132,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ "UNREADABLE this cycle");
 			advCr = ControlEvaluator.evaluateControlsUnreadable(vcControls,
 					resourceName);
+			noteUnreadable(resourceName, "vcenter-settings-unreadable: "
+					+ e.getClass().getSimpleName() + ": " + e.getMessage(),
+					advCr.unreadableCount);
 		}
 		ControlEvaluator.ComplianceResult vamiCr =
 				evaluateVamiForVCenter(vcControls, resourceName);
@@ -1237,6 +1292,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		if (cr == null) {
 			cr = unreadableVimResult(controls, name);
+			noteUnreadable(name, lastObjectFailure, cr.unreadableCount);
 		}
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
@@ -1254,15 +1310,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private Boolean probeVsan(VSphereClient.MoRef moRef, String name) {
 		try {
-			boolean present = vsphere.hasVsanConfig(moRef);
-			if (!present) {
-				logInfo("Cluster " + name + " has no vsanConfigInfo (non-vSAN "
-						+ "cluster), pushing profile_name only");
+			boolean enabled = vsphere.hasVsanConfig(moRef);
+			if (!enabled) {
+				logInfo("Cluster " + name + ": vSAN not enabled; vSAN "
+						+ "controls not applicable (profile_name only)");
 			}
-			return present;
+			return enabled;
 		} catch (Exception e) {
 			logWarn("Failed to probe vSAN config for cluster " + name + ": "
 					+ e.getMessage() + "; vSAN controls marked UNREADABLE");
+			lastObjectFailure = "vsan-probe-failed: " + e.getMessage();
 			return null;
 		}
 	}
@@ -1277,8 +1334,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} catch (Exception e) {
 			logWarn("Failed to read vim properties for " + name + ": "
 					+ e.getMessage() + "; controls marked UNREADABLE");
+			lastObjectFailure = "exception: " + e.getClass().getSimpleName()
+					+ ": " + e.getMessage();
 			return null;
 		}
+		noteReadReasons(name, controls, values, vsphere.lastReadReasons());
 		return ControlEvaluator.evaluateVimProperties(controls, values, name,
 				VSphereClient.UNREADABLE);
 	}
@@ -1359,10 +1419,60 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ e.getMessage()
 					+ ": vim_property / esxcli controls marked UNREADABLE this "
 					+ "cycle (advanced_setting results preserved)");
-			return unreadableVimResult(controls, resourceName);
+			ControlEvaluator.ComplianceResult u =
+					unreadableVimResult(controls, resourceName);
+			noteUnreadable(resourceName, "exception: " + e.getClass()
+					.getSimpleName() + ": " + e.getMessage(), u.unreadableCount);
+			return u;
 		}
+		noteReadReasons(resourceName, controls, values,
+				vsphere.lastReadReasons());
 		return ControlEvaluator.evaluateVimProperties(
 				controls, values, resourceName, VSphereClient.UNREADABLE);
+	}
+
+	// ----- unreadable diagnostics (build 74) ------------------------------
+
+	/** This cycle's unreadable reasons; reset at the start of each cycle. */
+	private volatile UnreadableReasons cycleReasons = new UnreadableReasons();
+
+	/** Why the last whole-object vim read (or vSAN probe) failed. */
+	private volatile String lastObjectFailure;
+
+	private volatile com.integrien.alive.common.adapter3.Logger debugLog;
+
+	private void logDebug(String message) {
+		com.integrien.alive.common.adapter3.Logger l = debugLog;
+		if (l == null) {
+			l = componentLogger(ComplianceAdapter.class);
+			debugLog = l;
+		}
+		if (l != null && l.isDebugEnabled()) {
+			l.debug(message);
+		}
+	}
+
+	/** Record {@code count} unreadable controls on one object for a reason. */
+	private void noteUnreadable(String resourceName, String reason, int count) {
+		if (count <= 0) return;
+		cycleReasons.record(reason, count);
+		logDebug("Unreadable on " + resourceName + ": " + count
+				+ " control(s): " + reason);
+	}
+
+	/** Record the per-control reasons of one readVimProperties call. */
+	private void noteReadReasons(String resourceName,
+			java.util.List<BenchmarkProfile.Control> controls,
+			java.util.Map<String, Object> values,
+			java.util.Map<String, String> reasons) {
+		for (BenchmarkProfile.Control c : controls) {
+			if (values.get(c.parameter) != VSphereClient.UNREADABLE) continue;
+			String why = reasons.get(c.parameter);
+			if (why == null) why = "unknown: no reason recorded";
+			cycleReasons.record(why, 1);
+			logDebug("Unreadable " + c.controlId + " on " + resourceName
+					+ " (" + c.readRecipe + "): " + why);
+		}
 	}
 
 	private ControlEvaluator.ComplianceResult evaluateVamiForVCenter(
@@ -1375,43 +1485,43 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		VamiApiClient client = new VamiApiClient(
 				config.baseUrl(), config.username, config.password,
-				config.allowInsecure);
-
-		java.util.Map<String, Object> values = new java.util.HashMap<>();
-		for (BenchmarkProfile.Control c : controls) {
-			if (!"vami_api".equals(c.parameterKind) || !c.isEvaluable()) {
-				continue;
+				sslContextFor(config), this::logWarn);
+		try {
+			java.util.Map<String, Object> values = new java.util.HashMap<>();
+			for (BenchmarkProfile.Control c : controls) {
+				if (!"vami_api".equals(c.parameterKind) || !c.isEvaluable()) {
+					continue;
+				}
+				VamiRecipe r = VamiRecipe.parse(c.readRecipe);
+				if (r == null) {
+					values.put(c.configParameter, VSphereClient.UNREADABLE);
+					noteUnreadableControl(resourceName, c,
+							"recipe-malformed: " + c.readRecipe);
+					continue;
+				}
+				Object read = client.readField(r.appliancePath, r.field);
+				if (read == VamiApiClient.FAILED || read == null) {
+					values.put(c.configParameter, VSphereClient.UNREADABLE);
+					String why = client.failureReason(r.appliancePath, r.field);
+					noteUnreadableControl(resourceName, c,
+							why != null ? why : "vami-failed: " + c.readRecipe);
+				} else {
+					values.put(c.configParameter, read);
+				}
 			}
-			String[] parsed = parseVamiRecipe(c.readRecipe);
-			if (parsed == null) {
-				values.put(c.configParameter, VSphereClient.UNREADABLE);
-				continue;
-			}
-			Object read = client.readField(parsed[0], parsed[1]);
-			if (read == VamiApiClient.FAILED || read == null) {
-				values.put(c.configParameter, VSphereClient.UNREADABLE);
-			} else {
-				values.put(c.configParameter, read);
-			}
+			return ControlEvaluator.evaluateVimProperties(
+					controls, values, resourceName, VSphereClient.UNREADABLE);
+		} finally {
+			// Build 74: end the appliance session every cycle.
+			client.close();
 		}
-
-		return ControlEvaluator.evaluateVimProperties(
-				controls, values, resourceName, VSphereClient.UNREADABLE);
 	}
 
-	private static String[] parseVamiRecipe(String recipe) {
-		if (recipe == null) return null;
-		String r = recipe.trim();
-		if (!r.startsWith("vami:")) return null;
-		String rest = r.substring("vami:".length());
-		int lastColon = rest.lastIndexOf(':');
-		if (lastColon <= 0 || lastColon >= rest.length() - 1) {
-			return null;
-		}
-		String appliancePath = rest.substring(0, lastColon).trim();
-		String field = rest.substring(lastColon + 1).trim();
-		if (appliancePath.isEmpty() || field.isEmpty()) return null;
-		return new String[]{appliancePath, field};
+	private void noteUnreadableControl(String resourceName,
+			BenchmarkProfile.Control c, String why) {
+		cycleReasons.record(why, 1);
+		logDebug("Unreadable " + c.controlId + " on " + resourceName + " ("
+				+ c.readRecipe + "): " + why);
 	}
 
 	/** Zero-count, score=100 sentinel result (no controls evaluated). */
