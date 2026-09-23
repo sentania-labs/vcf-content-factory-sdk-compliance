@@ -39,11 +39,12 @@ public final class ProfileSetTest {
 				T.check(c.manualReview, e.getKey() + " " + id + " flagged");
 			}
 		}
-		T.eq(37, rows, "overlay rows: 22 prose + 15 standard-switch (build 70)");
+		T.eq(40, rows, "overlay rows: 22 prose + 15 standard-switch (build 70)"
+				+ " + 3 cluster.object-checksum (build 74)");
 		int flagged = 0;
 		for (BenchmarkProfile p : all.values()) flagged += p.manualReviewCount;
-		T.eq(37, flagged, "every overlay row applied exactly once");
-		T.eq(37, loader.lastManualReviewApplied(), "loader diagnostic");
+		T.eq(40, flagged, "every overlay row applied exactly once");
+		T.eq(40, loader.lastManualReviewApplied(), "loader diagnostic");
 
 		// Build 70 (Codex P1 on PR #12): no control sourced from the ESX
 		// host (standard switch) may be scored on a distributed switch or
@@ -112,6 +113,9 @@ public final class ProfileSetTest {
 		}
 		T.check(checked > 100, "read-path guard covered " + checked + " rows");
 		T.check(bad.isEmpty(), "read paths not on their kind: " + bad);
+		T.check(readPathProblem("HostSystem",
+				"scalar:config.encryptionState.mode") != null,
+				"guard rejects the non-existent config.encryptionState");
 		T.check(readPathProblem("DistributedVirtualSwitch",
 				"bool:config.policy.portConfigResetAtDisconnect") != null,
 				"guard rejects the old vds.network-reset-port read");
@@ -199,7 +203,9 @@ public final class ProfileSetTest {
 	 *   <li>ClusterComputeResource.configurationEx.vsanConfigInfo
 	 *       (VsanClusterConfigInfo: enabled, defaultConfig).</li>
 	 *   <li>HostSystem.config (HostConfigInfo) and VirtualMachine.config
-	 *       (VirtualMachineConfigInfo) fields used by the recipes.</li>
+	 *       (VirtualMachineConfigInfo) fields used by the recipes. Build 74:
+	 *       no {@code config.encryptionState.*} (HostConfigInfo has no such
+	 *       field; host encryption now reads esxcli).</li>
 	 * </ul>
 	 * Style rules: esxcli and service_state read the host only; vami reads
 	 * the vCenter appliance only. Adding a control with a new path means
@@ -233,9 +239,6 @@ public final class ProfileSetTest {
 						"configurationEx.vsanConfigInfo.defaultConfig.checksumEnabled")));
 		ALLOWED_PATHS.put("HostSystem", new java.util.TreeSet<>(
 				java.util.Arrays.asList(
-						"config.encryptionState.mode",
-						"config.encryptionState.requireSecureBoot",
-						"config.encryptionState.requireExecuteInstalledOnly",
 						"config.firewall.defaultPolicy.incomingBlocked",
 						"config.lockdownMode",
 						"config.dateTimeInfo.ntpConfig.server")));

@@ -81,6 +81,11 @@ drops to informational or scores against the wrong literal):
    `dvpg.network-reset-port` (its read is a portgroup-policy field; a
    distributed switch always read it as unreadable). Shared with the 8.0
    and 9.0 drivers: scripts/_adapter_deltas.py.
+9. **Encryption and VAMI reads (adapter build 74).** Host encryption
+   rows read `esxcli:system.settings.encryption.get` (the vim25
+   `config.encryptionState` path does not exist); VAMI recipes fixed
+   (`access/ssh:(value)`, `local-accounts/root`). See
+   scripts/_adapter_deltas.py.
 """
 
 from __future__ import annotations
@@ -225,6 +230,10 @@ def main(argv: list) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _adapter_deltas as deltas
     deltas.reset_port_to_portgroup(out_rows)
+    # Delta 9: build-74 encryption (esxcli) and VAMI recipe fixes.
+    got = deltas.build74(out_rows)
+    if got != {"encryption": 1, "vami": 2}:
+        raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
     base.write_canonical(argv[2], out_rows)
     return 0
 

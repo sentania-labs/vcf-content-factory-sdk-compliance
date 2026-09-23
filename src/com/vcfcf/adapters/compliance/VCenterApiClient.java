@@ -3,14 +3,11 @@ package com.vcfcf.adapters.compliance;
 import com.vcfcf.adapter.json.SimpleJson;
 
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Base64;
 
@@ -22,22 +19,22 @@ public final class VCenterApiClient {
 	private final String password;
 	private volatile String sessionId;
 
+	/**
+	 * @param sslContext build 74: the platform TLS context when
+	 *        allowInsecure=false (was the JDK default, which does not trust
+	 *        a lab or enterprise CA), the trust-all context when
+	 *        allowInsecure=true. Null falls back to the JDK default.
+	 */
 	public VCenterApiClient(String baseUrl, String username, String password,
-			boolean allowInsecure) {
+			SSLContext sslContext) {
 		this.baseUrl = baseUrl;
 		this.username = username;
 		this.password = password;
 
 		HttpClient.Builder builder = HttpClient.newBuilder()
 				.connectTimeout(Duration.ofSeconds(30));
-		if (allowInsecure) {
-			try {
-				SSLContext ctx = SSLContext.getInstance("TLS");
-				ctx.init(null, new TrustManager[]{new TrustAllManager()}, null);
-				builder.sslContext(ctx);
-			} catch (Exception e) {
-				throw new RuntimeException("Failed to configure insecure SSL", e);
-			}
+		if (sslContext != null) {
+			builder.sslContext(sslContext);
 		}
 		this.httpClient = builder.build();
 	}
@@ -136,11 +133,5 @@ public final class VCenterApiClient {
 				.timeout(Duration.ofSeconds(30))
 				.build();
 		return httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-	}
-
-	private static final class TrustAllManager implements X509TrustManager {
-		@Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-		@Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-		@Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
 	}
 }

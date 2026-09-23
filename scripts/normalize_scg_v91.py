@@ -42,6 +42,12 @@ delta 6 is adapter build 57):
    this row. Replaced, for this run only, with the minimum-version
    caveat (VMX_MINIMUM_CAVEAT below, shared with the 7.0 driver).
 
+7. **Encryption, VAMI and TLS (adapter build 74).** Applied to the
+   output through scripts/_adapter_deltas.py: host encryption rows read
+   `esxcli:system.settings.encryption.get`, the VAMI recipes are fixed,
+   and `vc.tls-ciphers` expects `NIST_2024_TLS_13_ONLY` (the vendor 9.1
+   baseline).
+
 The deltas are applied by patching the imported factory modules
 in-process (module-level constants and the shared COMPONENT_MAP /
 SOURCE_ID_PREFIX_MAP dicts) rather than forking the 300-line driver.
@@ -182,7 +188,25 @@ def main(argv: list) -> int:
     base._VIM_RECLASS_DESCRIPTION_CAVEAT["vm.virtual-hardware"] = (
         VMX_MINIMUM_CAVEAT)
 
-    return v9.normalize(argv[1], argv[2])
+    rc = v9.normalize(argv[1], argv[2])
+    if rc != 0:
+        return rc
+
+    # Delta 7 (adapter build 74): encryption rows to esxcli, VAMI recipe
+    # fixes, and the vc.tls-ciphers expected value (scripts/_adapter_deltas.py).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _adapter_deltas as deltas
+    got = {}
+
+    def _apply(rows):
+        got.update(deltas.build74(rows))
+        got["tls"] = deltas.tls_ciphers_91(rows)
+        return 0
+
+    deltas.rewrite(argv[2], base, _apply)
+    if got != {"encryption": 3, "vami": 2, "tls": 1}:
+        raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
+    return 0
 
 
 # Shared with normalize_scg_v70.py (the two SCG versions whose baseline

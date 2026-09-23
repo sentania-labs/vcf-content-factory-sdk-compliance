@@ -11,7 +11,7 @@ list to find the data:
 |---|---|
 | HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`, `collection_failed` (1 when nothing could be read on the object). |
 | VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
-| The same six kinds | 144 alert definitions, all type Compliance (subType 21): 137 per-control alerts, one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 Host Compliance Score Degraded alert on HostSystem (score below 95 / 80). |
+| The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 Host Compliance Score Degraded alert on HostSystem (score below 95 / 80). |
 
 The full key list, with when each key is pushed, is in the repo
 `README.md` under "Keys pushed onto VMWARE resources".
@@ -197,6 +197,15 @@ collection continues; compliance is never failed over a stitch error.
 - **Prose expected values are manual review.** Controls whose SCG
   expected value is site-specific text (login banners, log server) are
   listed in `profiles/manual_review.csv` and never scored.
+- **vCenter appliance settings are opt-in (build 74).** The adapter
+  instance setting "Read vCenter appliance settings" (default off) decides
+  whether the appliance (VAMI) controls are read. Off, they are manual
+  review. On, the collection account needs the vsphere.local SSO group
+  `SystemConfiguration.Administrators`, which also grants appliance write
+  access.
+- **vSAN controls only on vSAN clusters (build 74).** A cluster is scored
+  on vSAN controls only when vSAN is enabled on it; before build 74 every
+  cluster was.
 - **Standard-switch controls are not scored (build 70).** The SCG's
   standard-switch security policy controls (reject forged transmits, MAC
   address changes and promiscuous mode on host vSwitches) belong to each

@@ -9,8 +9,35 @@ public final class ComplianceConfig {
 	public final String customProfilePath;
 	public final boolean allowInsecure;
 
+	/**
+	 * HOLD (owner decision pending, build 74): the adapter-instance setting
+	 * "Read vCenter appliance settings" (identifier {@link #READ_APPLIANCE_KEY}).
+	 * Off: the vCenter appliance (VAMI) controls load as manual review for
+	 * this instance (not attempted, no score, no per-control alert). On: they
+	 * are read and scored, which needs the collection account in the
+	 * vsphere.local SSO group SystemConfiguration.Administrators (that group
+	 * also grants appliance WRITE access; there is no read-only appliance
+	 * role).
+	 *
+	 * <p>Changing the answer is a one-line default change here plus the
+	 * matching {@code default=} on the describe.xml identifier. An absent or
+	 * blank stored value (every instance created before build 74) takes this
+	 * default.
+	 */
+	public static final boolean DEFAULT_READ_APPLIANCE = false;
+	public static final String READ_APPLIANCE_KEY = "read_appliance_settings";
+	public final boolean readApplianceSettings;
+
 	public ComplianceConfig(String vcenterHost, String username, String password,
 			String benchmarkProfile, String customProfilePath, String allowInsecure) {
+		this(vcenterHost, username, password, benchmarkProfile,
+				customProfilePath, allowInsecure, null);
+	}
+
+	public ComplianceConfig(String vcenterHost, String username, String password,
+			String benchmarkProfile, String customProfilePath, String allowInsecure,
+			String readApplianceSettings) {
+		this.readApplianceSettings = parseReadAppliance(readApplianceSettings);
 		this.vcenterHost = (vcenterHost != null && !vcenterHost.isEmpty())
 				? vcenterHost : "localhost";
 		this.username = (username != null) ? username : "";
@@ -36,6 +63,15 @@ public final class ComplianceConfig {
 	 */
 	public boolean isAuto() {
 		return BenchmarkSelector.AUTO.equals(benchmarkProfile);
+	}
+
+	/** "true" / "false" (case-insensitive); anything else takes the default. */
+	static boolean parseReadAppliance(String raw) {
+		if (raw == null) return DEFAULT_READ_APPLIANCE;
+		String v = raw.trim();
+		if ("true".equalsIgnoreCase(v)) return true;
+		if ("false".equalsIgnoreCase(v)) return false;
+		return DEFAULT_READ_APPLIANCE;
 	}
 
 	public String baseUrl() {

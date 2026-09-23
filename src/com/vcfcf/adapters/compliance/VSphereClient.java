@@ -80,6 +80,18 @@ public final class VSphereClient {
 	private volatile String aboutFullName;
 	private volatile String aboutVersion;      // ServiceContent.about.version
 
+	// Build 74 diagnostics. lastFault: the faultstring (with HTTP status) of
+	// the most recent failed SOAP call. readFailure: why the current recipe
+	// read returned nothing, set at the point of failure (category first,
+	// see UnreadableReasons). lastReasons: parameter -> reason for the
+	// unreadable controls of the most recent readVimProperties call.
+	private volatile String lastFault;
+	private volatile String readFailure;
+	private final Map<String, String> lastReasons = new HashMap<>();
+	private final java.util.Set<String> warnedEsxciFields =
+			java.util.Collections.newSetFromMap(
+					new java.util.concurrent.ConcurrentHashMap<>());
+
 	// esxcli reader (build 36) — rides THIS vCenter session. Rebuilt on
 	// every (re)connect so it carries the live cookie and a fresh per-cycle
 	// command cache. Lazily used on first esxcli recipe read.
@@ -517,19 +529,29 @@ public final class VSphereClient {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Whether a cluster has a vSAN config object at all. Distinguishes a
-	 * NON-vSAN cluster (vSAN controls genuinely N/A → skip silently) from a
-	 * vSAN cluster where a field read back null (a real coverage gap →
-	 * unreadable). Returns false when {@code configurationEx} or its
-	 * {@code vsanConfigInfo} child is absent. DOM walk; never casts.
+	 * Whether vSAN is ENABLED on a cluster (build 74: {@link VsanGate}).
+	 * False means the vSAN controls are not applicable (no score, no
+	 * unreadable). Throws when {@code configurationEx} cannot be read, so the
+	 * caller folds the controls to UNREADABLE. DOM walk; never casts.
 	 */
 	public boolean hasVsanConfig(MoRef clusterRef) throws Exception {
 		ensureConnected();
-		if (clusterRef == null) return false;
+		if (clusterRef == null) {
+			throw new Exception("no cluster MoRef");
+		}
 		Element configEx = getRawPropertyElement(clusterRef, "configurationEx");
-		if (configEx == null) return false;
-		Element vsanCfg = firstDirectChild(configEx, "vsanConfigInfo");
-		return vsanCfg != null;
+		if (configEx == null) {
+			// Build 74: every cluster has configurationEx; a null here is a
+			// FAILED read (SOAP fault / missing propSet), not "no vSAN".
+			// Throwing makes the caller fold the vSAN controls to
+			// UNREADABLE instead of quietly calling them not applicable.
+			throw new Exception("configurationEx unreadable"
+					+ (lastFault != null ? " (" + lastFault + ")" : ""));
+		}
+		// Build 74: vSAN enabled only when vsanConfigInfo/enabled is true.
+		// vCenter 9.x returns vsanConfigInfo (enabled=false) on non-vSAN
+		// clusters too, so "element present" scored them on vSAN controls.
+		return VsanGate.vsanEnabled(configEx);
 	}
 
 	// -----------------------------------------------------------------------
@@ -562,6 +584,9 @@ public final class VSphereClient {
 			List<BenchmarkProfile.Control> controls) throws Exception {
 		ensureConnected();
 		Map<String, Object> result = new HashMap<>();
+		synchronized (lastReasons) {
+			lastReasons.clear();
+		}
 		if (moRef == null || controls == null) return result;
 
 		for (BenchmarkProfile.Control c : controls) {
@@ -574,14 +599,38 @@ public final class VSphereClient {
 				continue;
 			}
 			Object value;
+			readFailure = null;
+			lastFault = null;
 			try {
 				value = readByRecipe(moRef, recipe.trim());
 			} catch (Exception e) {
 				value = null;
+				readFailure = "exception: " + e.getClass().getSimpleName()
+						+ ": " + e.getMessage();
+			}
+			if (value == null) {
+				String why = readFailure;
+				if (why == null) {
+					why = lastFault != null ? "soap-fault: " + lastFault
+							: "value-absent: " + recipe.trim();
+				}
+				synchronized (lastReasons) {
+					lastReasons.put(c.parameter, why);
+				}
 			}
 			result.put(c.parameter, value != null ? value : UNREADABLE);
 		}
 		return result;
+	}
+
+	/**
+	 * Build 74: parameter -> reason for each control the most recent
+	 * {@link #readVimProperties} call could not read (a copy).
+	 */
+	public Map<String, String> lastReadReasons() {
+		synchronized (lastReasons) {
+			return new HashMap<>(lastReasons);
+		}
 	}
 
 	/**
@@ -593,11 +642,15 @@ public final class VSphereClient {
 	Object readByRecipe(MoRef moRef, String recipe) throws Exception {
 		int colon = recipe.indexOf(':');
 		if (colon <= 0 || colon >= recipe.length() - 1) {
+			readFailure = "recipe-malformed: " + recipe;
 			return null;
 		}
 		String style = recipe.substring(0, colon).trim();
 		String path = recipe.substring(colon + 1).trim();
-		if (path.isEmpty()) return null;
+		if (path.isEmpty()) {
+			readFailure = "recipe-malformed: " + recipe;
+			return null;
+		}
 
 		// esxcli and service_state carry a three-part grammar; handle before
 		// the generic dotted-path split.
@@ -625,6 +678,7 @@ public final class VSphereClient {
 			case "vlan_id_not":
 				return readVlanIdNotRecipe(moRef, segments);
 			default:
+				readFailure = "recipe-unknown-style: " + style;
 				return null;   // unknown style -> UNREADABLE, never a guess
 		}
 	}
@@ -633,6 +687,7 @@ public final class VSphereClient {
 
 	private Object readEsxcliRecipe(MoRef moRef, String path) throws Exception {
 		if (esxcli == null) {
+			readFailure = "esxcli-unavailable: no esxcli session";
 			return null;
 		}
 		int sep = path.lastIndexOf(':');
@@ -667,8 +722,25 @@ public final class VSphereClient {
 		} else {
 			value = esxcli.readField(hostMoid, namespaceCommand, fieldSpec);
 		}
-		if (value == null
-				|| EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
+		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
+			readFailure = "esxcli-command-failed: " + namespaceCommand
+					+ (lastFault != null ? " (" + lastFault + ")" : "");
+			return null;
+		}
+		if (value == null) {
+			java.util.Set<String> have = esxcli.structFields(hostMoid,
+					namespaceCommand);
+			readFailure = "esxcli-field-missing: " + namespaceCommand + " "
+					+ fieldSpec + (have.isEmpty() ? "" : " (fields: " + have + ")");
+			// Build 74: say so once per (command, field) per collector
+			// session; field names for some rows come from the vendor audit
+			// script and are not yet confirmed on the wire.
+			if (warnedEsxciFields.add(namespaceCommand + "|" + fieldSpec)) {
+				logWarn("esxcli " + namespaceCommand + ": field '" + fieldSpec
+						+ "' not in the result" + (have.isEmpty() ? ""
+						: " (fields returned: " + have + ")")
+						+ "; controls reading it are UNREADABLE");
+			}
 			return null;
 		}
 		String trimmed = value.trim();
@@ -728,7 +800,11 @@ public final class VSphereClient {
 		Element node = walkToNode(moRef, segments);
 		if (node == null) return null;
 		String text = elementText(node);
-		return (text == null || text.isEmpty()) ? null : text;
+		if (text == null || text.isEmpty()) {
+			readFailure = "empty-value: " + String.join(".", segments);
+			return null;
+		}
+		return text;
 	}
 
 	/**
@@ -741,7 +817,11 @@ public final class VSphereClient {
 			throws Exception {
 		Element node = walkToNode(moRef, segments);
 		if (node == null) return null;
-		return parseBool(elementText(node));
+		Boolean b = parseBool(elementText(node));
+		if (b == null) {
+			readFailure = "unparsable-value: " + String.join(".", segments);
+		}
+		return b;
 	}
 
 	/**
@@ -908,9 +988,18 @@ public final class VSphereClient {
 		int[] consumed = new int[1];
 		Element node = getLongestPrefixElement(moRef, segments,
 				segments.length, consumed);
+		if (node == null) {
+			noteNoPrefix(segments);
+			return null;
+		}
 		for (int i = consumed[0]; i < segments.length; i++) {
-			if (node == null) return null;
-			node = firstDirectChild(node, segments[i]);
+			Element next = firstDirectChild(node, segments[i]);
+			if (next == null) {
+				readFailure = "missing-element: '" + segments[i] + "' in "
+						+ String.join(".", segments);
+				return null;
+			}
+			node = next;
 		}
 		return node;
 	}
@@ -926,11 +1015,27 @@ public final class VSphereClient {
 		int[] consumed = new int[1];
 		Element node = getLongestPrefixElement(moRef, segments,
 				segments.length - 1, consumed);
+		if (node == null) {
+			noteNoPrefix(segments);
+			return null;
+		}
 		for (int i = consumed[0]; i < segments.length - 1; i++) {
-			if (node == null) return null;
-			node = firstDirectChild(node, segments[i]);
+			Element next = firstDirectChild(node, segments[i]);
+			if (next == null) {
+				readFailure = "missing-element: '" + segments[i] + "' in "
+						+ String.join(".", segments);
+				return null;
+			}
+			node = next;
 		}
 		return node;
+	}
+
+	private void noteNoPrefix(String[] segments) {
+		readFailure = lastFault != null
+				? "soap-fault: " + lastFault + " (" + String.join(".", segments) + ")"
+				: "missing-element: no prefix of " + String.join(".", segments)
+						+ " resolved";
 	}
 
 	/**
@@ -1283,10 +1388,29 @@ public final class VSphereClient {
 		byte[] respBytes = drain(is);
 		conn.disconnect();
 		if (code < 200 || code >= 300) {
+			// Build 74: remember why (diagnostics only; the fault string is
+			// vCenter's message, never contains credentials).
+			lastFault = "HTTP " + code + faultString(respBytes);
 			return null;   // SOAP fault (500) / auth failure -> null upstream
 		}
 		if (respBytes == null || respBytes.length == 0) return null;
 		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
+	}
+
+	private static final java.util.regex.Pattern FAULTSTRING =
+			java.util.regex.Pattern.compile(
+					"<faultstring>(.*?)</faultstring>",
+					java.util.regex.Pattern.DOTALL);
+
+	/** " <faultstring>" from a SOAP fault body, or "". */
+	static String faultString(byte[] body) {
+		if (body == null || body.length == 0) return "";
+		java.util.regex.Matcher m = FAULTSTRING.matcher(
+				new String(body, StandardCharsets.UTF_8));
+		if (!m.find()) return "";
+		String f = m.group(1).trim();
+		if (f.length() > 200) f = f.substring(0, 200) + "...";
+		return " " + f;
 	}
 
 	private void captureCookie(HttpURLConnection conn) {

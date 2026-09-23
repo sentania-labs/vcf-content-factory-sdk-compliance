@@ -128,8 +128,16 @@ COLLECTION_REC_TEXT = (
     "lists show the count in their Unreadable column). Check the object's "
     "connection state in vCenter, the adapter account's permissions "
     "(read-only at the vCenter root, propagated to children), and the "
-    "adapter log for read errors naming this object. The alert clears on "
-    "the first collection cycle in which every setting is read.")
+    "adapter log for read errors naming this object (the log also gives, "
+    "once per cycle, a count of unreadable settings by reason). For the "
+    "vCenter appliance settings (read only when the instance's \"Read "
+    "vCenter appliance settings\" option is on), the account must be in "
+    "the vsphere.local SSO group SystemConfiguration.Administrators; that "
+    "group also grants appliance WRITE access (there is no read-only "
+    "appliance role), so decide whether that trade-off is acceptable before "
+    "granting it, or turn the option off to report those settings for "
+    "manual review. The alert clears on the first collection cycle in which "
+    "every setting is read.")
 
 
 def collection_failed_symptom_id(unreadable_sid: str) -> str:

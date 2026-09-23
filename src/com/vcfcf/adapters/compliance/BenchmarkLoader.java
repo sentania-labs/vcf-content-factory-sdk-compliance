@@ -85,6 +85,35 @@ public final class BenchmarkLoader {
 	private volatile BenchmarkProfile cachedProfile;
 	private volatile String cachedProfileKey;
 
+	// HOLD (build 74): "Read vCenter appliance settings". When false, every
+	// vami_api control loads as manual review (see ComplianceConfig
+	// .readApplianceSettings). Defaults to true here so the loader on its own
+	// (tests, tooling) reads profiles exactly as written; the adapter sets it
+	// from the instance configuration.
+	private volatile boolean applianceReads = true;
+
+	/** Set the appliance-read setting; the cache is rebuilt on change. */
+	public void setApplianceReads(boolean read) {
+		if (read != applianceReads) {
+			applianceReads = read;
+			invalidate();
+		}
+	}
+
+	/**
+	 * vami_api controls demoted to manual review when appliance reads are
+	 * off. Counted in {@link BenchmarkProfile#manualReviewCount} too.
+	 */
+	static List<BenchmarkProfile.Control> applyApplianceSetting(
+			List<BenchmarkProfile.Control> controls, boolean read) {
+		if (read) return controls;
+		List<BenchmarkProfile.Control> out = new ArrayList<>(controls.size());
+		for (BenchmarkProfile.Control c : controls) {
+			out.add("vami_api".equals(c.parameterKind) ? c.asManualReview() : c);
+		}
+		return out;
+	}
+
 	private volatile Map<String, BenchmarkProfile> cachedAll;
 	private volatile String cachedAllKey;
 
@@ -99,7 +128,7 @@ public final class BenchmarkLoader {
 	 * would otherwise fall into "no benchmark" and hide the broken install.
 	 */
 	public Map<String, BenchmarkProfile> loadAll(String confDir) {
-		String key = String.valueOf(confDir);
+		String key = confDir + "|appliance=" + applianceReads;
 		Map<String, BenchmarkProfile> all = cachedAll;
 		if (all != null && key.equals(cachedAllKey)) {
 			return all;
@@ -126,7 +155,8 @@ public final class BenchmarkLoader {
 
 	public BenchmarkProfile load(String profileName, String customPath,
 			String confDir) {
-		String key = profileName + "|" + customPath + "|" + confDir;
+		String key = profileName + "|" + customPath + "|" + confDir
+				+ "|appliance=" + applianceReads;
 		if (cachedProfile != null && key.equals(cachedProfileKey)) {
 			return cachedProfile;
 		}
@@ -135,9 +165,9 @@ public final class BenchmarkLoader {
 		if ("Custom".equalsIgnoreCase(profileName) && customPath != null
 				&& !customPath.isEmpty()) {
 			List<String> lines = readFile(Paths.get(customPath));
-			profile = new BenchmarkProfile("Custom",
-					parseCanonical(lines, customPath));
-			lastManualReviewApplied = 0;
+			profile = new BenchmarkProfile("Custom", applyApplianceSetting(
+					parseCanonical(lines, customPath), applianceReads));
+			lastManualReviewApplied = countManualReview(profile);
 		} else {
 			String resolvedName = resolveBundledProfileName(profileName);
 			profile = loadBundled(resolvedName, confDir,
@@ -176,7 +206,9 @@ public final class BenchmarkLoader {
 		List<BenchmarkProfile.Control> controls =
 				parseCanonical(lines, sourceForErrors);
 		return new BenchmarkProfile(resolvedName,
-				applyManualReview(resolvedName, controls, overlay));
+				applyApplianceSetting(
+						applyManualReview(resolvedName, controls, overlay),
+						applianceReads));
 	}
 
 	/**
