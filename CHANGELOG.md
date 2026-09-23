@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.66 (2026-09-23)
+
+- docs(adapter): build 66: close the build-65 review NIT (knowledge/context/reviews/compliance-build-65.md). docs/overview.md no longer says a disconnected host raises the collection alert "instead" of a violation: on a disconnected or version-unreadable host both "Compliance data not collected" and the Critical "Host Compliance Score Degraded" alert (score 0) are expected, and both clear once the host reconnects and is read again. Docs only; no code or content change.
+
 ## 0.0.0.65 (2026-09-23)
 
 - fix(adapter): build 65: close the build-64 review (knowledge/context/reviews/compliance-build-64.md: APPROVED with 2 WARNING), under the existing owner decision ("count it as failing, tell the user it's failing to collect"). Numbered by finding:

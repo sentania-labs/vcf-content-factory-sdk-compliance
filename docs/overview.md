@@ -120,11 +120,14 @@ collection continues; compliance is never failed over a stitch error.
   permissions, or a read method not supported on this version) counts
   against the object's score like a failure:
   score = pass / (pass + fail + unreadable). A disconnected host, where
-  every setting is unreadable, scores 0. It is not reported as a
-  violation: `fail_count` excludes it, its `Compliant` is -1 so no
+  every setting is unreadable, scores 0. An unreadable setting is not a
+  control violation: `fail_count` excludes it, its `Compliant` is -1 so no
   per-control alert fires, and `unreadable_count` counts it separately.
-  Instead the object raises "Compliance data not collected (<kind>)"
-  (severity Immediate), whose recommendation says what to check. When
+  The object raises "Compliance data not collected (<kind>)" (severity
+  Immediate), whose recommendation says what to check. On a disconnected
+  or version-unreadable host both that alert and the Critical "Host
+  Compliance Score Degraded" alert (its score is 0) are expected, and both
+  clear once the host reconnects and is read again. When
   nothing at all could be read (every attempted setting unreadable, or the
   object's version unreadable with no previous SCG), the object also has
   `collection_failed` = 1 (0 otherwise, pushed every cycle); the alert
