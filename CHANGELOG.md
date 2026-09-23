@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.0.71 (2026-09-23)
+
+- feat(content): build 71: content follow-ups to the Codex review on PR #12, committed as the content authors wrote them (no adapter code change).
+  1. **Codex P1 (fixed in build 70):** standard-switch security controls were scored from the distributed switch (false pass); build 70 stopped scoring them and retired their alerts. Here dashboard-author removes the six retired alert ids from the dashboard alert lists: Environment Overview 144 (was 150), vCenter & Networking 33 (was 39); ESX Hosts 87 and VMs 24 unchanged. `tests/test_dashboard_alert_lists.py` passes again.
+  2. **Codex P2 (fixed here):** the object lists showed a score without how many controls it was based on. View-author adds a "Controls Evaluated" column (`VCF-CF Compliance|total_count`) after the score in six views (Compliance Host Detail, VM Detail, vCenter Servers, Clusters, Distributed Switches, Distributed Portgroups), with a description sentence, and shifts the SUM column index lists to match.
+
 ## 0.0.0.70 (2026-09-23)
 
 - fix(adapter): build 70: close Codex P1 on PR #12 (standard-switch controls scored on the distributed switch). **Behavior change: false-pass fix.** The SCG standard-switch security controls, `vds.network-reject-{forged-transmit,mac-changes,promiscuous-mode}-standardswitch` (SCG 6.7 / 7.0 / 8.0) and `vds.network-standard-reject-{forged-transmit,mac-changes,promiscuous-mode}` (SCG 9.0 / 9.1), apply to each ESX host's standard vSwitches, but the canonical profiles map them to `DistributedVirtualSwitch`, so the adapter read `config.defaultPortConfig.securityPolicy` from each distributed switch and could report a PASS while the hosts' standard switches were insecure. Numbered:

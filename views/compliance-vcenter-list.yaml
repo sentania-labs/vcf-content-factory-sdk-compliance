@@ -10,9 +10,10 @@ description: >
   beside it (owner accepted, 2026-09-23). Unreadable controls count as
   failing in the score (adapter build 63); the Unreadable column shows
   how many, and a "Compliance data not collected" alert explains why.
-  The totals row is sums only (issue #168). Sort by Compliance Score
-  ascending in the dashboard widget to surface the worst vCenter
-  first.
+  The totals row is sums only (issue #168). A score beside Controls
+  Evaluated = 0 is retained from an earlier cycle, not current. Sort by
+  Compliance Score ascending in the dashboard widget to surface the
+  worst vCenter first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VMwareAdapter Instance
@@ -31,6 +32,8 @@ columns:
     orange_bound: 90
     yellow_bound: 95
     ascending_range: true
+  - attribute: VCF-CF Compliance|total_count
+    display_name: "Controls Evaluated"
   - attribute: VCF-CF Compliance|fail_count
     display_name: "Failing"
   - attribute: VCF-CF Compliance|unreadable_count
@@ -43,7 +46,7 @@ columns:
 summary:
   display_name: "Totals"
   aggregation: SUM
-  columns: [3, 4, 5, 6]
+  columns: [3, 4, 5, 6, 7]
 
 released: false
 version: "1.0.0"
