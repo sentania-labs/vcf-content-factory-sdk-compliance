@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.75 (2026-09-23)
+
+- feat(content): build 75: dashboard-author removes the retired `vcfcf_compliance_ctl_cluster_object_checksum` alert id (build 74) from the Environment Overview (142 alerts) and vCenter & Networking (31) alert lists, committed as written; `tests/test_dashboard_alert_lists.py` passes again. No adapter code change.
+
 ## 0.0.0.74 (2026-09-23)
 
 - fix(adapter): build 74: read the controls that were permanently unreadable, per the api-explorer write-ups `knowledge/context/api-surface/compliance_config_encryption_and_vsan_checksum_reads.md` and `compliance_vami_appliance_api_read_path.md` (vendor spec `reference/docs/vcenter-9.1.1-appliance-api.json`). Scott's direction: "figure out how to read those items or report back on why we can't". **Behavior change.** Numbered:
