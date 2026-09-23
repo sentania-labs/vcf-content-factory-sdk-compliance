@@ -19,6 +19,6 @@
 ## Quick Reference
 
 - **Adapter kind:** `vcfcf_compliance`
-- **Version:** 1.0.0.72
+- **Version:** 1.0.0.73
 - **Traversal spec:** (none)
 - **Resource kinds:** 1

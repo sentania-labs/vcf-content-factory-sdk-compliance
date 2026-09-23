@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.73 (2026-09-23)
+
+- feat(content): build 73: dashboard-author removes the retired `vcfcf_compliance_ctl_vds_network_reset_port` alert id (build 72) from the Environment Overview (143 alerts) and vCenter & Networking (32) alert lists, committed as written; `tests/test_dashboard_alert_lists.py` passes again. No adapter code change.
+
 ## 0.0.0.72 (2026-09-23)
 
 - fix(adapter): build 72: close the builds 69-71 review BLOCKING (knowledge/context/reviews/compliance-build-71.md). **Behavior change.** `vds.network-reset-port` (SCG 7.0 / 8.0 / 9.0) was scored on DistributedVirtualSwitch with the read `bool:config.policy.portConfigResetAtDisconnect`, a field that exists only on distributed portgroups (a switch's `config.policy` is DVSPolicy). Under a 7.0, 8.0 or 9.0 benchmark every vDS read it as unreadable: permanently non-compliant, and a "Compliance data not collected" alert operators could not clear. (Per live recon today no compliance adapter is installed on prod, so nothing is affected there now; the defect applied to any 7.0 / 8.0 / 9.0 benchmark.) Numbered:
