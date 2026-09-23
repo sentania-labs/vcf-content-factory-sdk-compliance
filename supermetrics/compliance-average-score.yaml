@@ -17,18 +17,22 @@ description: >
   those children.
 
   Zero-scored guard: when the summed scored count is 0 (no objects
-  evaluated anywhere in the environment, e.g. before v3 first
-  collects), this formula is a bare division with no ternary guard.
-  VCF Operations' super metric engine returns no-data for a 0/0 (or
-  N/0) division rather than 0 or a substitute value - confirmed
-  idiom in this repo's "[VCF Content Factory] VCF Total License Usage
-  (%)" super metric (division by zero yields no-data, not an error;
-  see its design note knowledge/designs/supermetrics/vcf-license-vcf-total-license-usage-percent.md).
-  A stand-in score of 0 or 100 here would violate the
-  unreadable-is-not-compliant rule (knowledge/lessons/unreadable-is-not-compliant.md:
-  a zero-divisor result must never be folded into a fleet average as
-  if it were a real score), so no-data is the correct and required
-  behavior, not a gap to work around.
+  evaluated anywhere in the environment, e.g. right after install
+  before v3's first collect cycle), this formula is a bare division
+  with no ternary guard. This repo's "[VCF Content Factory] VCF Total
+  License Usage (%)" super metric has the same shape and its design
+  note asserts VCF Operations' engine returns no-data for a 0/0
+  division rather than 0 or a substitute value, but that assertion is
+  a one-line, unverified claim, not a live observation, so it is
+  expected behavior here, to be confirmed at the devel install (check
+  the tile the moment after install, before the first v3 cycle, when
+  every vCenter's Rollup|All|scored is 0). The failure mode is safe
+  either way: since score_sum > 0 implies scored > 0, the worst
+  plausible non-no-data result on an all-zero denominator is 0, which
+  reads as a false alarm, never as a pass, so it cannot violate the
+  unreadable-is-not-compliant rule
+  (knowledge/lessons/unreadable-is-not-compliant.md) even if the
+  no-data assumption turns out wrong.
 
   Depends on the compliance adapter v3 stitching the
   Rollup|All|score_sum and Rollup|All|scored metrics onto each
