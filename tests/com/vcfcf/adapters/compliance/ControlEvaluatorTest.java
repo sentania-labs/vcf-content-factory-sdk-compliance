@@ -47,6 +47,7 @@ public final class ControlEvaluatorTest {
 						"vm1", unreadable);
 		T.eq(0, r.totalCount, "unreadable not in total");
 		T.eq(1, r.unreadableCount, "unreadable counted");
+		T.near(0, r.score, "build 63: only control unreadable -> score 0");
 		T.check(r.controlResults.get(0).unreadable, "result marked unreadable");
 		T.check(!r.controlResults.get(0).compliant, "unreadable not compliant");
 
@@ -54,6 +55,24 @@ public final class ControlEvaluatorTest {
 		r = ControlEvaluator.evaluateVimProperties(Arrays.asList(vh), vals,
 				"vm1", unreadable);
 		T.eq(1, r.passCount, "vmx-19 passes the 17 floor");
+
+		// Build 63: one pass + one unreadable -> 50 (unreadable counts as
+		// failing), while fail_count stays 0 and unreadable_count 1.
+		BenchmarkProfile.Control secure = new BenchmarkProfile.Control(
+				"vm.secure-boot", "P0", "VirtualMachine", "VMWARE",
+				"config.bootOptions.efiSecureBootEnabled", "vim_property",
+				"boolean", "true", "t", "d", "SCG-9.1:x", "fix",
+				"bool:config.bootOptions.efiSecureBootEnabled");
+		Map<String, Object> mixed = new HashMap<>();
+		mixed.put("config.version", "vmx-19");
+		mixed.put("config.bootOptions.efiSecureBootEnabled", unreadable);
+		ControlEvaluator.ComplianceResult m =
+				ControlEvaluator.evaluateVimProperties(Arrays.asList(vh, secure),
+						mixed, "vm1", unreadable);
+		T.near(50, m.score, "partial unreadable lowers the score");
+		T.eq(0, m.failCount, "fail_count unchanged by unreadable");
+		T.eq(1, m.unreadableCount, "unreadable counted separately");
+		T.eq(2, m.attempted(), "attempted = pass + fail + unreadable");
 		T.check(!r.controlResults.get(0).unreadable, "read result not unreadable");
 
 		// Advanced-setting unreadable fold marks every result unreadable.

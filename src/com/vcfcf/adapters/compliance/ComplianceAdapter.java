@@ -44,9 +44,11 @@ import java.util.List;
  * <p><b>Correctness invariants preserved from v1 (golden comparison gate).</b>
  * Same property/stat keys, same value semantics, same MOID stitching identity
  * rules, and the cardinal "unreadable is NOT compliant" rule: a value the
- * adapter failed to read is never folded into a per-resource or fleet score —
- * it is surfaced as an explicit unreadable signal, and sentinel (zero-divisor)
- * scores are gated out of every average by the {@code totalCount > 0} guard.
+ * adapter failed to read never passes. Since build 63 (owner decision) it
+ * counts against the score like a failure (ControlEvaluator.score), is
+ * counted separately in unreadable_count, and raises the per-kind
+ * "Compliance data not collected" alert; the zero-divisor placeholder of an
+ * object with nothing attempted is never pushed or averaged.
  */
 public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
@@ -72,26 +74,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// fixed profile otherwise), and this cycle's conf dir.
 	private volatile java.util.Map<String, BenchmarkProfile> profilesByName;
 	private volatile String cycleConfDir;
-
-	// Task #16 — last-known per-host compliance score, keyed by the stable host
-	// MOID (hostInfo.moid), NOT the display name (a host can be renamed). Scott's
-	// decision (v3: now applied to the per-vCenter Rollup|Host average, since
-	// the world average is retired): use a host's LAST-KNOWN score
-	// when the host is channel-unreadable THIS cycle, so an unreadable host does
-	// not silently shrink the denominator and flatter the average. A host with NO
-	// last-known score (never successfully read since this collector process
-	// started) stays excluded entirely.
-	//
-	// IN-MEMORY ONLY — survives across collect cycles within one collector
-	// process but does NOT survive a collector restart. COLLECTOR-RESTART CAVEAT:
-	// after a restart the cache is empty, so the first cycle(s) average only the
-	// hosts readable that cycle (readable-only), exactly as build 48 did, until
-	// every host has been read at least once and the cache re-warms. This is the
-	// honest degraded behavior — we never invent a score we have never observed.
-	// Concurrent-collect safe: collect() runs once per cycle for the single
-	// ComplianceWorld resource, but use a ConcurrentHashMap defensively.
-	private final java.util.concurrent.ConcurrentHashMap<String, Double>
-			lastKnownHostScore = new java.util.concurrent.ConcurrentHashMap<>();
 
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
@@ -423,9 +405,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		if (cs.unreadable > 0) {
 			logWarn(cs.unreadable + " control instance(s) could not be read "
-					+ "this cycle (declared-but-unreadable). They are excluded "
-					+ "from every compliance score, and each affected object "
-					+ "counts as non-compliant (unreadable is not compliant).");
+					+ "this cycle (declared-but-unreadable). They count as "
+					+ "failing in each object's score, each affected object "
+					+ "is non-compliant, and its \"Compliance data not "
+					+ "collected\" alert fires.");
 		}
 
 		pushWorldProperty(out, "Summary|last_scan_timestamp",
@@ -822,9 +805,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
 				recordVersionUnreadable(BenchmarkSelector.Kind.HOST, hostName,
 						d, resourceId, rollup, cs);
-				// Task #16 applies: an unreadable host keeps its last-known
-				// score in the host average (review B2).
-				applyLastKnownForUnreadableHost(hostId, hostName, rollup);
 				continue;
 			}
 			if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
@@ -839,7 +819,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			// down at read time (disconnected / notResponding) cannot be read
 			// honestly; scoring the subset that still resolves from vCenter's
 			// cache yields a flattering partial score (the build-46 esx04
-			// regression). Mark EVERY control UNREADABLE instead, no score.
+			// regression). Mark EVERY control UNREADABLE instead (build 63:
+			// which scores the host 0, nothing was collected).
 			String connState;
 			try {
 				connState = vsphere.getHostConnectionState(hostInfo.moRef);
@@ -898,22 +879,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			if (cr.totalCount > 0) {
-				// Task #16: remember this host's score so a future cycle in
-				// which the host is unreadable can still contribute it to the
-				// host average. Keyed by stable MOID (null-guarded: build 50).
-				if (hostId != null) {
-					lastKnownHostScore.put(hostId, cr.score);
-				}
+			if (wholeHostUnreadable && cr.attempted() > 0) {
+				// Build 63: nothing collected -> score 0 (owner decision),
+				// counted in the host average like any other score.
+				logInfo("Host " + hostName + ": UNREADABLE (" + cr.unreadableCount
+						+ " controls), score 0");
+			} else if (cr.attempted() > 0) {
 				logInfo("Host " + hostName + " [" + d.profileName + "]: score="
 						+ String.format("%.1f", cr.score) + "% ("
 						+ cr.passCount + " pass, " + cr.failCount + " fail, "
 						+ cr.unreadableCount + " unreadable, "
 						+ cr.totalCount + " total)");
-			} else if (wholeHostUnreadable) {
-				applyLastKnownForUnreadableHost(hostId, hostName, rollup);
-				logInfo("Host " + hostName + ": UNREADABLE (" + cr.unreadableCount
-						+ " controls)");
 			}
 
 			if (resourceId != null) {
@@ -921,10 +897,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs);
 		}
-		// Build 50 (review N1): evict last-known-score entries for hosts no
-		// longer in the current inventory (unreadable hosts are still
-		// enumerated, so only genuinely removed hosts are pruned).
-		evictAbsentHostScores(hosts);
 		return hostVersions;
 	}
 
@@ -934,51 +906,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		return mergeResults(
 				ControlEvaluator.evaluateControlsUnreadable(controls, name),
 				unreadableVimResult(controls, name));
-	}
-
-	/**
-	 * Build 50 (review N1): prune {@link #lastKnownHostScore} keys not present
-	 * in the current inventory. A host that is unreadable this cycle is still
-	 * enumerated, so its cached score survives; only hosts removed from
-	 * vCenter entirely are evicted.
-	 */
-	private void evictAbsentHostScores(
-			java.util.List<VSphereClient.HostInfo> hosts) {
-		java.util.Set<String> live = new java.util.HashSet<>();
-		for (VSphereClient.HostInfo h : hosts) {
-			if (h.moid != null) live.add(h.moid);
-		}
-		int before = lastKnownHostScore.size();
-		lastKnownHostScore.keySet().retainAll(live);
-		int evicted = before - lastKnownHostScore.size();
-		if (evicted > 0) {
-			logInfo("Evicted " + evicted + " last-known host score(s) for "
-					+ "host(s) no longer in inventory (cache now "
-					+ lastKnownHostScore.size() + " entries)");
-		}
-	}
-
-	/**
-	 * Task #16: when a host is unreadable this cycle (channel down, or its
-	 * version unreadable with no previous benchmark), fold its last-known
-	 * score (if any) into its vCenter's host rollup so an unreadable host
-	 * does not silently flatter the average; counted in
-	 * {@code Rollup|Host|scored_stale}. A host never read since process start
-	 * stays excluded. The per-host push is unchanged (no score stat).
-	 */
-	private void applyLastKnownForUnreadableHost(String hostId, String hostName,
-			ComplianceRollup rollup) {
-		Double last = (hostId == null) ? null : lastKnownHostScore.get(hostId);
-		if (last == null) {
-			logInfo("Host " + hostName + ": unreadable and no last-known score "
-					+ "(never read since collector start); excluded from the "
-					+ "host score rollup this cycle");
-			return;
-		}
-		rollup.recordStaleScore(BenchmarkSelector.Kind.HOST, last);
-		logInfo("Host " + hostName + ": unreadable this cycle; contributing "
-				+ "last-known score " + String.format("%.1f", last)
-				+ "% to the host score rollup (denominator kept full)");
 	}
 
 	private void collectVms(BenchmarkSelector selector,
@@ -1503,9 +1430,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.List<ControlEvaluator.ControlResult> merged =
 				new java.util.ArrayList<>(a.controlResults);
 		merged.addAll(b.controlResults);
-		double score = total > 0 ? ((double) pass / total) * 100.0 : 100.0;
-		return new ControlEvaluator.ComplianceResult(
-				a.hostname, pass, fail, total, unreadable, score, merged);
+		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
+				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				merged);
 	}
 
 	private static int countEvaluable(
@@ -1554,7 +1481,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * ({@code VCF-CF Compliance|<control_id>|...}); the payload is built by
 	 * {@link ComplianceDecisions#complianceStats} /
 	 * {@link ComplianceDecisions#complianceProps}: Compliant 1 / 0 / -1,
-	 * score only when {@code totalCount > 0} (build 48 no-sentinel gate),
+	 * score whenever a control was attempted (build 63: unreadable counts
+	 * as failing),
 	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.
 	 */
 	private void pushComplianceViaClient(String resourceId,

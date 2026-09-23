@@ -94,10 +94,12 @@ VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-complian
 Per object:
 ```
 VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."
-VCF-CF Compliance|score              0-100%, only when at least one control was scored
-VCF-CF Compliance|pass_count         0 when nothing was scored
-VCF-CF Compliance|fail_count         0 when nothing was scored
-VCF-CF Compliance|total_count        0 when nothing was scored (no score pushed)
+VCF-CF Compliance|score              0-100%: pass / (pass + fail + unreadable); unreadable
+                                     counts as failing; 0 when every control was unreadable;
+                                     not pushed only when nothing was attempted
+VCF-CF Compliance|pass_count         controls that passed
+VCF-CF Compliance|fail_count         controls evaluated and failed (unreadable NOT included)
+VCF-CF Compliance|total_count        pass + fail (0 when nothing was evaluated)
 VCF-CF Compliance|unreadable_count   not pushed when the governing version cannot be read
 VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
 VCF-CF Compliance|no_benchmark       1 when the version has no SCG
@@ -111,16 +113,21 @@ VCF-CF Compliance|Rollup|<K>|non_compliant
 VCF-CF Compliance|Rollup|<K>|no_benchmark
 VCF-CF Compliance|Rollup|<K>|score_sum
 VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
-VCF-CF Compliance|Rollup|Host|scored_stale     hosts scored from their last-known score
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
                                                (+ Custom)
 ```
 
-`score` and `avg_score` are never pushed as a stand-in: when nothing was
-scored they are simply not pushed, and VCF Ops keeps showing the last value
-it had. Read them together with `total_count` / `no_benchmark` (per object)
-and `scored` (per vCenter, pushed every cycle, 0 when nothing was scored).
+**Unreadable counts as failing (build 63, owner decision).** A setting the
+adapter could not read is counted against the score like a failure, so an
+object whose every setting was unreadable scores 0. It is not a violation:
+`fail_count` does not include it, its `Compliant` is -1 (no per-control
+alert), and `unreadable_count` carries it separately. Instead each kind has
+a "Compliance data not collected" alert (see Alerts). `score` and
+`avg_score` are not pushed only when nothing was attempted (a no-benchmark
+object, a non-vSAN cluster); VCF Ops then keeps showing the last value it
+had, so read them with `total_count` / `unreadable_count` / `no_benchmark`
+(per object) and `scored` (per vCenter, pushed every cycle).
 
 The adapter's own Compliance World carries only
 `Summary|last_scan_timestamp`: it is one object shared by every adapter
@@ -159,6 +166,16 @@ collection cycle has scored something.
   SCG priority: P0 Critical, P1 Immediate, P2 Warning. Generated from the
   profiles by `scripts/generate_compliance_alerts.py`; never hand-edit
   the generated blocks in `describe.xml` or `resources.properties`.
+
+- One "Compliance data not collected (<kind>)" alert per object kind
+  (ESXi host, VM, vCenter, cluster, distributed switch, distributed
+  portgroup), severity Immediate, raised when `unreadable_count` > 0: the
+  adapter could not read some settings on the object, and they are counting
+  as failing in its score. Its recommendation explains the causes
+  (connectivity, permissions, read method not supported on this version),
+  where to see which settings (`unreadable_count`, and the controls whose
+  `Compliant` is -1 with Actual "(unreadable)"), and what to check. Alert
+  ids `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`.
 
 All compliance alerts are type Compliance (subType 21).
 

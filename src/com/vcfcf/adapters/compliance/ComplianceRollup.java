@@ -17,11 +17,11 @@ import java.util.Map;
  * <p>Keys ({@code <K>} in All, Host, VM, vCenter, Cluster, vDS, Portgroup):
  * <pre>
  * VCF-CF Compliance|Rollup|&lt;K&gt;|scored          objects with a score this cycle
+ *                                                (at least one control attempted)
  * VCF-CF Compliance|Rollup|&lt;K&gt;|non_compliant   objects with fail_count &gt; 0 or unreadable_count &gt; 0
  * VCF-CF Compliance|Rollup|&lt;K&gt;|no_benchmark    objects whose version has no SCG
  * VCF-CF Compliance|Rollup|&lt;K&gt;|score_sum       sum of those scores
  * VCF-CF Compliance|Rollup|&lt;K&gt;|avg_score       score_sum / scored (omitted when scored == 0)
- * VCF-CF Compliance|Rollup|Host|scored_stale     hosts scored from their last-known score
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
  * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
@@ -30,13 +30,15 @@ import java.util.Map;
  * not be read and that had no previous benchmark to fall back on (build 58);
  * they are non-compliant (unreadable), never no_benchmark.
  *
- * <p>Cardinal-rule discipline: an object with {@code total_count == 0}
- * (nothing evaluable, or everything unreadable) never contributes a score.
- * The one exception is inherited from build 49 (task #16, owner decision): a
- * host that is channel-unreadable this cycle contributes its LAST-KNOWN
- * score so the host average is not flattered by a shrinking denominator;
- * such hosts are counted in {@code Host|scored_stale}. No-benchmark objects
- * are counted, never scored, and never non-compliant.
+ * <p>Score rule (build 63, owner decision): an object's score counts
+ * unreadable controls as failing ({@link ControlEvaluator#score}), so an
+ * object with every attempted control unreadable scores 0 and IS counted
+ * in scored / score_sum. Only an object with nothing attempted (nothing
+ * evaluable, e.g. a non-vSAN cluster) contributes no score. The build-49
+ * last-known-score carry-forward for unreadable hosts and the
+ * {@code Rollup|Host|scored_stale} key are retired: an unreadable host now
+ * contributes its real score, 0. No-benchmark and version-unreadable
+ * objects are counted, never scored.
  *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
@@ -54,7 +56,6 @@ public final class ComplianceRollup {
 		int scored;
 		int nonCompliant;
 		int noBenchmark;
-		int stale;
 		double scoreSum;
 	}
 
@@ -86,8 +87,7 @@ public final class ComplianceRollup {
 	 * An object whose governing version could not be read and that had no
 	 * benchmark to fall back on (build 58, review B2). Unreadable is not
 	 * compliant: counted as non-compliant and in the {@code unknown}
-	 * bucket, never as no_benchmark, never scored. (A host in this state
-	 * can still contribute a last-known score via recordStaleScore.)
+	 * bucket, never as no_benchmark, never scored.
 	 */
 	public void recordVersionUnreadable(BenchmarkSelector.Kind kind) {
 		byKind.get(kind).nonCompliant++;
@@ -95,10 +95,11 @@ public final class ComplianceRollup {
 	}
 
 	/**
-	 * An object evaluated against benchmark {@code bucket}. A
-	 * {@code totalCount == 0} result (nothing scored) adds to the benchmark
-	 * bucket and, when it carries unreadable controls, to non_compliant,
-	 * but never to scored / score_sum.
+	 * An object evaluated against benchmark {@code bucket}. Scored (build
+	 * 63) when at least one control was attempted
+	 * ({@code totalCount + unreadableCount > 0}); {@code score} is then the
+	 * unreadable-counts-as-failing score. Nothing attempted adds to the
+	 * benchmark bucket only.
 	 */
 	public void recordEvaluated(BenchmarkSelector.Kind kind, String bucket,
 			int totalCount, int failCount, int unreadableCount, double score) {
@@ -107,23 +108,10 @@ public final class ComplianceRollup {
 		if (isNonCompliant(failCount, unreadableCount)) {
 			t.nonCompliant++;
 		}
-		if (totalCount > 0) {
+		if (totalCount + unreadableCount > 0) {
 			t.scored++;
 			t.scoreSum += score;
 		}
-	}
-
-	/**
-	 * A host that is unreadable this cycle and was recorded with
-	 * {@link #recordEvaluated} (totalCount 0) contributes its last-known
-	 * score. Call at most once per host, after recordEvaluated.
-	 */
-	public void recordStaleScore(BenchmarkSelector.Kind kind,
-			double lastKnownScore) {
-		Tally t = byKind.get(kind);
-		t.scored++;
-		t.stale++;
-		t.scoreSum += lastKnownScore;
 	}
 
 	private void bump(String bucket) {
@@ -139,15 +127,12 @@ public final class ComplianceRollup {
 			all.scored += t.scored;
 			all.nonCompliant += t.nonCompliant;
 			all.noBenchmark += t.noBenchmark;
-			all.stale += t.stale;
 			all.scoreSum += t.scoreSum;
 		}
 		put(out, "All", all);
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			put(out, k.rollupName, byKind.get(k));
 		}
-		out.put(PREFIX + "Host|scored_stale",
-				(double) byKind.get(BenchmarkSelector.Kind.HOST).stale);
 		for (Map.Entry<String, Integer> e : byBucket.entrySet()) {
 			out.put(PREFIX + "Benchmark|" + e.getKey() + "|objects",
 					(double) e.getValue());

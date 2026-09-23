@@ -20,7 +20,7 @@ import java.util.Set;
  * to every key of every object, as VCF Ops does.
  *
  * <p>Cycle 1: vCenter 9.1.1; hosts on ESXi 6.7, 7.0, 8.0 U3, 9.0, 9.1
- * (disconnected, last-known score 50) and unmapped 10.0; VMs on the 6.7,
+ * (disconnected: every control unreadable, scores 0) and unmapped 10.0; VMs on the 6.7,
  * 8.0 U3 and 10.0 hosts; a vDS reporting its own 9.0.0 (ignored) and a
  * portgroup. Cycle 2: the 8.0 host was upgraded to 9.0 while one of its
  * 8.0-only controls still reads 0 (an open alert); the 7.0 host's version
@@ -37,7 +37,6 @@ public final class MixedVersionSimulationTest {
 	private final LastBenchmarkMemory memory = new LastBenchmarkMemory();
 	// Simulated VCF Ops: object -> stat key -> latest value (never forgets).
 	private final Map<String, Map<String, Double>> ops = new HashMap<>();
-	private final Map<String, Double> lastKnown = new HashMap<>();
 	// This cycle: object -> controls cleaned; objects pushed with a benchmark.
 	private final Map<String, Set<String>> cleaned = new HashMap<>();
 	private final Map<String, BenchmarkProfile> pending = new LinkedHashMap<>();
@@ -67,7 +66,6 @@ public final class MixedVersionSimulationTest {
 		vmHost.put("vm-a", "host-80");
 		vmHost.put("vm-b", "host-100");
 		vmHost.put("vm-c", "host-67");
-		lastKnown.put("host-91", 50.0);
 
 		ComplianceRollup r1 = cycle(vc, hosts, vmHost, "host-91");
 		T.eq("VMware_SCG_6.7", profileName("HOST|host-67"), "6.7 host");
@@ -105,8 +103,12 @@ public final class MixedVersionSimulationTest {
 		T.near(1, r1.toStats().get(P + "VM|no_benchmark"), "vm nb");
 		T.near(2, r1.toStats().get(P + "Host|non_compliant"),
 				"8.0 host (fail) + 9.1 host (unreadable)");
-		T.near(5, r1.toStats().get(P + "Host|scored"), "4 live + 1 stale");
-		T.near(1, r1.toStats().get(P + "Host|scored_stale"), "stale host");
+		T.near(5, r1.toStats().get(P + "Host|scored"),
+				"4 read hosts + the disconnected host at 0");
+		T.near(0, ops.get("HOST|host-91").get(K + "score"),
+				"disconnected host scores 0 (nothing collected)");
+		T.check(!r1.toStats().containsKey(P + "Host|scored_stale"),
+				"scored_stale retired");
 
 		// Nothing was stale on first sight (v3 keys are new): no key created.
 		T.check(cleaned.isEmpty(), "first cycle cleans nothing, creates nothing");
@@ -233,8 +235,6 @@ public final class MixedVersionSimulationTest {
 					BenchmarkSelector.governingVersion(kind, vcVersion,
 							h.getValue()));
 			if (d == null) {
-				Double last = lastKnown.get(h.getKey());
-				if (last != null) rollup.recordStaleScore(kind, last);
 				rollup.recordVersionUnreadable(kind);
 				continue;
 			}
@@ -259,10 +259,6 @@ public final class MixedVersionSimulationTest {
 			}
 			rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 					cr.unreadableCount, cr.score);
-			if (cr.totalCount == 0) {
-				Double last = lastKnown.get(h.getKey());
-				if (last != null) rollup.recordStaleScore(kind, last);
-			}
 			scored(kind, h.getKey(), d, cr);
 		}
 		for (Map.Entry<String, String> v : vmHost.entrySet()) {
@@ -422,8 +418,9 @@ public final class MixedVersionSimulationTest {
 		java.util.List<ControlEvaluator.ControlResult> m =
 				new java.util.ArrayList<>(a.controlResults);
 		m.addAll(b.controlResults);
+		int unreadable = a.unreadableCount + b.unreadableCount;
 		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
-				total, a.unreadableCount + b.unreadableCount,
-				total > 0 ? 100.0 * pass / total : 100.0, m);
+				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				m);
 	}
 }

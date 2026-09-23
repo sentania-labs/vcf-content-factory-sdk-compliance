@@ -8,12 +8,14 @@ the dashboard YAML, so the generator never rewrites it. This test fails
 instead when the two drift apart: a missing, extra or duplicate id in any
 dashboard's alert_definitions list.
 
-Expected per dashboard (Ops resource kinds of the generated alerts):
-  compliance-environment-overview.yaml  every generated alert (144)
-  compliance-esxi-hosts.yaml            HostSystem (esx.*)
-  compliance-vms.yaml                   VirtualMachine (vm.*)
-  compliance-vcenter-networking.yaml    VMwareAdapter Instance, Cluster,
-                                        vDS, portgroup (vc/cluster/vds/dvpg)
+Expected per dashboard (Ops resource kinds of the generated alerts), each
+set being the per-control alerts of those kinds PLUS the build-63
+"Compliance data not collected" alert of each of those kinds:
+  compliance-environment-overview.yaml  all kinds: 144 + 6 = 150
+  compliance-esxi-hosts.yaml            HostSystem: 86 + 1 = 87
+  compliance-vms.yaml                   VirtualMachine: 23 + 1 = 24
+  compliance-vcenter-networking.yaml    vCenter, cluster, vDS, portgroup:
+                                        35 + 4 = 39
 
 Standard library only (the hosted PR workflow installs nothing), so the
 alert_definitions lists are read with a small line parser, not PyYAML.
@@ -80,6 +82,9 @@ def expected_ids(kinds) -> list:
     for c in gen.collect():
         if kinds is None or c["resource_kind"] in kinds:
             out.append(PREFIX + "vcfcf_compliance_ctl_" + c["slug"])
+    for kind, _ops, _sid, aid, _label in gen.collection_ids():
+        if kinds is None or kind in kinds:
+            out.append(PREFIX + aid)
     return sorted(out)
 
 
@@ -111,12 +116,12 @@ class DashboardAlertListTest(unittest.TestCase):
                 self.assertEqual(problems, [], f"{name}: " + "; ".join(problems))
 
     def test_expected_counts(self):
-        # The counts the review recorded for build 61.
-        self.assertEqual(len(expected_ids(None)), 144)
-        self.assertEqual(len(expected_ids({"HostSystem"})), 86)
-        self.assertEqual(len(expected_ids({"VirtualMachine"})), 23)
+        # Build 61 counts plus the build-63 collection alert per kind.
+        self.assertEqual(len(expected_ids(None)), 150)
+        self.assertEqual(len(expected_ids({"HostSystem"})), 87)
+        self.assertEqual(len(expected_ids({"VirtualMachine"})), 24)
         self.assertEqual(len(expected_ids(
-            EXPECTED_KINDS["compliance-vcenter-networking.yaml"])), 35)
+            EXPECTED_KINDS["compliance-vcenter-networking.yaml"])), 39)
 
     def test_parser_and_diff_catch_drift(self):
         # The checker itself must fail on each kind of drift.

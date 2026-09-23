@@ -59,15 +59,34 @@ public final class ComplianceDecisionsTest {
 		T.check(!vu.containsKey(K + "score"), "no score when unreadable");
 
 		ControlEvaluator.ComplianceResult allUnread =
-				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 3, 100.0,
+				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 3,
+						ControlEvaluator.score(0, 0, 3),
 						Arrays.asList(new ControlEvaluator.ControlResult(
 								"esx.x", "(unreadable)", "5", false, "d", true)));
 		Map<String, Double> cs = ComplianceDecisions.complianceStats(allUnread);
-		T.check(!cs.containsKey(K + "score"), "no sentinel score");
+		// Build 63: all unreadable = nothing collected = score 0, pushed.
+		T.near(0, cs.get(K + "score"), "all unreadable scores 0");
+		T.near(3, cs.get(K + "unreadable_count"), "unreadable counted apart");
 		T.near(0, cs.get(K + "pass_count"), "pass zeroed when nothing scored");
 		T.near(0, cs.get(K + "fail_count"), "fail zeroed when nothing scored");
 		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
 		T.near(-1, cs.get(K + "esx.x|Compliant"), "unreadable Compliant=-1");
+
+		// Partial unreadable lowers the score; fail and unreadable stay apart.
+		ControlEvaluator.ComplianceResult partial =
+				new ControlEvaluator.ComplianceResult("h", 7, 1, 8, 2,
+						ControlEvaluator.score(7, 1, 2), new java.util.ArrayList<>());
+		Map<String, Double> ps = ComplianceDecisions.complianceStats(partial);
+		T.near(70, ps.get(K + "score"), "7 pass of 10 attempted");
+		T.near(1, ps.get(K + "fail_count"), "fail_count = evaluated failures");
+		T.near(2, ps.get(K + "unreadable_count"), "unreadable kept separate");
+		T.near(1, ps.get(K + "non_compliant"), "non-compliant");
+		// Nothing attempted: still no score (never a placeholder).
+		ControlEvaluator.ComplianceResult none =
+				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 0,
+						ControlEvaluator.score(0, 0, 0), new java.util.ArrayList<>());
+		T.check(!ComplianceDecisions.complianceStats(none).containsKey(
+				K + "score"), "nothing attempted: no score");
 
 		// ---- stale-control cleanup (build 59)
 		BenchmarkProfile p91 = all.get("VMware_SCG_9.1");
