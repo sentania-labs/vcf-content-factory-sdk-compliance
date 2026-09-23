@@ -229,13 +229,34 @@ public final class ComplianceDecisions {
 	 * the kind, PLUS every control the manual-review overlay demoted for the
 	 * kind (build 70: an earlier build may have scored and pushed it, e.g.
 	 * the standard-switch controls wrongly read from distributed switches in
-	 * builds 57 to 69), minus the controls the object's current benchmark
+	 * builds 57 to 69), PLUS {@link #RETIRED_CONTROL_IDS} for the kind
+	 * (build 72), minus the controls the object's current benchmark
 	 * evaluates (those are pushed live every cycle). {@code current} null (no
 	 * benchmark) means every such control is a candidate.
 	 *
 	 * <p>Candidates are only QUERIED, never pushed blindly: see
 	 * {@link #staleZeroControls}.
 	 */
+	/**
+	 * Control ids that earlier builds evaluated on a kind but that no
+	 * bundled profile carries for that kind any more. They stay cleanup
+	 * candidates so a lingering {@code Compliant = 0} is retired (-1).
+	 *
+	 * <p>Build 72: {@code vds.network-reset-port} (SCG 7.0 / 8.0 / 9.0)
+	 * moved to the portgroup as {@code dvpg.network-reset-port}. Its read
+	 * never resolved on a distributed switch, so builds 57 to 71 pushed -1
+	 * (unreadable) there, not 0; listing it makes the retirement explicit
+	 * rather than relying on that.
+	 */
+	static final Map<BenchmarkSelector.Kind, Set<String>> RETIRED_CONTROL_IDS;
+	static {
+		Map<BenchmarkSelector.Kind, Set<String>> m =
+				new java.util.EnumMap<>(BenchmarkSelector.Kind.class);
+		m.put(BenchmarkSelector.Kind.VDS, java.util.Collections.unmodifiableSet(
+				new TreeSet<>(java.util.Arrays.asList("vds.network-reset-port"))));
+		RETIRED_CONTROL_IDS = java.util.Collections.unmodifiableMap(m);
+	}
+
 	public static Set<String> candidateControlIds(BenchmarkSelector.Kind kind,
 			BenchmarkProfile current, Collection<BenchmarkProfile> allBundled) {
 		Set<String> out = new TreeSet<>();
@@ -245,6 +266,8 @@ public final class ComplianceDecisions {
 				if (c.manualReview) out.add(c.controlId);
 			}
 		}
+		out.addAll(RETIRED_CONTROL_IDS.getOrDefault(kind,
+				java.util.Collections.emptySet()));
 		if (current != null) {
 			Set<String> keep = new TreeSet<>();
 			addEvaluated(keep, kind, current);

@@ -364,9 +364,20 @@ column is empty.
 Per-source Python scripts under `scripts/`:
 
 - `scripts/normalize_scg_v8.py` — VMware SCG 8.x source format
-  (factory repo `scripts/`)
+  (factory repo `scripts/`). Since adapter build 72 the 8.0 profile is
+  generated through this repo's thin driver `scripts/normalize_scg_v80.py`,
+  which runs it and applies the adapter deltas.
 - `scripts/normalize_scg_v9.py` — VMware SCG 9.0 source format
-  (different column order than 8.x; factory repo `scripts/`)
+  (different column order than 8.x; factory repo `scripts/`). Since build
+  72 generated through `scripts/normalize_scg_v90.py` (same pattern).
+- `scripts/_adapter_deltas.py` (this repo, build 72): post-normalization
+  deltas shared by the 7.0 / 8.0 / 9.0 drivers. Today one:
+  `vds.network-reset-port` becomes `dvpg.network-reset-port` on
+  DistributedVirtualPortgroup (its read,
+  `config.policy.portConfigResetAtDisconnect`, is a portgroup-policy
+  field; a distributed switch's `config.policy` is DVSPolicy and never
+  had it, so every switch read it as unreadable). SCG 9.1 already maps
+  the control that way; the id and alert are now shared.
 - `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
   (this repo's `scripts/`; a thin delta driver over the factory's
   9.x normalizer — 9.1 drops the embedded-newline header cells,
@@ -436,6 +447,9 @@ against the generated 7.0 (and 9.1) canonical profiles.
 python3 scripts/xlsx_to_csv.py scg7.xlsx Controls 'SCG ID' profiles/vmware_scg_7.0.csv
 python3 scripts/xlsx_to_csv.py scg67.xlsx 'vSphere 6.7' 'Guideline ID' profiles/vmware_scg_6.7.csv
 python3 scripts/normalize_scg_v70.py profiles/vmware_scg_7.0.csv profiles/canonical/scg_7.0.csv
+python3 scripts/normalize_scg_v80.py profiles/vmware_scg_8.0.csv profiles/canonical/scg_8.0.csv
+python3 scripts/normalize_scg_v90.py profiles/vmware_scg_9.0.csv profiles/canonical/scg_9.0.csv
+python3 scripts/normalize_scg_v91.py profiles/vmware_scg_9.1.csv profiles/canonical/scg_9.1.csv
 python3 scripts/normalize_scg_v67.py profiles/vmware_scg_6.7.csv profiles/canonical/scg_6.7.csv
 python3 scripts/generate_compliance_alerts.py
 ```

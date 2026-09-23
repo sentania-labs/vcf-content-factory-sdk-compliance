@@ -57,7 +57,9 @@ class GeneratorTest(unittest.TestCase):
         recs = [r for r in self.root.iter(NS + "Recommendation")
                 if (r.get("key") or "").startswith("vcfcf_compliance_ctl_")]
         self.assertEqual((len(syms), len(alerts), len(recs)), (n, n, n))
-        self.assertEqual(n, 138)   # build 70: 6 standard-switch controls removed
+        # build 70: 6 standard-switch controls removed; build 72:
+        # vds.network-reset-port folded into dvpg.network-reset-port
+        self.assertEqual(n, 137)
 
     def test_alert_shape(self):
         for a in self.root.iter(NS + "AlertDefinition"):
@@ -109,6 +111,12 @@ class GeneratorTest(unittest.TestCase):
         # Build 70 (Codex P1): host-side standard-switch controls were read
         # from the distributed switch; they are no longer scored or alerted.
         ids = {c["control_id"] for c in self.controls}
+        # Build 72: reset-port is a portgroup control in every profile.
+        self.assertNotIn("vds.network-reset-port", ids)
+        rp = [c for c in self.controls if c["control_id"] == "dvpg.network-reset-port"]
+        self.assertEqual(len(rp), 1)
+        self.assertEqual(rp[0]["resource_kind"], "DistributedVirtualPortgroup")
+        self.assertEqual(rp[0]["labels"], ["SCG 7.0", "SCG 8.0", "SCG 9.0", "SCG 9.1"])
         for cid in ("vds.network-reject-forged-transmit-standardswitch",
                     "vds.network-reject-mac-changes-standardswitch",
                     "vds.network-reject-promiscuous-mode-standardswitch",

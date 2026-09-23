@@ -1608,20 +1608,8 @@
                    valueType="numeric" thresholdType="static"/>
       </State>
     </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_ctl_vds_network_reset_port_noncompliant"
-                       nameKey="1381"
-                       adapterKind="VMWARE"
-                       resourceKind="VmwareDistributedVirtualSwitch"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Warning">
-        <Condition type="metric" key="VCF-CF Compliance|vds.network-reset-port|Compliant"
-                   operator="=" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol_noncompliant"
-                       nameKey="1384"
+                       nameKey="1381"
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
@@ -1633,7 +1621,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_vds_network_restrict_netflow_usage_noncompliant"
-                       nameKey="1387"
+                       nameKey="1384"
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
@@ -1645,7 +1633,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_vds_network_restrict_port_mirroring_noncompliant"
-                       nameKey="1390"
+                       nameKey="1387"
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
@@ -1657,7 +1645,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_mac_learning_noncompliant"
-                       nameKey="1393"
+                       nameKey="1390"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1669,7 +1657,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup_noncompliant"
-                       nameKey="1396"
+                       nameKey="1393"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1681,7 +1669,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup_noncompliant"
-                       nameKey="1399"
+                       nameKey="1396"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1693,7 +1681,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup_noncompliant"
-                       nameKey="1402"
+                       nameKey="1399"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1705,7 +1693,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_reset_port_noncompliant"
-                       nameKey="1405"
+                       nameKey="1402"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1717,7 +1705,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides_noncompliant"
-                       nameKey="1408"
+                       nameKey="1405"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -1729,7 +1717,7 @@
       </State>
     </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_ctl_dvpg_network_vgt_noncompliant"
-                       nameKey="1411"
+                       nameKey="1408"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
@@ -3818,23 +3806,8 @@
         </Recommendations>
       </State>
     </AlertDefinition>
-    <AlertDefinition id="vcfcf_compliance_ctl_vds_network_reset_port"
-                     nameKey="1382"
-                     adapterKind="VMWARE"
-                     resourceKind="VmwareDistributedVirtualSwitch"
-                     type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
-      <State severity="Automatic">
-        <Impact type="badge" key="risk"/>
-        <SymptomSet ref="vcfcf_compliance_ctl_vds_network_reset_port_noncompliant" operator="and"
-                    aggregation="any" applyOn="self" negateCondition="false"/>
-        <Recommendations>
-          <Recommendation ref="vcfcf_compliance_ctl_vds_network_reset_port_fix" priority="1"/>
-        </Recommendations>
-      </State>
-    </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol"
-                     nameKey="1385"
+                     nameKey="1382"
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
@@ -3849,7 +3822,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_vds_network_restrict_netflow_usage"
-                     nameKey="1388"
+                     nameKey="1385"
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
@@ -3864,7 +3837,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_vds_network_restrict_port_mirroring"
-                     nameKey="1391"
+                     nameKey="1388"
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
@@ -3879,7 +3852,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_mac_learning"
-                     nameKey="1394"
+                     nameKey="1391"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3894,7 +3867,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup"
-                     nameKey="1397"
+                     nameKey="1394"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3909,7 +3882,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup"
-                     nameKey="1400"
+                     nameKey="1397"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3924,7 +3897,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup"
-                     nameKey="1403"
+                     nameKey="1400"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3939,7 +3912,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_reset_port"
-                     nameKey="1406"
+                     nameKey="1403"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3954,7 +3927,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides"
-                     nameKey="1409"
+                     nameKey="1406"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -3969,7 +3942,7 @@
       </State>
     </AlertDefinition>
     <AlertDefinition id="vcfcf_compliance_ctl_dvpg_network_vgt"
-                     nameKey="1412"
+                     nameKey="1409"
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
@@ -4497,38 +4470,35 @@
     <Recommendation key="vcfcf_compliance_ctl_vds_network_nioc_fix">
       <Description nameKey="1380"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_vds_network_reset_port_fix">
+    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol_fix">
       <Description nameKey="1383"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol_fix">
+    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_netflow_usage_fix">
       <Description nameKey="1386"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_netflow_usage_fix">
+    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_port_mirroring_fix">
       <Description nameKey="1389"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_vds_network_restrict_port_mirroring_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_mac_learning_fix">
       <Description nameKey="1392"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_mac_learning_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup_fix">
       <Description nameKey="1395"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup_fix">
       <Description nameKey="1398"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup_fix">
       <Description nameKey="1401"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reset_port_fix">
       <Description nameKey="1404"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_reset_port_fix">
+    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides_fix">
       <Description nameKey="1407"/>
     </Recommendation>
-    <Recommendation key="vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides_fix">
-      <Description nameKey="1410"/>
-    </Recommendation>
     <Recommendation key="vcfcf_compliance_ctl_dvpg_network_vgt_fix">
-      <Description nameKey="1413"/>
+      <Description nameKey="1410"/>
     </Recommendation>
     <Recommendation key="vcfcf_compliance_collection_check">
       <Description nameKey="2100"/>
