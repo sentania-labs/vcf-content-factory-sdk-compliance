@@ -155,7 +155,6 @@ widgets:
     depth: 1
     alert_definitions:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_managed_disk_claim"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_object_checksum"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_mac_learning"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup"
