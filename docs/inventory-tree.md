@@ -1,6 +1,6 @@
 # Inventory Tree — VCF Content Factory Compliance
 
-> Generated from `describe.xml` v1.0.0.70. Do not edit — regenerated on every build.
+> Generated from `describe.xml` v1.0.0.71. Do not edit — regenerated on every build.
 
 ## Traversal Tree
 
