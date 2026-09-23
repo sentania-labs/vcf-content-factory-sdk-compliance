@@ -315,6 +315,12 @@ read is **never** folded into a pass:
   run. (A `string_list_join` of an empty list already resolves to null →
   UNREADABLE upstream, so an empty NTP list is a coverage gap, never a
   `(non-empty)` pass.)
+- For `advanced_setting`, "absent" means only that the option read
+  SUCCEEDED and the key is not set (build 77). A failed read (a SOAP fault
+  on `QueryOptions` or on the VM `config.extraConfig`, or a missing vCenter
+  setting manager) is never an empty option list: every advanced_setting
+  control of the object is UNREADABLE for that cycle (pushed as -1, counted
+  in `unreadable_count`, never a pass, never touched by the stale cleanup).
 - For `advanced_setting`, an absent key is **skipped** (excluded from the
   score denominator) by the existing absent-key branch *before* the
   `not:` / `(non-empty)` comparison is consulted. In particular the
