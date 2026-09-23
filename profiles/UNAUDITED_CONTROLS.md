@@ -53,6 +53,100 @@ Source of record: `context/investigations/scg89-audit-coverage-recon.md`.
 
 ---
 
+## SCG 6.7 and 7.0 profiles (added 2026-09-23, not yet selectable)
+
+The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)
+were added for version-aware benchmark selection. Until the adapter
+exposes them they are not loaded, so nothing below affects a score
+today. Once they are, the same three buckets apply, and the sections
+further down that name a control_id apply to the 6.7 / 7.0 row carrying
+that id, because matched controls share the id, the read recipe, and
+therefore the coverage of their 8.0 row.
+
+**Coverage at a glance** (scored = evaluable advanced_setting, or a
+vim_property / esxcli / vami_api row with a read recipe):
+
+| Profile | Controls | Scored | Unscored (informational) |
+|---|---|---|---|
+| SCG 7.0 | 122 | 81 | 41 (31 powercli_only, 7 manual_audit, 3 esxcli with no recipe) |
+| SCG 6.7 | 51 | 36 | 15 (13 powercli_only, 1 manual_audit, 1 esxcli with no recipe) |
+
+**SCG 7.0 unscored controls.** Every 7.0 control_id also exists in 8.0
+and is unscored there for the same reason, with one exception:
+
+- `vm.virtual-hardware` is unscored in 7.0 only. The SCG 7 baseline is
+  `vmx-13 or newer` (its own title says 19 or newer) and the adapter
+  compares `config.version` for exact equality, so the row ships as
+  powercli_only with no recipe instead of failing every VM. Needs a
+  minimum-version comparison style.
+
+Other 7.0 unscored ids (same bucket as their 8.0 entries below):
+`dvpg.network-vgt` (ESX standard-switch row only; the distributed-switch
+row is scored), `esx.ad-auth-proxy`, `esx.firewall-restrict-access`,
+`esx.iscsi-mutual-chap`, `esx.lockdown-exception-users`,
+`esx.secureboot`, `esx.supported`, `esx.updates`,
+`esx.vib-acceptance-level-supported`, `esx.vmk-management`,
+`vc.administration-client-session-timeout`,
+`vc.administration-failed-login-interval`,
+`vc.administration-login-message-details`,
+`vc.administration-login-message-enable`,
+`vc.administration-login-message-text`, `vc.administration-sso-groups`,
+`vc.administration-sso-lockout-policy-max-attempts`,
+`vc.administration-sso-lockout-policy-unlock-time`,
+`vc.administration-sso-password-lifetime`,
+`vc.administration-sso-password-policy`,
+`vc.administration-sso-password-reuse`, `vc.events-database-retention`,
+`vc.supported`, `vc.vami-backup`, `vc.vami-updates`,
+`vm.remove-unnecessary-devices`, the 14 `vm.tools-*` controls.
+
+**SCG 6.7 unscored controls.**
+
+- Unmatched 6.7 controls (no newer control means the same thing, so
+  they keep 6.7-native ids and have no read recipe):
+  `esx.config-snmp` (6.7 passes SNMP that is off OR properly
+  configured), `esx.enable-ad-auth`, `esx.enable-strict-lockdown-mode`
+  (newer guides baseline normal lockdown), `vm.disable-independent-nonpersistent`,
+  `vm.disconnect-devices-floppy`, `vm.disconnect-devices-parallel`,
+  `vm.disconnect-devices-serial` (newer guides fold all three into
+  `vm.remove-unnecessary-devices`; kept separate here). All Cannot or
+  Haven't-yet; none is ever a pass.
+- `vm.dvfilter`: the 6.7 key is written as a pattern
+  (`ethernetX.filterX.name = filtername`), not a real key, so it is
+  manual_audit.
+- Matched, unscored for the same reason as their newer row:
+  `esx.ad-auth-proxy`, `esx.firewall-restrict-access`,
+  `esx.iscsi-mutual-chap`, `esx.lockdown-exception-users`,
+  `esx.updates`, `esx.vib-acceptance-level-supported`,
+  `vds.vds-health-check-disable`.
+- One unmatched 6.7 control IS scored: `vm.minimize-console-vnc-use`
+  reads the VM advanced setting `RemoteDisplay.vnc.enabled` (expected
+  FALSE). It has no newer counterpart, but the read is the ordinary VM
+  advanced-setting path.
+
+**Recipes inherited from the 8.0 lineage are not verified on 6.7 / 7.0
+hosts.** The vim25 paths, esxcli namespaces, service keys, and VAMI
+endpoints were wire-checked (where they were checked at all) against
+8.x / 9.x. On a 6.7 or 7.0 host or vCenter a path that does not exist
+reads as UNREADABLE, never a pass (for example `config.encryptionState`
+for `esx.tpm-configuration`, or the `/api/appliance/*` VAMI endpoints
+that older 7.0 vCenter builds serve under `/rest/`), so the risk is
+coverage, not correctness. Treat 6.7 / 7.0 coverage as claimed, not
+proven, until a live 6.7 / 7.0 run.
+
+**Known false fails carried into the new profiles (not fixed here).**
+Scored controls whose expected value is prose that no real value can
+equal: 7.0 `esx.annotations-welcomemessage`, `esx.logs-remote`,
+`vc.etc-issue` (the same rows as 8.0), 6.7 `esx.logs-remote`,
+`esx.lockdown-dcui-access`, `esx.account-password-policies`,
+`vm.transparentpagesharing-inter-vm-enabled`. A host that has the
+setting fails; a host without it skips. These are false fails, never
+false passes; scheduled for the engine change that makes the profiles
+selectable. (7.0 `esx.etc-issue` carries the key as `Config.Etc.Issue`;
+8.0 has `Config.Etc.issue` and the settings lookup is case-sensitive, so
+the 7.0 row is expected to skip rather than fail. Not live-verified.)
+
+---
+
 ## Partial-coverage controls (audited, but read the caveat)
 
 Several reclassified controls are audited with **less than full fidelity**.
