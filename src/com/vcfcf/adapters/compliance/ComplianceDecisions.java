@@ -17,9 +17,9 @@ import java.util.function.Function;
  *       why it is not scored (no benchmark / version unreadable).</li>
  *   <li>{@link #resolveVmHostVersion}: a VM follows its host.</li>
  *   <li>The per-object stat payloads for every outcome.</li>
- *   <li>{@link #orphanControlIds}: which per-control keys to mark
- *       not-evaluated when an object's benchmark changes or is first
- *       seen.</li>
+ *   <li>{@link #candidateControlIds} / {@link #staleZeroControls}: which
+ *       per-control keys to mark not evaluated (only live stale 0s outside
+ *       the object's benchmark).</li>
  *   <li>{@link #matchVCenter}: which VMWARE vCenter object this instance
  *       may push onto.</li>
  * </ul>
@@ -198,33 +198,23 @@ public final class ComplianceDecisions {
 		return props;
 	}
 
-	// ----- orphan-control cleanup (W1) -----------------------------------
+	// ----- stale per-control cleanup (build 59) ---------------------------
 
 	/**
-	 * Control ids whose per-control keys must be marked not evaluated
-	 * ({@code Compliant=-1}) for an object of {@code kind}.
+	 * Control ids whose {@code Compliant} key could hold a stale value on an
+	 * object of {@code kind}: every control any bundled profile evaluates for
+	 * the kind, minus the controls the object's current benchmark evaluates
+	 * (those are pushed live every cycle). {@code current} null (no
+	 * benchmark) means every bundled control is a candidate.
 	 *
-	 * <p>Self-healing (review W1): when the object is seen for the first
-	 * time since the tracker was last cleared (collector start, instance
-	 * edit, periodic re-sweep) or its previous benchmark cannot be
-	 * resolved, the candidate set is the UNION of every bundled profile's
-	 * evaluated controls for the kind, because keys left by an unknown
-	 * earlier benchmark may exist. Otherwise it is the previous profile's
-	 * evaluated controls. Either way, controls the current profile evaluates
-	 * are kept (they are pushed live).
-	 *
-	 * @param current the profile applied now, or null (no benchmark)
+	 * <p>Candidates are only QUERIED, never pushed blindly: see
+	 * {@link #staleZeroControls}.
 	 */
-	public static Set<String> orphanControlIds(BenchmarkSelector.Kind kind,
-			BenchmarkProfile previous, BenchmarkProfile current,
-			Collection<BenchmarkProfile> allBundled, boolean firstSight) {
+	public static Set<String> candidateControlIds(BenchmarkSelector.Kind kind,
+			BenchmarkProfile current, Collection<BenchmarkProfile> allBundled) {
 		Set<String> out = new TreeSet<>();
-		if (firstSight || previous == null) {
-			for (BenchmarkProfile p : allBundled) {
-				addEvaluated(out, kind, p);
-			}
-		} else {
-			addEvaluated(out, kind, previous);
+		for (BenchmarkProfile p : allBundled) {
+			addEvaluated(out, kind, p);
 		}
 		if (current != null) {
 			Set<String> keep = new TreeSet<>();
@@ -232,6 +222,90 @@ public final class ComplianceDecisions {
 			out.removeAll(keep);
 		}
 		return out;
+	}
+
+	/**
+	 * Build 59 (review W1 on build 58): the controls to mark not evaluated
+	 * ({@code Compliant=-1}) on one object. Only a candidate (outside the
+	 * current benchmark) whose LATEST value in VCF Ops is 0 qualifies: that
+	 * stale 0 is what keeps a per-control alert open. A key the object never
+	 * had is absent from {@code latest} and is never created; a key already
+	 * at -1 or 1 is left alone. {@code latest} null means the bulk read
+	 * failed: nothing is cleaned for the object this cycle (no guess, no
+	 * union fallback); the next cycle retries.
+	 *
+	 * @param latest control id -> latest Compliant value for this object, as
+	 *        read from VCF Ops; null when the read failed
+	 */
+	public static Set<String> staleZeroControls(Set<String> candidates,
+			Map<String, Double> latest) {
+		Set<String> out = new TreeSet<>();
+		if (latest == null || candidates == null) return out;
+		for (Map.Entry<String, Double> e : latest.entrySet()) {
+			Double v = e.getValue();
+			if (v != null && v == 0.0 && candidates.contains(e.getKey())) {
+				out.add(e.getKey());
+			}
+		}
+		return out;
+	}
+
+	/** Full stat key for a control's Compliant metric. */
+	public static String compliantKey(String controlId) {
+		return K + controlId + "|Compliant";
+	}
+
+	/** Control id from a Compliant stat key; null for any other key. */
+	public static String controlIdOfCompliantKey(String statKey) {
+		if (statKey == null || !statKey.startsWith(K)
+				|| !statKey.endsWith("|Compliant")) {
+			return null;
+		}
+		String id = statKey.substring(K.length(),
+				statKey.length() - "|Compliant".length());
+		return id.isEmpty() || id.contains("|") ? null : id;
+	}
+
+	/**
+	 * Suite API paths for {@code GET /api/resources/stats/latest} covering
+	 * every (resource, control) pair, chunked so no URL grows past a few KB:
+	 * at most {@code maxIds} resourceId and {@code maxKeys} statKey
+	 * parameters per request. Deterministic order.
+	 */
+	public static java.util.List<String> latestCompliantPaths(
+			java.util.List<String> resourceIds, Set<String> controlIds,
+			int maxIds, int maxKeys) {
+		java.util.List<String> paths = new java.util.ArrayList<>();
+		if (resourceIds.isEmpty() || controlIds.isEmpty()) return paths;
+		java.util.List<String> keys = new java.util.ArrayList<>(controlIds);
+		for (int i = 0; i < resourceIds.size(); i += maxIds) {
+			java.util.List<String> ids = resourceIds.subList(i,
+					Math.min(resourceIds.size(), i + maxIds));
+			for (int j = 0; j < keys.size(); j += maxKeys) {
+				StringBuilder q = new StringBuilder(
+						"/api/resources/stats/latest?");
+				boolean first = true;
+				for (String id : ids) {
+					q.append(first ? "" : "&").append("resourceId=")
+							.append(enc(id));
+					first = false;
+				}
+				for (String cid : keys.subList(j,
+						Math.min(keys.size(), j + maxKeys))) {
+					q.append("&statKey=").append(enc(compliantKey(cid)));
+				}
+				paths.add(q.toString());
+			}
+		}
+		return paths;
+	}
+
+	private static String enc(String s) {
+		try {
+			return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+		} catch (java.io.UnsupportedEncodingException e) {
+			throw new IllegalStateException(e);
+		}
 	}
 
 	private static void addEvaluated(Set<String> into,

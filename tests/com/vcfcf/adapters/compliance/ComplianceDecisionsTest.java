@@ -69,56 +69,78 @@ public final class ComplianceDecisionsTest {
 		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
 		T.near(-1, cs.get(K + "esx.x|Compliant"), "unreadable Compliant=-1");
 
-		// ---- orphan set (W1)
-		BenchmarkProfile p80 = all.get("VMware_SCG_8.0");
+		// ---- stale-control cleanup (build 59)
 		BenchmarkProfile p91 = all.get("VMware_SCG_9.1");
-		Set<String> union = ComplianceDecisions.orphanControlIds(HOST, null,
-				null, all.values(), true);
-		Set<String> firstSight91 = ComplianceDecisions.orphanControlIds(HOST,
-				null, p91, all.values(), true);
-		Set<String> change80to91 = ComplianceDecisions.orphanControlIds(HOST,
-				p80, p91, all.values(), false);
-		T.check(!union.isEmpty(), "union non-empty");
+		Set<String> union = ComplianceDecisions.candidateControlIds(HOST, null,
+				all.values());
+		Set<String> cand91 = ComplianceDecisions.candidateControlIds(HOST, p91,
+				all.values());
+		T.check(!cand91.isEmpty() && union.containsAll(cand91),
+				"candidates are bundled controls");
+		String inside = null;
 		for (BenchmarkProfile.Control c : p91.hostControls()) {
 			if (BenchmarkSelector.evaluatedFor(HOST, c)) {
-				T.check(!firstSight91.contains(c.controlId),
-						"current controls kept: " + c.controlId);
-				T.check(!change80to91.contains(c.controlId),
-						"current controls kept on change: " + c.controlId);
+				T.check(!cand91.contains(c.controlId),
+						"current benchmark's controls are never candidates");
+				inside = c.controlId;
 			}
 		}
-		T.check(union.containsAll(firstSight91), "first sight within union");
-		T.check(firstSight91.containsAll(change80to91),
-				"a change cleans a subset of the first-sight set");
-		for (String id : change80to91) {
-			T.check(ProfileSetTest.find(p80.controls, id) != null,
-					"change cleans only 8.0 controls: " + id);
+		String outside = cand91.iterator().next();
+		String outsideAtMinus1 = null, outsideAt1 = null;
+		for (String id : cand91) {
+			if (!id.equals(outside) && outsideAtMinus1 == null) outsideAtMinus1 = id;
+			else if (!id.equals(outside) && outsideAt1 == null) outsideAt1 = id;
 		}
-		// Previous unresolvable (Custom, label) -> union, self-healing.
-		T.eq(firstSight91, ComplianceDecisions.orphanControlIds(HOST, null, p91,
-				all.values(), false), "unresolvable previous -> union");
-		// No-benchmark object: every bundled control of the kind is cleaned.
-		T.eq(union, ComplianceDecisions.orphanControlIds(HOST, null, null,
-				all.values(), true), "no benchmark cleans the union");
-		Map<String, Double> os = ComplianceDecisions.orphanStats(change80to91);
-		for (Double v : os.values()) T.near(-1, v, "orphans are -1");
+		Map<String, Double> latest = new HashMap<>();
+		latest.put(outside, 0.0);            // stale 0 outside: cleaned
+		latest.put(inside, 0.0);             // live failure inside: untouched
+		latest.put(outsideAtMinus1, -1.0);   // already cleaned: untouched
+		latest.put(outsideAt1, 1.0);         // stale pass: untouched
+		Set<String> stale = ComplianceDecisions.staleZeroControls(cand91, latest);
+		T.eq(new java.util.TreeSet<>(Arrays.asList(outside)), stale,
+				"only a stale 0 outside the benchmark flips to -1");
+		T.check(ComplianceDecisions.staleZeroControls(cand91, null).isEmpty(),
+				"failed bulk read cleans nothing");
+		T.check(ComplianceDecisions.staleZeroControls(cand91, new HashMap<>())
+				.isEmpty(), "keys the object never had are never created");
+		for (Double v : ComplianceDecisions.orphanStats(stale).values()) {
+			T.near(-1, v, "cleaned value is -1");
+		}
+		T.eq("esx.x", ComplianceDecisions.controlIdOfCompliantKey(
+				"VCF-CF Compliance|esx.x|Compliant"), "parse key");
+		T.eq(null, ComplianceDecisions.controlIdOfCompliantKey(
+				"VCF-CF Compliance|Rollup|Host|scored"), "non-Compliant key");
+		T.eq(null, ComplianceDecisions.controlIdOfCompliantKey(
+				"VCF-CF Compliance|score"), "aggregate key");
 
-		// ---- tracker (W1)
-		AppliedBenchmarkTracker tr = new AppliedBenchmarkTracker();
-		String key = AppliedBenchmarkTracker.key(HOST, "host-1");
-		T.check(tr.firstSight(key) && tr.needsCleanup(key, "VMware_SCG_9.1"),
-				"new object needs cleanup");
-		tr.record(key, "VMware_SCG_9.1");
-		T.check(!tr.needsCleanup(key, "VMware_SCG_9.1"), "steady state");
-		T.check(tr.needsCleanup(key, "VMware_SCG_8.0"), "change needs cleanup");
-		tr.clear();
-		T.check(tr.firstSight(key), "instance edit -> first sight again");
-		tr.record(key, "VMware_SCG_9.1");
-		boolean swept = false;
-		for (int i = 0; i < AppliedBenchmarkTracker.RESWEEP_CYCLES; i++) {
-			swept |= tr.startCycle();
+		// Query paths: chunked, encoded, every pair covered.
+		java.util.List<String> ids = new java.util.ArrayList<>();
+		for (int i = 0; i < 45; i++) ids.add("00000000-0000-0000-0000-0000000000" + (10 + i));
+		Set<String> keys = new java.util.TreeSet<>();
+		for (int i = 0; i < 70; i++) keys.add("esx.c" + i);
+		java.util.List<String> paths =
+				ComplianceDecisions.latestCompliantPaths(ids, keys, 20, 30);
+		T.eq(9, paths.size(), "3 id chunks x 3 key chunks");
+		for (String path : paths) {
+			T.check(path.startsWith("/api/resources/stats/latest?resourceId="),
+					"endpoint");
+			T.check(count(path, "resourceId=") <= 20, "<= 20 ids");
+			T.check(count(path, "statKey=") <= 30, "<= 30 keys");
+			T.check(path.contains("VCF-CF%20Compliance%7Cesx.c"), "encoded");
+			T.check(path.length() < 4000, "URL stays small");
 		}
-		T.check(swept && tr.firstSight(key), "periodic re-sweep clears");
+		T.check(ComplianceDecisions.latestCompliantPaths(ids, new
+				java.util.TreeSet<>(), 20, 30).isEmpty(), "nothing to ask");
+
+		// ---- benchmark memory (B2, N3): only restart / edit wipe it
+		LastBenchmarkMemory mem = new LastBenchmarkMemory();
+		String key = LastBenchmarkMemory.key(HOST, "host-1");
+		T.eq(null, mem.record(key, "VMware_SCG_8.0"), "first record");
+		T.eq("VMware_SCG_8.0", mem.record(key, "VMware_SCG_9.0"),
+				"record returns previous");
+		T.eq("VMware_SCG_9.0", mem.previous(key), "remembered");
+		mem.clear();
+		T.eq(null, mem.previous(key), "instance edit clears");
 
 		// ---- VM follows host (W4)
 		Map<String, String> hostVersions = new HashMap<>();
@@ -159,5 +181,11 @@ public final class ComplianceDecisionsTest {
 				single, "mine.lab"), "no singleton fallback");
 
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
+	}
+
+	private static int count(String s, String sub) {
+		int n = 0;
+		for (int i = s.indexOf(sub); i >= 0; i = s.indexOf(sub, i + 1)) n++;
+		return n;
 	}
 }
