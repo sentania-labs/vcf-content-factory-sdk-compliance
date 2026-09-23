@@ -142,6 +142,20 @@ class GeneratorTest(unittest.TestCase):
                               cond.get("operator"), cond.get("value")),
                              ("metric", "VCF-CF Compliance|unreadable_count",
                               ">", "0"))
+            # Build 65: OR collection_failed = 1, via a two-child
+            # SymptomSets (a bare-sibling list would drop all but one).
+            fsid = gen.collection_failed_symptom_id(sid)
+            fstate = syms[fsid].find(NS + "State")
+            self.assertEqual(fstate.get("severity"), "Immediate")
+            fcond = fstate.find(NS + "Condition")
+            self.assertEqual((fcond.get("type"), fcond.get("key"),
+                              fcond.get("operator"), fcond.get("value")),
+                             ("metric", "VCF-CF Compliance|collection_failed",
+                              "=", "1"))
+            sets = a.find(NS + "State/" + NS + "SymptomSets")
+            self.assertEqual(sets.get("operator"), "or")
+            self.assertEqual([x.get("ref") for x in
+                              sets.findall(NS + "SymptomSet")], [sid, fsid])
         self.assertEqual(ops_kinds, OPS_KINDS)
         recs = [r for r in self.root.iter(NS + "Recommendation")
                 if r.get("key") == gen.COLLECTION_REC_ID]

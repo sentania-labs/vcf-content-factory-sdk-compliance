@@ -111,8 +111,10 @@ public final class ComplianceRollupTest {
 		T.near(0, us.get(P + "Host|no_benchmark"), "not no_benchmark");
 		T.near(1, us.get(P + "Benchmark|unknown|objects"), "unknown bucket");
 		T.near(0, us.get(P + "Benchmark|none|objects"), "not none bucket");
-		T.check(!us.containsKey(P + "Host|avg_score"),
-				"version-unreadable is not scored (unchanged in build 63)");
+		// Build 65 (W1): nothing collected -> scored with 0.
+		T.near(1, us.get(P + "Host|scored"), "version-unreadable is scored");
+		T.near(0, us.get(P + "Host|score_sum"), "with score 0");
+		T.near(0, us.get(P + "Host|avg_score"), "avg 0");
 
 		T.check(ComplianceRollup.isNonCompliant(0, 1), "unreadable -> nc");
 		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");

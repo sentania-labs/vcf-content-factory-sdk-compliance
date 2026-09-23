@@ -379,9 +379,9 @@ field). Everything below reuses that reader but with field names that have
 not yet been confirmed against a live host.
 
 Safe-by-construction: if a derived field/row name is wrong, the read
-returns `null` → the `UNREADABLE` sentinel (counted in `unreadable_count`,
-excluded from every score). A wrong field name can therefore produce a
-coverage gap, **never a false `pass`**. But until a live run confirms
+returns `null` → the `UNREADABLE` sentinel (counted in `unreadable_count` and, since build 63, counted as failing in the score, raising the
+"Compliance data not collected" alert). A wrong field name can therefore
+produce a coverage gap that lowers the score, **never a false `pass`**. But until a live run confirms
 them, treat the coverage here as *claimed, not proven*. A live ESXi 8.0
 run is exactly what promotes these to proven coverage.
 
@@ -426,7 +426,7 @@ These two controls are **scored** (non-empty `read_recipe`, `vim_property`
 kind) but the vim25 path or the runtime spec type was **derived from the
 API reference / documentation, not observed on a live object**. Safe-by-
 construction: a wrong path or an unrecognized spec type resolves to
-UNREADABLE (counted in `unreadable_count`, excluded from every score) —
+UNREADABLE (counted in `unreadable_count` and, since build 63, counted as failing in the score),
 **never** a false `pass`. A live 8.0 (and 9.0) DVS/DVPG run promotes these
 to proven coverage.
 
@@ -452,8 +452,8 @@ JSON field per endpoint.
 
 Safe-by-construction (the cardinal trap, restated for REST): any auth
 failure, non-200, 404, timeout, JSON parse error, **absent field**, or
-**empty list** folds to `UNREADABLE` (counted in `unreadable_count`,
-excluded from every score) — **never** a false `pass`. This matters most
+**empty list** folds to `UNREADABLE` (counted in `unreadable_count` and, since build 63, counted as failing in the score),
+**never** a false `pass`. This matters most
 for the "should be disabled" controls: a failed GET of `access/ssh` does
 **not** become "ssh disabled → compliant". A wrong documentation-derived
 field name therefore produces a coverage gap, never a false pass. The

@@ -9,9 +9,9 @@ list to find the data:
 
 | VMWARE object | What the pack pushes onto it |
 |---|---|
-| HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`. |
+| HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`, `collection_failed` (1 when nothing could be read on the object). |
 | VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
-| The same six kinds | One "Compliance data not collected (<kind>)" alert per kind (6, type Compliance, severity Immediate), raised when `unreadable_count` > 0, with a recommendation on what unreadable means and what to check. |
+| The same six kinds | One "Compliance data not collected (<kind>)" alert per kind (6, type Compliance, severity Immediate), raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check. |
 | The same six kinds | 144 compliance alerts (type Compliance, subType 21), one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation. Plus the Host Compliance Score Degraded alert on HostSystem. |
 
 The full key list, with when each key is pushed, is in the repo
@@ -124,7 +124,11 @@ collection continues; compliance is never failed over a stitch error.
   violation: `fail_count` excludes it, its `Compliant` is -1 so no
   per-control alert fires, and `unreadable_count` counts it separately.
   Instead the object raises "Compliance data not collected (<kind>)"
-  (severity Immediate), whose recommendation says what to check. `score`
+  (severity Immediate), whose recommendation says what to check. When
+  nothing at all could be read (every attempted setting unreadable, or the
+  object's version unreadable with no previous SCG), the object also has
+  `collection_failed` = 1 (0 otherwise, pushed every cycle); the alert
+  fires on either signal. `score`
   is not pushed only when nothing was attempted (no benchmark, non-vSAN
   cluster); VCF Ops then keeps its last value, so read `score` with
   `total_count`, `unreadable_count` and `no_benchmark`. The counters are
@@ -143,9 +147,11 @@ collection continues; compliance is never failed over a stitch error.
 
 - **Version unreadable is not "no benchmark".** If the adapter cannot read
   the version that governs an object's SCG, it scores the object against
-  the SCG it had last cycle. With no previous SCG, the object is reported
-  as unreadable: non-compliant, not scored, counted in the rollup's
-  `unknown` benchmark bucket. Only a version the adapter read, with no
+  the SCG it had last cycle. With no previous SCG (for example right after
+  a collector restart), nothing was collected: the object scores 0, is
+  non-compliant, has `collection_failed` = 1 (which raises "Compliance
+  data not collected"), and is counted with its 0 in the rollup's `unknown`
+  benchmark bucket. Only a version the adapter read, with no
   bundled SCG, is "no benchmark".
 
 - **Unreadable objects are non-compliant and in the averages.** An object
