@@ -87,8 +87,25 @@ for:
    `allowInsecure=true`.
 6. Click **Validate Connection**, then **Add**.
 7. On the first collection cycle the adapter discovers its Compliance
-   World and begins pushing per-host results onto the existing VMWARE
-   HostSystem and vCenter resources.
+   World and begins pushing results onto the existing VMWARE hosts, VMs,
+   vCenter, clusters, distributed switches and portgroups.
+8. **Enable the four compliance super metrics.** Edit the policy active on
+   `vSphere World` (in the policy editor, Metrics and Properties, filter
+   on "Compliance") and enable
+   Compliance Objects Scored, Compliance Non-Compliant Objects, Compliance
+   Objects Without Benchmark and Compliance Average Score. Without this
+   the Environment Overview's score tiles and trend stay empty. Whether
+   the pak import already enables them is unconfirmed (to be checked at
+   the devel install); check and enable if needed.
+9. Open **[VCF Content Factory] Compliance Environment Overview**. The
+   four bundled dashboards:
+
+| Dashboard | What it is for |
+|---|---|
+| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
+| [VCF Content Factory] Compliance ESXi Hosts | Pick a scope (environment, vCenter or cluster), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
+| [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
 ## Troubleshooting
 

@@ -126,6 +126,30 @@ The adapter's own Compliance World carries only
 `Summary|last_scan_timestamp`: it is one object shared by every adapter
 instance, so per-vCenter numbers on it would be last-writer-wins.
 
+## Dashboards and super metrics
+
+The pak installs four dashboards (plus their eight views):
+
+| Dashboard | What it is for |
+|---|---|
+| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
+| [VCF Content Factory] Compliance ESXi Hosts | Pick a scope (environment, vCenter or cluster), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
+| [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
+
+The Environment Overview's score tiles and trend read four bundled super
+metrics, all assigned to `VMWARE / vSphere World`: Compliance Objects
+Scored, Compliance Non-Compliant Objects, Compliance Objects Without
+Benchmark, and Compliance Average Score. **They must be enabled in the
+policy active on vSphere World** (in the policy editor, Metrics and
+Properties, filter on "Compliance"; the exact menu path differs between
+Ops 9.0 and 9.1),
+or those tiles and the trend stay empty. Whether the pak import enables
+them automatically is **unconfirmed**; it will be checked at the devel
+install. The other widgets read adapter data directly and need no
+enablement. Compliance Average Score shows no data until the first v3
+collection cycle has scored something.
+
 ## Alerts
 
 - `Host Compliance Score Degraded` (HostSystem, score below 95 / 80).
