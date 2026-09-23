@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.67 (2026-09-23)
+
+- docs(adapter): build 67: docs/overview.md's alert table row now states all 151 alert definitions in describe.xml (144 per-control, 6 "Compliance data not collected", 1 Host Compliance Score Degraded) in one row; the separate collection row was merged into it. README.md, docs/installing.md and CANONICAL_SCHEMA.md carry no alert-count statements (checked for 144 / 145 / 150 / 151). Docs only.
+
 ## 0.0.0.66 (2026-09-23)
 
 - docs(adapter): build 66: close the build-65 review NIT (knowledge/context/reviews/compliance-build-65.md). docs/overview.md no longer says a disconnected host raises the collection alert "instead" of a violation: on a disconnected or version-unreadable host both "Compliance data not collected" and the Critical "Host Compliance Score Degraded" alert (score 0) are expected, and both clear once the host reconnects and is read again. Docs only; no code or content change.
