@@ -47,6 +47,9 @@ public final class ComplianceRollup {
 
 	public static final String PREFIX = "VCF-CF Compliance|Rollup|";
 
+	/** 0/1: some rollup keys were held back this cycle (build 79). */
+	public static final String INCOMPLETE_KEY = PREFIX + "incomplete";
+
 	/** Benchmark buckets always pushed (0 when unused), in key order. */
 	public static final String[] FIXED_BUCKETS = {
 			"SCG_6.7", "SCG_7.0", "SCG_8.0", "SCG_9.0", "SCG_9.1",
@@ -158,6 +161,11 @@ public final class ComplianceRollup {
 			all.scoreSum += t.scoreSum;
 		}
 		boolean complete = incomplete.isEmpty();
+		// Build 79 (review of build 78, WARNING): pushed EVERY cycle, never
+		// omitted, so it cannot go stale: 1 while any listing failed and
+		// keys were held back (the vCenter collection alert fires on it),
+		// 0 once a complete cycle pushes everything again.
+		out.put(INCOMPLETE_KEY, complete ? 0.0 : 1.0);
 		if (complete) {
 			put(out, "All", all);
 		}

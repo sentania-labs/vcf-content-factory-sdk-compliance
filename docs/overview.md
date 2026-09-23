@@ -152,7 +152,15 @@ collection continues; compliance is never failed over a stitch error.
   that kind's `Rollup|<K>|*` keys, nor the cross-kind `Rollup|All|*` and
   `Rollup|Benchmark|*|objects` keys, for that vCenter that cycle. The
   previous values stay, so the environment totals do not suddenly lose,
-  for example, every VM of one vCenter. The adapter log names the kinds.
+  for example, every VM of one vCenter. So a listing that keeps failing
+  cannot freeze the rollup unnoticed, the vCenter object also carries
+  `VCF-CF Compliance|Rollup|incomplete` (build 79), pushed every cycle: 1
+  while keys are being held back, 0 once a complete cycle pushes
+  everything. At 1 the vCenter's "Compliance data not collected (vCenter)"
+  alert fires. To see which listing failed, look in the adapter log for
+  "Inventory listing failed this cycle for" and the "Failed to enumerate"
+  warning just before it; then check the collection account's inventory
+  read permissions on that vCenter.
 
 - **Version unreadable is not "no benchmark".** If the adapter cannot read
   the version that governs an object's SCG, it scores the object against

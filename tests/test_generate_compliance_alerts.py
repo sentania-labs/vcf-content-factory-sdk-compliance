@@ -174,8 +174,17 @@ class GeneratorTest(unittest.TestCase):
                               "=", "1"))
             sets = a.find(NS + "State/" + NS + "SymptomSets")
             self.assertEqual(sets.get("operator"), "or")
-            self.assertEqual([x.get("ref") for x in
-                              sets.findall(NS + "SymptomSet")], [sid, fsid])
+            refs = [x.get("ref") for x in sets.findall(NS + "SymptomSet")]
+            if ops_kind == "VMwareAdapter Instance":
+                # Build 79: third symptom, the rollup-incomplete flag.
+                self.assertEqual(refs, [sid, fsid, gen.ROLLUP_INCOMPLETE_SYMPTOM])
+                icond = syms[gen.ROLLUP_INCOMPLETE_SYMPTOM].find(
+                    NS + "State/" + NS + "Condition")
+                self.assertEqual((icond.get("key"), icond.get("operator"),
+                                  icond.get("value")),
+                                 ("VCF-CF Compliance|Rollup|incomplete", "=", "1"))
+            else:
+                self.assertEqual(refs, [sid, fsid])
         self.assertEqual(ops_kinds, OPS_KINDS)
         recs = [r for r in self.root.iter(NS + "Recommendation")
                 if r.get("key") == gen.COLLECTION_REC_ID]

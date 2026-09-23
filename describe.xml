@@ -1799,6 +1799,18 @@
                    valueType="numeric" thresholdType="static"/>
       </State>
     </SymptomDefinition>
+    <SymptomDefinition id="vcfcf_compliance_collection_vcenter_rollup_incomplete"
+                       nameKey="2030"
+                       adapterKind="VMWARE"
+                       resourceKind="VMwareAdapter Instance"
+                       waitCycle="1"
+                       cancelCycle="1">
+      <State severity="Immediate">
+        <Condition type="metric" key="VCF-CF Compliance|Rollup|incomplete"
+                   operator="=" value="1"
+                   valueType="numeric" thresholdType="static"/>
+      </State>
+    </SymptomDefinition>
     <SymptomDefinition id="vcfcf_compliance_collection_cluster_unreadable"
                        nameKey="2006"
                        adapterKind="VMWARE"
@@ -3990,6 +4002,8 @@
           <SymptomSet ref="vcfcf_compliance_collection_vcenter_unreadable" operator="and"
                       aggregation="any" applyOn="self" negateCondition="false"/>
           <SymptomSet ref="vcfcf_compliance_collection_vcenter_failed" operator="and"
+                      aggregation="any" applyOn="self" negateCondition="false"/>
+          <SymptomSet ref="vcfcf_compliance_collection_vcenter_rollup_incomplete" operator="and"
                       aggregation="any" applyOn="self" negateCondition="false"/>
         </SymptomSets>
         <Recommendations>
