@@ -7,11 +7,14 @@ description: >
   only: SCG Applied follows the owning vCenter's version by design, so
   a vDS reporting its own lower version than its vCenter still shows
   the vCenter's SCG. Feeds vCenter & Networking W4 (Distributed
-  Switches). This view does not filter rows to no_benchmark = 0 /
-  total_count > 0 (see Known constraints below); the No SCG and
-  Non-Compliant flag columns make a stale score visible per row. Sort
-  by Compliance Score ascending in the dashboard widget to surface the
-  worst switch first.
+  Switches). Score columns list every row, unfiltered: VCF Ops keeps a
+  metric's last value, so a vDS that moved to a version with no SCG can
+  show a retained score, identified by the No SCG flag column beside it
+  (owner accepted, 2026-09-23). Unreadable controls count as failing in
+  the score (adapter build 63); the Unreadable column shows how many,
+  and a "Compliance data not collected" alert explains why. The totals
+  row is sums only (issue #168). Sort by Compliance Score ascending in
+  the dashboard widget to surface the worst switch first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VmwareDistributedVirtualSwitch

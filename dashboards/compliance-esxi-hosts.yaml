@@ -166,6 +166,7 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_transparent_page_sharing"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vib_trusted_binaries"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vmotion_encryption_offload"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_host"
 
   # ── W5: Score Trend, driven by W2 ────────────────────────────────────
 

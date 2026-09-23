@@ -74,6 +74,7 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_virtual_hardware"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmotion_encrypted"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmrc_lock"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vm"
 
   # ── W4: Compliance Details, driven by W2 ────────────────────────────
 
