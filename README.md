@@ -1,9 +1,13 @@
 # VCF Content Factory Compliance Adapter
 
-Monitors ESXi hosts for VMware SCG benchmark compliance by querying vCenter
-configuration and evaluating controls against a user-selectable security
-profile. Pushes per-control compliance properties and aggregate scores
-onto existing VMWARE HostSystem resources via ARIA_OPS stitching.
+Monitors vSphere for VMware Security Configuration Guide (SCG) compliance
+by querying vCenter configuration and evaluating each object against the
+SCG that matches its version. Covers ESXi hosts, VMs, vCenter, clusters
+(vSAN controls), distributed switches and distributed portgroups. Pushes
+per-control results, per-object scores and flags onto the existing VMWARE
+resources via ARIA_OPS stitching, a per-vCenter rollup onto each vCenter
+object, and raises one compliance alert per failing control with the SCG
+remediation as its recommendation.
 
 ## Documentation
 
@@ -11,11 +15,13 @@ Full docset (overview, installing & configuring, inventory tree): [`docs/README.
 
 ## Quick start
 
-1. Build: `python3 -m vcfops_managementpacks build-sdk content/sdk-adapters/compliance`
+1. Build: `python3 -m vcfcf_managementpacks build-sdk content/sdk-adapters/compliance`
 2. Install the `.pak` from `dist/` via VCF Ops UI or CLI
-3. Add adapter instance: provide vCenter host, credentials, select benchmark profile
+3. Add adapter instance: provide vCenter host and credentials; leave the
+   benchmark profile at `Auto (by version)` unless you want one SCG forced
 4. Wait one collection cycle (default 60 minutes)
-5. Check host compliance: Environment > select host > All Metrics > VCF-CF Compliance
+5. Check an object: Environment > select host / VM / vCenter > All Metrics
+   > VCF-CF Compliance
 
 ## Adapter instance configuration
 
@@ -24,50 +30,110 @@ Full docset (overview, installing & configuring, inventory tree): [`docs/README.
 | vCenter Host | Yes | - | vCenter FQDN or IP |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Benchmark Profile | Yes | VMware_SCG_8.0 | VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
+| Benchmark Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
 | Custom Profile Path | No | - | Filesystem path to CSV if Custom |
-| Allow Insecure SSL | No | true | Accept self-signed certificates |
+| Allow Insecure SSL | No | false | Accept self-signed certificates |
+
+**Existing instances keep their stored profile on upgrade.** VCF Ops
+stores the configured value on each adapter instance, and a pak upgrade
+does not rewrite it (the new default applies to new instances only). An
+instance configured `VMware_SCG_9.0` before the upgrade keeps scoring
+every object against SCG 9.0 until someone edits it to
+`Auto (by version)`. An instance with no stored value keeps the pre-v3
+fallback, SCG 8.0.
+
+## Benchmark selection
+
+- **Auto (by version):** hosts by their ESXi version, VMs by their host's
+  ESXi version, and vCenter, clusters, distributed switches and portgroups
+  by the vCenter version (a distributed switch's own version is not used).
+  `major.minor` picks SCG 6.7, 7.0, 8.0, 9.0 or 9.1 (8.0 U3 is 8.0). Any
+  other version, or a version the adapter could not read, gets no
+  benchmark: `profile_name` = `no benchmark for ESXi 10.0` (or
+  `... (version unreadable)`), `no_benchmark` = 1, and no score.
+- **Fixed profile:** that SCG for every object regardless of version.
+- **Custom:** a canonical-schema CSV on the collector, for every object.
 
 ## Benchmark profiles
 
 Bundled profiles ship with the pak under `profiles/canonical/`:
-- `scg_8.0.csv` — VMware Security Configuration Guide for vSphere 8.x
-- `scg_9.0.csv` — VMware Cloud Foundation 9.0 Security Configuration Guide
-- `scg_9.1.csv` — VMware Cloud Foundation 9.1 Security Configuration Guide
+- `scg_6.7.csv`: vSphere Security Configuration Guide 6.7
+- `scg_7.0.csv`: vSphere Security Configuration Guide 7
+- `scg_8.0.csv`: VMware Security Configuration Guide for vSphere 8.x
+- `scg_9.0.csv`: VMware Cloud Foundation 9.0 Security Configuration Guide
+- `scg_9.1.csv`: VMware Cloud Foundation 9.1 Security Configuration Guide
 
-All three derive from vmware/vcf-security-and-compliance-guidelines
-(source CSVs kept beside them under `profiles/`; the canonical form is
-produced by the normalizer pipeline, see CANONICAL_SCHEMA.md).
+All derive from vmware/vcf-security-and-compliance-guidelines (6.7 and
+7.0 from its history; source CSVs kept beside them under `profiles/`;
+the canonical form is produced by the normalizer pipeline, see
+CANONICAL_SCHEMA.md). `profiles/manual_review.csv` lists controls whose
+SCG expected value is prose (site-specific text); those are reported for
+manual review and never scored.
 
 Custom profiles must follow the canonical CSV schema
 (CANONICAL_SCHEMA.md). Upload the CSV to the VCF Ops appliance and
 reference the path.
 
-## Property naming
+## Keys pushed onto VMWARE resources
 
-Per-control properties on VMWARE HostSystem:
+Per-control (on the object the control applies to):
 ```
-VCF-CF Compliance|<profile>|<scg-id>|Actual
-VCF-CF Compliance|<profile>|<scg-id>|Expected
-VCF-CF Compliance|<profile>|<scg-id>|Compliant   (0 or 1)
-VCF-CF Compliance|<profile>|<scg-id>|Description
+VCF-CF Compliance|<control_id>|Actual        property
+VCF-CF Compliance|<control_id>|Expected      property
+VCF-CF Compliance|<control_id>|Description   property
+VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-compliant,
+                                             -1 not evaluated (unreadable, or no
+                                             longer in the applied benchmark)
 ```
 
-Aggregate metrics:
+Per object:
 ```
-VCF-CF Compliance|score          (0-100%)
-VCF-CF Compliance|pass_count
-VCF-CF Compliance|fail_count
+VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."
+VCF-CF Compliance|score              0-100%, only when at least one control was scored
+VCF-CF Compliance|pass_count         only when scored
+VCF-CF Compliance|fail_count         only when scored
 VCF-CF Compliance|total_count
-VCF-CF Compliance|profile_name
+VCF-CF Compliance|unreadable_count
+VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
+VCF-CF Compliance|no_benchmark       1 when the version has no SCG
 ```
 
-## Phase 1 limitations
+Per vCenter (on each VMWARE `VMwareAdapter Instance`), `<K>` in `All`,
+`Host`, `VM`, `vCenter`, `Cluster`, `vDS`, `Portgroup`:
+```
+VCF-CF Compliance|Rollup|<K>|scored
+VCF-CF Compliance|Rollup|<K>|non_compliant
+VCF-CF Compliance|Rollup|<K>|no_benchmark
+VCF-CF Compliance|Rollup|<K>|score_sum
+VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
+VCF-CF Compliance|Rollup|Host|scored_stale     hosts scored from their last-known score
+VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
+                                               SCG_9.0, SCG_9.1, none (+ Custom)
+```
 
-- REST-only vCenter API access — controls requiring SOAP (advanced
-  host settings) are skipped as N/A until Phase 1.1
-- Hosts only (VMs are a stretch goal)
-- No remediation actions (Phase 2)
+The adapter's own Compliance World carries only
+`Summary|last_scan_timestamp`: it is one object shared by every adapter
+instance, so per-vCenter numbers on it would be last-writer-wins.
+
+## Alerts
+
+- `Host Compliance Score Degraded` (HostSystem, score below 95 / 80).
+- One compliance alert per scored SCG control, named
+  `<control_id>: <title>`, raised when that control's `Compliant` is 0,
+  with the SCG remediation as its recommendation. Severity follows the
+  SCG priority: P0 Critical, P1 Immediate, P2 Warning. Generated from the
+  profiles by `scripts/generate_compliance_alerts.py`; never hand-edit
+  the generated blocks in `describe.xml` or `resources.properties`.
+
+All compliance alerts are type Compliance (subType 21).
+
+## Limitations
+
+- No remediation actions.
+- Controls the adapter cannot read over vim25 / esxcli / VAMI are
+  informational; see `profiles/UNAUDITED_CONTROLS.md`.
+- Most SCG cluster (vSAN) controls need the vSAN Management SDK, which is
+  not on the adapter classpath.
 
 ## Building from source
 

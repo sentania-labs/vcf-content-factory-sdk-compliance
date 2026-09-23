@@ -30,6 +30,7 @@ profiles/canonical/                        # canonical CSVs (loaded by adapter)
   scg_8.0.csv
   scg_9.0.csv
   scg_9.1.csv
+profiles/manual_review.csv                 # per-profile manual-review overlay (build 57)
 ```
 
 Source CSVs stay in `profiles/` so future updates can be diffed and
@@ -150,9 +151,15 @@ profiles via the `_READ_RECIPE_BY_PARAMETER` map in
 Unreadable controls are **excluded from pass, fail, and the score
 denominator** — they are not failures (we don't know), and per the
 cardinal rule they are **never compliant / never a sentinel pass**. A
-per-resource `VCF-CF Compliance|unreadable_count` stat and a world
-`Summary|total_unreadable_controls` aggregate surface them as a
-*profile/coverage* signal, distinct from non-compliance. The
+per-resource `VCF-CF Compliance|unreadable_count` stat surfaces them as a
+*profile/coverage* signal. Since build 57 an object with any unreadable
+control also has `VCF-CF Compliance|non_compliant` = 1 (unreadable is not
+compliant), while the unreadable control's own
+`VCF-CF Compliance|<control_id>|Compliant` is **-1** (not evaluated), not
+0, so its per-control compliance alert (which fires on 0) never hands
+out a remediation runbook for a setting the adapter could not read. (The
+world `Summary|total_unreadable_controls` aggregate was retired in build
+57 with the rest of the shared-world Summary numbers.) The
 zero-divisor contract is unchanged: no evaluable controls →
 score=100.0 with `total_count=0`, and callers refuse to fold a
 `total_count==0` result into rollups.
@@ -302,6 +309,18 @@ read is **never** folded into a pass:
   not-equal mode **never** treats a missing value as "not equal to X,
   therefore compliant" — absence is an exclusion, not a pass.
 
+### `vmx-N or higher` / `vmx-N or newer` (build 57)
+
+A third reserved form: an `expected_value` of `vmx-<N> or higher` or
+`vmx-<N> or newer` (case-insensitive) is a **minimum virtual hardware
+version**. A read value `vmx-<M>` is compliant iff `M >= N` (numeric,
+so `vmx-9` is below `vmx-13`); a present value that is not
+`vmx-<digits>` is non-compliant. Absent / unreadable values never reach
+the comparison (same short-circuit as the other modes). SCG 7.0
+(`vmx-13 or newer`) and SCG 9.1 (`vmx-17 or higher`) use this form for
+`vm.virtual-hardware`; a bare `vmx-<N>` (SCG 8.0 and 9.0) keeps exact
+equality, as their row descriptions state.
+
 These tokens are reserved values in the `expected_value` column. A
 literal expected value of `(non-empty)` or one beginning `not:` is not
 expressible as a plain equality target (use a custom recipe/style if a
@@ -347,9 +366,10 @@ Per-source Python scripts under `scripts/`:
   normalizer: renames the SCG 7 header names to the SCG 8 ones,
   rewrites the `Undefined (Defaults to X)` baseline phrasing to the
   `X or Undefined` form the evaluator recognizes, tags `SCG-7.0`, and
-  re-keys three inherited recipes (VGT source id, discovery-protocol
-  expected `none`, `vm.virtual-hardware` left unscored because
-  `vmx-13 or newer` cannot be compared). Details in the script
+  re-keys two inherited recipes (VGT source id, discovery-protocol
+  expected `none`), scores `vm.virtual-hardware` with the
+  `vmx-N or newer` minimum (build 57; unscored before), and corrects the
+  `esx.etc-issue` key case to `Config.Etc.issue`. Details in the script
   docstring.
 - `scripts/normalize_scg_v67.py` (this repo): VMware vSphere SCG 6.7
   source format. Standalone, because 6.7 Guideline IDs
@@ -405,7 +425,37 @@ python3 scripts/xlsx_to_csv.py scg7.xlsx Controls 'SCG ID' profiles/vmware_scg_7
 python3 scripts/xlsx_to_csv.py scg67.xlsx 'vSphere 6.7' 'Guideline ID' profiles/vmware_scg_6.7.csv
 python3 scripts/normalize_scg_v70.py profiles/vmware_scg_7.0.csv profiles/canonical/scg_7.0.csv
 python3 scripts/normalize_scg_v67.py profiles/vmware_scg_6.7.csv profiles/canonical/scg_6.7.csv
+python3 scripts/generate_compliance_alerts.py
 ```
+
+(The 9.1 driver, `scripts/normalize_scg_v91.py`, runs before the 6.7
+driver as well; the 7.0 driver imports its shared vm.virtual-hardware
+caveat. All drivers reproduce the committed canonical CSVs byte for
+byte.)
+
+## Manual-review overlay (build 57)
+
+`profiles/manual_review.csv` (columns `profile,control_id,reason`) lists
+bundled-profile controls whose SCG `expected_value` is prose rather than
+a value ("Site-Specific Log Server", "Consult your organization's legal
+advisors for text ..."). The adapter can read those settings, but no
+real value can equal the prose, so scoring them fails every object. The
+loader demotes each listed control, in the listed profile only, to
+`manual_audit` (no recipe): not evaluable, never pushed, never alerted,
+never a pass. The overlay is applied to bundled profiles, never to a
+Custom profile, and is kept outside the canonical CSVs so regenerating
+a profile cannot silently undo it. A missing overlay file is treated as
+empty (its failure mode is a false fail, never a false pass); the
+adapter logs how many controls it demoted on every load.
+
+## Per-control compliance alerts (build 57)
+
+`scripts/generate_compliance_alerts.py` generates, from the canonical
+profiles plus the overlay, one symptom, one alert definition and one
+recommendation per control that at least one bundled profile scores,
+into marked blocks of `describe.xml` and `resources/resources.properties`
+(never hand-edit those blocks; `--check` fails when they are stale).
+Rerun it after any canonical profile or overlay change.
 
 ## Loader contract
 
@@ -425,3 +475,10 @@ python3 scripts/normalize_scg_v67.py profiles/vmware_scg_6.7.csv profiles/canoni
 
 The cache key in `BenchmarkLoader.load` includes the resolved profile
 name; when the configured profile changes, the cache is rebuilt.
+
+`BenchmarkLoader.loadAll` (build 57, `Auto (by version)` mode) loads
+every bundled profile once (SCG 6.7, 7.0, 8.0, 9.0, 9.1), applies the
+manual-review overlay, and caches the set per conf directory. Any profile
+that fails to load fails the whole call: Auto mode never runs on a
+partial benchmark set, because an object whose SCG failed to load would
+otherwise be reported as "no benchmark" and hide the broken install.

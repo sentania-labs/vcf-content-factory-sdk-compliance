@@ -12,7 +12,8 @@ Setting Location refinement, every build-35..41 read-recipe reclass
 map) is reused verbatim; only the 9.1-specific deltas are applied
 here (deltas 1-3 are the 9.1 format; deltas 4-5 close review
 findings W1/W2 from
-knowledge/context/reviews/compliance-scg-benchmark-set-2026-08-25.md):
+knowledge/context/reviews/compliance-scg-benchmark-set-2026-08-25.md;
+delta 6 is adapter build 57):
 
 1. **Header shapes.** The 9.1 source CSV drops the embedded newlines
    9.0 carried in three header cells:
@@ -33,6 +34,13 @@ knowledge/context/reviews/compliance-scg-benchmark-set-2026-08-25.md):
    nowhere, resource_kind falls back to VCenterAdapterInstance for
    loadability, with their own control_id prefixes (`automation`,
    `pnr`, `networks`) per the CANONICAL_SCHEMA.md prefix table.
+
+6. **vm.virtual-hardware caveat.** The 9.1 baseline is
+   `vmx-17 or higher`. Adapter build 57 compares that phrasing as a
+   minimum (ControlEvaluator.VMX_MINIMUM: `vmx-M` passes iff M >= 17),
+   so the factory's "exact equality only" caveat no longer describes
+   this row. Replaced, for this run only, with the minimum-version
+   caveat (VMX_MINIMUM_CAVEAT below, shared with the 7.0 driver).
 
 The deltas are applied by patching the imported factory modules
 in-process (module-level constants and the shared COMPONENT_MAP /
@@ -166,7 +174,25 @@ def main(argv: list) -> int:
 
     v9.classify_parameter_kind = _classify_91
 
+    # Delta 6: minimum-version caveat for vm.virtual-hardware.
+    _require(base, "_VIM_RECLASS_DESCRIPTION_CAVEAT")
+    if "vm.virtual-hardware" not in base._VIM_RECLASS_DESCRIPTION_CAVEAT:
+        raise SystemExit("ERROR: factory caveat for vm.virtual-hardware "
+                         "moved; update scripts/normalize_scg_v91.py.")
+    base._VIM_RECLASS_DESCRIPTION_CAVEAT["vm.virtual-hardware"] = (
+        VMX_MINIMUM_CAVEAT)
+
     return v9.normalize(argv[1], argv[2])
+
+
+# Shared with normalize_scg_v70.py (the two SCG versions whose baseline
+# for vm.virtual-hardware is a floor: "vmx-13 or newer", "vmx-17 or higher").
+VMX_MINIMUM_CAVEAT = (
+    " [COVERAGE: this adapter reads config.version (e.g. \"vmx-21\") and "
+    "scores the VM compliant when its hardware version is at or above the "
+    "baseline minimum (the \"or newer\" / \"or higher\" floor), "
+    "non-compliant below it. See UNAUDITED_CONTROLS.md.]"
+)
 
 
 if __name__ == "__main__":

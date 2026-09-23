@@ -53,12 +53,37 @@ Source of record: `context/investigations/scg89-audit-coverage-recon.md`.
 
 ---
 
-## SCG 6.7 and 7.0 profiles (added 2026-09-23, not yet selectable)
+## Manual review: prose expected values (build 57)
+
+Some controls the adapter CAN read carry prose instead of a value as the
+SCG expected result ("Site-Specific Log Server", "Consult your
+organization's legal advisors for text ..."). No real setting can equal
+that text, so scoring them failed every object (false fails, never false
+passes). Since build 57 they are listed in `profiles/manual_review.csv`
+and load as `manual_audit`: not scored, no per-control keys, no alert.
+The overlay is per profile (a control is demoted only in the profiles
+that list it) and applies to bundled profiles only, never to a Custom
+profile. Site values for these controls are the job of the planned
+per-connection control overrides.
+
+| Profile | control_ids |
+|---|---|
+| 6.7 | `esx.logs-remote`, `esx.lockdown-dcui-access`, `esx.account-password-policies`, `vm.transparentpagesharing-inter-vm-enabled` |
+| 7.0 | `esx.annotations-welcomemessage`, `esx.etc-issue`, `esx.logs-remote`, `vc.etc-issue` |
+| 8.0 | `esx.annotations-welcomemessage`, `esx.etc-issue`, `esx.logs-remote`, `vc.etc-issue` |
+| 9.0 | `esx.etc-issue`, `esx.log-forwarding`, `esx.login-message`, `vc.etc-issue`, `esx.ad-admin-group-name` |
+| 9.1 | `esx.ad-admin-group-name`, `esx.etc-issue`, `esx.log-forwarding`, `esx.login-message`, `vc.etc-issue` |
+
+The coverage tables below count these controls as scored (they are
+scored rows in the canonical CSV); subtract the overlay rows for the
+effective count.
+
+## SCG 6.7 and 7.0 profiles (added 2026-09-23, selectable since build 57)
 
 The SCG 6.7 and 7.0 canonical profiles (`scg_6.7.csv`, `scg_7.0.csv`)
-were added for version-aware benchmark selection. Until the adapter
-exposes them they are not loaded, so nothing below affects a score
-today. Once they are, the same three buckets apply, and the sections
+are selectable since build 57, as fixed profiles and through
+`Auto (by version)` (ESXi 6.7 / 7.0 hosts and their VMs, vCenter 6.7 /
+7.0 objects). The same three buckets apply, and the sections
 further down that name a control_id apply to the 6.7 / 7.0 row carrying
 that id, because matched controls share the id, the read recipe, and
 therefore the coverage of their 8.0 row.
@@ -68,17 +93,13 @@ vim_property / esxcli / vami_api row with a read recipe):
 
 | Profile | Controls | Scored | Unscored (informational) |
 |---|---|---|---|
-| SCG 7.0 | 122 | 81 | 41 (31 powercli_only, 7 manual_audit, 3 esxcli with no recipe) |
+| SCG 7.0 | 122 | 82 | 40 (30 powercli_only, 7 manual_audit, 3 esxcli with no recipe) |
 | SCG 6.7 | 51 | 36 | 15 (13 powercli_only, 1 manual_audit, 1 esxcli with no recipe) |
 
 **SCG 7.0 unscored controls.** Every 7.0 control_id also exists in 8.0
-and is unscored there for the same reason, with one exception:
-
-- `vm.virtual-hardware` is unscored in 7.0 only. The SCG 7 baseline is
-  `vmx-13 or newer` (its own title says 19 or newer) and the adapter
-  compares `config.version` for exact equality, so the row ships as
-  powercli_only with no recipe instead of failing every VM. Needs a
-  minimum-version comparison style.
+and is unscored there for the same reason. (`vm.virtual-hardware` was
+the one 7.0-only exception until build 57: its baseline
+`vmx-13 or newer` is now compared as a minimum and the row is scored.)
 
 Other 7.0 unscored ids (same bucket as their 8.0 entries below):
 `dvpg.network-vgt` (ESX standard-switch row only; the distributed-switch
@@ -156,7 +177,7 @@ also embedded in each control's description in the profile CSV.
 | control_id | What is checked | What is NOT checked |
 |---|---|---|
 | `dvpg.network-restrict-port-level-overrides` | `config.policy.securityPolicyOverrideAllowed` is disabled (1 of ~7 override flags) | block / teaming / vlan / shaping / vendorConfig / ipfix / trafficFilter per-port overrides |
-| `vm.virtual-hardware` | `config.version` equals the SCG baseline string exactly (`vmx-19` / `vmx-21`) | "version N **or newer**" — a higher-than-baseline VM reads as non-compliant |
+| `vm.virtual-hardware` (8.0, 9.0) | `config.version` equals the SCG baseline string exactly (`vmx-21` / `vmx-19`) | "version N **or newer**": a higher-than-baseline VM reads as non-compliant. (7.0 and 9.1 phrase the baseline as a floor, `vmx-13 or newer` / `vmx-17 or higher`, and since build 57 are compared as a minimum: `vmx-M` passes iff M >= N.) |
 | `esx.timekeeping-services` (8.0) | ntpd service is **running** (`service_state:ntpd:running`, build 38) | ntpd **start policy** = `on` (start-with-host); PTP as an alternative time source |
 | `esx.time` (9.0) | ntpd service is **running** — the NTP daemon-running half only (`service_state:ntpd:running`, build 38) | the NTP **source-list** half (`config.dateTimeInfo.ntpConfig.server` non-empty); ntpd start policy = `on`; PTP. This control row already carries the daemon-running recipe and a CSV row holds one recipe, so the source-list half **cannot** be added to this row — it stays documented-partial here, NOT separately scored. (Its distinct 8.0 sibling `esx.timekeeping-sources` IS fully audited via `(non-empty)`, build 39.) |
 | `esx.snmp` (9.0) | snmpd service is **not running** (`service_state:snmpd:running`, build 38) | per-version SNMP config (the title also names disabling SNMP v1/v2 specifically); the running-flag check enforces the broader "SNMP deactivated" intent |

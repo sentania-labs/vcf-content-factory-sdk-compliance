@@ -11,9 +11,10 @@
   credentials). The account needs **read-only** access — the adapter only
   reads configuration; it performs no writes or remediation.
 - One or more **compliance benchmark profiles**. The pack bundles the
-  VMware Security Configuration Guide (SCG) 8.0, 9.0, and 9.1; a custom
-  profile is supplied as a canonical-schema CSV staged on the collector
-  appliance.
+  VMware Security Configuration Guide (SCG) 6.7, 7.0, 8.0, 9.0, and 9.1
+  and by default (`Auto (by version)`) picks one per object by version;
+  a custom profile is supplied as a canonical-schema CSV staged on the
+  collector appliance.
 
 ## Permissions Required
 
@@ -69,7 +70,7 @@ for:
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile | `benchmark_profile` | Yes | — | Select a bundled SCG profile (8.0 / 9.0 / 9.1), or `Custom`. |
+| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object, or `Custom`. Existing instances keep their stored choice on upgrade. |
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Read-only access. |

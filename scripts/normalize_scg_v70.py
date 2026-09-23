@@ -60,14 +60,22 @@ drops to informational or scores against the wrong literal):
    ("deactivate CDP/LLDP") as the prose word `Deactivated`, which no
    switch ever reads back. Expected value pinned to `none` so a switch
    with discovery off scores compliant instead of failing forever.
-6. **VM hardware version demoted to informational.** SCG 7's baseline
-   for `vm.virtual-hardware` is `vmx-13 or newer` (and its own title
-   says "version 19 or newer"). The inherited recipe compares
-   `config.version` for exact equality, so that literal would fail
-   every VM. The adapter has no minimum-version comparison today, so
-   the row is written as powercli_only (no recipe, unscored) with a
-   caveat in the description, rather than being scored against a
-   target it cannot express.
+6. **VM hardware version scored as a minimum (adapter build 57).**
+   SCG 7's baseline for `vm.virtual-hardware` is `vmx-13 or newer`
+   (its own title says "version 19 or newer"; the baseline column is
+   what the canonical profile carries). Until build 56 the adapter
+   compared `config.version` for exact equality, so this row shipped
+   powercli_only. Build 57 compares the "or newer" phrasing as a floor
+   (ControlEvaluator.VMX_MINIMUM), so the inherited recipe is kept and
+   the factory's exact-equality caveat is replaced with the
+   minimum-version caveat shared with the 9.1 driver.
+7. **Key case of `esx.etc-issue`.** The SCG 7 source names the
+   setting `Config.Etc.Issue`; the ESXi advanced option (and every
+   later SCG) is `Config.Etc.issue`. The adapter's option lookup is
+   case-sensitive, so the wrong case made the control silently skip
+   instead of evaluating. Corrected here. (Build 57 also lists the
+   control for manual review because its expected value is prose, so
+   the fix matters once site overrides exist.)
 """
 
 from __future__ import annotations
@@ -146,6 +154,11 @@ def main(argv: list) -> int:
         if key not in base._VIM_RECLASS_BY_CONTROL_ID:
             raise SystemExit(f"ERROR: factory reclass {key!r} moved; "
                              "update scripts/normalize_scg_v70.py.")
+    if (not hasattr(base, "_VIM_RECLASS_DESCRIPTION_CAVEAT")
+            or "vm.virtual-hardware"
+            not in base._VIM_RECLASS_DESCRIPTION_CAVEAT):
+        raise SystemExit("ERROR: factory caveat for vm.virtual-hardware "
+                         "moved; update scripts/normalize_scg_v70.py.")
 
     # Delta 4: VGT recipe for the SCG 7 distributed-switch row.
     base._VIM_RECLASS_BY_SOURCE_ID["vcenter-7.network-vgt"] = (
@@ -155,8 +168,10 @@ def main(argv: list) -> int:
         "vds.network-restrict-discovery-protocol"]
     base._VIM_RECLASS_BY_CONTROL_ID[
         "vds.network-restrict-discovery-protocol"] = dp[:3] + ("none",)
-    # Delta 6: no recipe for vm.virtual-hardware in SCG 7 (see docstring).
-    del base._VIM_RECLASS_BY_CONTROL_ID["vm.virtual-hardware"]
+    # Delta 6: minimum-version caveat for vm.virtual-hardware.
+    from normalize_scg_v91 import VMX_MINIMUM_CAVEAT
+    base._VIM_RECLASS_DESCRIPTION_CAVEAT["vm.virtual-hardware"] = (
+        VMX_MINIMUM_CAVEAT)
 
     with open(argv[1], encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
@@ -194,27 +209,15 @@ def main(argv: list) -> int:
     if rc != 0:
         return rc
 
-    # Delta 6 caveat: say why the row is unscored, on the row itself.
+    # Delta 7: ESXi option key case for esx.etc-issue.
     with open(argv[2], encoding="utf-8", newline="") as f:
         out_rows = list(csv.DictReader(f))
     for r in out_rows:
-        if r["control_id"] == "vm.virtual-hardware":
-            # The generic classifier reads the Get-View assessment as a
-            # vim_property; with no recipe that is already unscored, but
-            # the SCG 7 profile states it explicitly as powercli_only.
-            r["parameter_kind"] = "powercli_only"
-            r["read_recipe"] = ""
-            r["description"] += VIRTUAL_HARDWARE_CAVEAT
+        if (r["control_id"] == "esx.etc-issue"
+                and r["parameter"] == "Config.Etc.Issue"):
+            r["parameter"] = "Config.Etc.issue"
     base.write_canonical(argv[2], out_rows)
     return 0
-
-
-VIRTUAL_HARDWARE_CAVEAT = (
-    " [NOT SCORED IN SCG 7.0: the SCG 7 baseline is \"vmx-13 or newer\" "
-    "and the adapter compares config.version for exact equality only, so "
-    "this control is informational until a minimum-version comparison "
-    "exists. See UNAUDITED_CONTROLS.md.]"
-)
 
 
 if __name__ == "__main__":
