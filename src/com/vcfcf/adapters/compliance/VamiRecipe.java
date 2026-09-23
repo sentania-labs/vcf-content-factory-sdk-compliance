@@ -15,7 +15,15 @@ import java.util.List;
  *       {@code true}). A boolean stays Boolean.</li>
  *   <li>{@code (list)}: the response body itself is a list; its elements
  *       are comma-joined.</li>
- *   <li>otherwise a field name (dotted for nesting) in a JSON object body.</li>
+ *   <li>otherwise a field name (dotted for nesting) in a JSON object body.
+ *       Build 76: a field may carry an absent default,
+ *       {@code <field>?absent=<value>}: when a SUCCESSFUL 200 JSON-object
+ *       body does not contain the field, the value is {@code <value>}
+ *       instead of UNREADABLE. Only for fields whose absence the vendor
+ *       spec defines (e.g. {@code local-accounts/{username}}
+ *       {@code max_days_between_password_change}: "If unset, password never
+ *       expires", mapped to -1). An HTTP failure, a failed session, or a
+ *       body that is not a JSON object stays UNREADABLE.</li>
  * </ul>
  *
  * <p>Outcome rules (the cardinal rule: a failed read is never a pass):
@@ -32,13 +40,18 @@ public final class VamiRecipe {
 
 	public static final String SELF_VALUE = "(value)";
 	public static final String SELF_LIST = "(list)";
+	public static final String ABSENT_OPTION = "?absent=";
 
 	public final String appliancePath;
 	public final String field;
+	/** Value for an absent field in a successful object body, or null. */
+	public final String absentDefault;
 
-	private VamiRecipe(String appliancePath, String field) {
+	private VamiRecipe(String appliancePath, String field,
+			String absentDefault) {
 		this.appliancePath = appliancePath;
 		this.field = field;
+		this.absentDefault = absentDefault;
 	}
 
 	/** Parse a {@code vami:} recipe; null when malformed. */
@@ -51,8 +64,28 @@ public final class VamiRecipe {
 		if (lastColon <= 0 || lastColon >= rest.length() - 1) return null;
 		String path = rest.substring(0, lastColon).trim();
 		String field = rest.substring(lastColon + 1).trim();
+		String absent = null;
+		int opt = field.indexOf(ABSENT_OPTION);
+		if (opt >= 0) {
+			absent = field.substring(opt + ABSENT_OPTION.length()).trim();
+			field = field.substring(0, opt).trim();
+			if (absent.isEmpty()) return null;
+			if (SELF_VALUE.equals(field) || SELF_LIST.equals(field)) {
+				return null;   // absent default only applies to named fields
+			}
+		}
 		if (path.isEmpty() || field.isEmpty()) return null;
-		return new VamiRecipe(path, field);
+		return new VamiRecipe(path, field, absent);
+	}
+
+	/**
+	 * The value for a field that is ABSENT from a response body: the
+	 * recipe's absent default when the body was a successfully parsed JSON
+	 * object and a default is declared, else null (UNREADABLE).
+	 */
+	public Object absentValue(boolean bodyIsObject) {
+		if (!bodyIsObject || absentDefault == null) return null;
+		return scalarValue(absentDefault);
 	}
 
 	/**

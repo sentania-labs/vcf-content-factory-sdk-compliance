@@ -122,8 +122,8 @@ public final class Build74ReadPathsTest {
 					"vc.vami-administration-password-expiration"}) {
 				BenchmarkProfile.Control c = ProfileSetTest.find(p.controls, id);
 				if (c != null) T.eq(
-						"vami:local-accounts/root:max_days_between_password_change",
-						c.readRecipe, p.name + " " + id);
+						"vami:local-accounts/root:max_days_between_password_change"
+						+ "?absent=-1", c.readRecipe, p.name + " " + id);
 			}
 			BenchmarkProfile.Control f =
 					ProfileSetTest.find(p.controls, "vc.fips-enable");

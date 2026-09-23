@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.0.76 (2026-09-23)
+
+- fix(adapter): build 76: close the builds 74-75 review (knowledge/context/reviews/compliance-build-75.md: 1 WARNING, 1 NIT). Numbered by finding:
+  1. **WARNING, stale values on not-applicable controls.** Build 74 made vSAN controls not applicable on non-vSAN clusters, but `cluster.managed-disk-claim` stayed in their benchmark, so the stale-control cleanup never considered it; its old value (usually a 1 from the old false pass, sometimes a 0 whose alert never closed) would stay forever. The cleanup plan is now per object and based on what was actually pushed this cycle (new `ComplianceDecisions.cleanupPlan` / `staleControls` / `pushedIds`): a control in the object's benchmark that was not pushed (not applicable: the vSAN gate, or an advanced setting absent without an "or Undefined" default) has any lingering 0 OR 1 set to -1; a control outside the benchmark keeps the existing rule (only a 0 is retired). Values are read back first, a key is never created, and a failed read-back changes nothing. Controls pushed this cycle are never touched.
+  2. **NIT, root password never expires.** New `vami:` option `<field>?absent=<value>` (CANONICAL_SCHEMA.md): a field absent from a successful 200 JSON-object body takes `<value>`; HTTP / session failures and non-object bodies stay UNREADABLE. Used only for `vc.vami-password-max-age` (9.0, 9.1) and `vc.vami-administration-password-expiration` (7.0, 8.0): `vami:local-accounts/root:max_days_between_password_change?absent=-1`, per the vendor spec ("If unset, password never expires"; -1 is the SCG's never-expires value). Applied through `scripts/_adapter_deltas.py`; four rows change, all profiles regenerate byte for byte.
+  - No alert changes (143 alert definitions; dashboards unchanged; drift test passes).
+  - Tests: new `Build76CleanupAbsentTest` (non-vSAN cluster: stale 1 and stale 0 go to -1, -1 untouched, failed read-back and absent keys change nothing; vSAN cluster untouched; outside-benchmark keeps 0-only; absent default present / absent / non-object / no-option / malformed; every root-password row carries the option); `MixedVersionSimulationTest` cleanup mirror now uses the plan.
+
 ## 0.0.0.75 (2026-09-23)
 
 - feat(content): build 75: dashboard-author removes the retired `vcfcf_compliance_ctl_cluster_object_checksum` alert id (build 74) from the Environment Overview (142 alerts) and vCenter & Networking (31) alert lists, committed as written; `tests/test_dashboard_alert_lists.py` passes again. No adapter code change.

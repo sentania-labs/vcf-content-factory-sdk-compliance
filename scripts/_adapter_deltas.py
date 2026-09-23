@@ -109,19 +109,19 @@ def encryption_to_esxcli(rows: List[Dict[str, str]]) -> int:
 #  - local-accounts/policy does not exist (it matched local-accounts/{username}
 #    for a user named "policy", a 404); the SCG control is about the ROOT
 #    account: local-accounts/root, field max_days_between_password_change.
-#    The spec says "If unset, password never expires"; the expected value
-#    for never-expires is not yet captured on the wire, so the SCG expected
-#    value is left as it is.
+#    The spec says "If unset, password never expires"; build 76 reads an
+#    absent field in a successful response as -1 (`?absent=-1`, the SCG's
+#    own "never expires" expected value). HTTP failures stay unreadable.
 #  - FIPS lives at system/global-fips (not system/security/global-fips).
 _VAMI_RECIPES = {
     "vc.ssh": ("vami.access.ssh", "vami:access/ssh:(value)"),
     "vc.vami-access-ssh": ("vami.access.ssh", "vami:access/ssh:(value)"),
     "vc.vami-password-max-age": (
         "vami.local-accounts.root.max-days-between-password-change",
-        "vami:local-accounts/root:max_days_between_password_change"),
+        "vami:local-accounts/root:max_days_between_password_change?absent=-1"),
     "vc.vami-administration-password-expiration": (
         "vami.local-accounts.root.max-days-between-password-change",
-        "vami:local-accounts/root:max_days_between_password_change"),
+        "vami:local-accounts/root:max_days_between_password_change?absent=-1"),
     "vc.fips-enable": ("vami.system.global-fips.enabled",
                        "vami:system/global-fips:enabled"),
 }

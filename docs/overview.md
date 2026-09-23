@@ -174,7 +174,12 @@ collection continues; compliance is never failed over a stitch error.
   still at 0 to -1 with an explanatory `Actual`, which cancels their
   alerts. It never creates a key the object did not have and does not
   touch a key already at -1 or 1, so after the first cleanup there is
-  nothing more to push. If that read fails, the object is skipped for the
+  nothing more to push. Since build 76 the same read-back also covers
+  controls that ARE in the object's SCG but were not evaluated this cycle
+  because they do not apply (for example vSAN controls on a cluster where
+  vSAN is not enabled): any 0 or 1 left on them is set to -1, so an old
+  pass or an old failure cannot linger on a control that no longer
+  applies. If that read fails, the object is skipped for the
   cycle (logged) and retried next cycle. Every cycle the adapter log
   carries one "Stale-control cleanup read" line with the objects queried,
   requests made, Compliant values returned and zeros cleaned, so a read
