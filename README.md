@@ -98,7 +98,7 @@ VCF-CF Compliance|score              0-100%, only when at least one control was 
 VCF-CF Compliance|pass_count         0 when nothing was scored
 VCF-CF Compliance|fail_count         0 when nothing was scored
 VCF-CF Compliance|total_count        0 when nothing was scored (no score pushed)
-VCF-CF Compliance|unreadable_count
+VCF-CF Compliance|unreadable_count   not pushed when the governing version cannot be read
 VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
 VCF-CF Compliance|no_benchmark       1 when the version has no SCG
 ```

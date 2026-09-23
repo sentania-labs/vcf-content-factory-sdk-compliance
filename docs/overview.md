@@ -101,8 +101,12 @@ collection continues; compliance is never failed over a stitch error.
   pushes no `score` (never a stand-in 100 or 0), but VCF Ops keeps showing
   the last score it had, and the score symptoms keep evaluating that last
   value. So read `score` together with `total_count` (0 when nothing was
-  scored) and `no_benchmark`; the counters are always pushed, zeroed when
-  nothing was scored, so they are never stale.
+  scored) and `no_benchmark`. The counters are pushed every cycle, zeroed
+  when nothing was scored, with one exception: when the version that
+  governs the object's SCG cannot be read (and there is no previous SCG to
+  fall back on), `unreadable_count` is NOT pushed, because the adapter does
+  not know which SCG's controls apply; its last value stays.
+  `non_compliant` = 1 in that case.
 
 - **Per-vCenter averages when nothing was scored.** `Rollup|<K>|avg_score`
   is pushed only when `Rollup|<K>|scored` > 0; `scored` itself is pushed
@@ -132,16 +136,20 @@ collection continues; compliance is never failed over a stitch error.
   excluded (the adapter never invents an unobserved score). The cache is
   in-memory and resets on collector restart.
 
-- **Stale per-control results clean themselves up.** When an object's
-  applied SCG changes (a host upgraded from 8.0 to 9.0), controls the old
-  SCG evaluated and the new one does not are set to `Compliant` = -1 with
-  an explanatory `Actual`, so their alerts cancel. The same cleanup runs
-  against every bundled SCG's controls the first time the adapter sees an
-  object after a collector start, after the instance is edited (for
-  example switched from a fixed profile to Auto), and once a day, so a
-  missed change or a push that failed silently is corrected within a day.
-  The first-sight pass can create `Compliant` = -1 keys for controls the
-  object never had; they are harmless and read "not evaluated".
+- **Stale per-control results clean themselves up, every cycle.** VCF Ops
+  keeps a metric's last value, so a control that failed (`Compliant` = 0)
+  under an object's previous SCG would keep its alert open after the
+  object moves to an SCG that does not evaluate that control (a host
+  upgraded from 8.0 to 9.0, an instance switched from a fixed profile to
+  Auto). At the end of every cycle the adapter reads the latest `Compliant`
+  values of the controls outside each object's current SCG from VCF Ops
+  (one bulk `stats/latest` request per 20 objects), and sets only the ones
+  still at 0 to -1 with an explanatory `Actual`, which cancels their
+  alerts. It never creates a key the object did not have and does not
+  touch a key already at -1 or 1, so after the first cleanup there is
+  nothing more to push. If that read fails, the object is skipped for the
+  cycle (logged) and retried next cycle. Objects whose version could not
+  be read are not cleaned.
 
 - **Strict TLS to vCenter by default.** Since build 50 the adapter
   validates the vCenter certificate against the platform trust store by

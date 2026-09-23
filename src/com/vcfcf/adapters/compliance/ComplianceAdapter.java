@@ -58,9 +58,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile SuiteApiStitcher suiteStitcher;
 	private volatile ComplianceStitcher stitcher;
 
-	// Build 58 (review W1): benchmark applied to each object, for
-	// self-healing orphan-control cleanup. See AppliedBenchmarkTracker.
-	private final AppliedBenchmarkTracker tracker = new AppliedBenchmarkTracker();
+	// Build 59 (review N3): benchmark applied to each object last cycle,
+	// used only for the B2 "version unreadable" fallback. Emptied only by a
+	// collector restart or an instance edit. See LastBenchmarkMemory.
+	private final LastBenchmarkMemory memory = new LastBenchmarkMemory();
+
+	// Build 59 (review W1): objects pushed this cycle with a decided
+	// benchmark; cleaned at the end of the cycle from live values.
+	private final java.util.List<PendingCleanup> pendingCleanup =
+			new java.util.ArrayList<>();
 
 	// Profiles in use this cycle, by name (all bundled in Auto mode, the one
 	// fixed profile otherwise), and this cycle's conf dir.
@@ -140,10 +146,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				config.allowInsecure);
 
 		this.benchmarkLoader = new BenchmarkLoader();
-		// Build 58 (review W1): an instance edit re-runs configure; forget
-		// applied-benchmark history so every object is re-cleaned against
-		// all bundled profiles on the next cycle (a fixed -> Auto switch).
-		tracker.clear();
+		// An instance edit re-runs configure and may change the benchmark
+		// mode (e.g. fixed -> Auto): forget last cycle's benchmarks so the
+		// B2 fallback never reuses a benchmark chosen under the old mode.
+		memory.clear();
 
 		// Ambient Suite API stitching — reads maintenanceuser.properties,
 		// decrypts via the platform SDK Crypt, targets https://localhost/
@@ -377,11 +383,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				.getParent();   // <adaptersHome>/<kind>/conf
 		cycleConfDir = confDir.toString();
 		BenchmarkSelector selector = buildSelector(cycleConfDir);
-		if (tracker.startCycle()) {
-			logInfo("Periodic re-sweep: per-control cleanup re-runs against "
-					+ "all bundled profiles this cycle (every "
-					+ AppliedBenchmarkTracker.RESWEEP_CYCLES + " cycles)");
-		}
+		pendingCleanup.clear();
 
 		logInfo("stitcher=" + (stitcher != null));
 		if (stitcher != null) {
@@ -414,7 +416,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		collectClusters(selector, vcVersion, rollup, cs, seen);
 
 		// Forget applied-profile history for objects no longer in inventory.
-		tracker.retain(seen);
+		memory.retain(seen);
+		cleanStaleControls(cs);
 
 		pushRollup(vcEntry, rollup);
 
@@ -570,9 +573,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private ComplianceDecisions.Decision decide(BenchmarkSelector selector,
 			BenchmarkSelector.Kind kind, String moid, String version) {
 		String key = moid == null ? null
-				: AppliedBenchmarkTracker.key(kind, moid);
+				: LastBenchmarkMemory.key(kind, moid);
 		ComplianceDecisions.Decision d = ComplianceDecisions.decide(selector,
-				kind, version, tracker.previous(key), profilesByName);
+				kind, version, memory.previous(key), profilesByName);
 		if (d.reusedPrevious) {
 			logWarn(kind.rollupName + " " + moid + ": governing "
 					+ kind.product + " version unreadable this cycle; scoring "
@@ -584,7 +587,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	/**
 	 * Version unreadable and no previous benchmark (review B2): an
 	 * unreadable object. Non-compliant, counted in the rollup's unknown
-	 * bucket, never no_benchmark, no alert cleanup, tracker untouched.
+	 * bucket, never no_benchmark, no alert cleanup, benchmark memory untouched.
 	 */
 	private void recordVersionUnreadable(BenchmarkSelector.Kind kind,
 			String name, ComplianceDecisions.Decision d, String resourceId,
@@ -618,47 +621,122 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Orphan-control cleanup after an object with a decided benchmark was
-	 * pushed (review W1). Runs when the object is seen for the first time
-	 * since the tracker was cleared (collector start, instance edit, daily
-	 * re-sweep) or when its benchmark changed. On first sight, or when the
-	 * previous benchmark cannot be resolved, every bundled profile's
-	 * controls for the kind are candidates (self-healing). Controls the
-	 * current benchmark evaluates are never touched. Recorded only after a
-	 * push was attempted.
+	 * After an object with a decided benchmark (scored, or no benchmark):
+	 * remember the benchmark for the B2 fallback, and queue the object for
+	 * this cycle's stale-control cleanup when it was pushed.
 	 */
 	private void afterPush(BenchmarkSelector.Kind kind, String moid,
 			ComplianceDecisions.Decision d, String resourceId, CycleStats cs) {
-		if (moid == null || resourceId == null || stitcher == null) return;
-		String key = AppliedBenchmarkTracker.key(kind, moid);
-		if (tracker.needsCleanup(key, d.profileName)) {
-			boolean first = tracker.firstSight(key);
-			java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
-			if (bundled == null) {
-				return;   // retried next cycle (not recorded)
-			}
-			String prevName = tracker.previous(key);
-			BenchmarkProfile prev = first || prevName == null ? null
-					: bundled.get(prevName);
-			java.util.Set<String> orphans = ComplianceDecisions.orphanControlIds(
-					kind, prev, d.profile, bundled.values(), first);
-			if (!orphans.isEmpty()) {
-				long ts = System.currentTimeMillis();
-				stitcher.pushProperties(resourceId,
-						ComplianceDecisions.orphanProps(orphans, d.profileName), ts);
-				stitcher.pushStats(resourceId,
-						ComplianceDecisions.orphanStats(orphans), ts);
-				cs.cleanedObjects++;
-				cs.cleanedKeys += orphans.size();
-			}
-			if (!first) {
-				logWarn(kind.rollupName + " " + moid + ": benchmark changed '"
-						+ prevName + "' -> '" + d.profileName + "'; "
-						+ orphans.size() + " control(s) no longer apply and "
-						+ "are marked Compliant=-1 (not evaluated)");
+		if (moid == null) return;
+		String prev = memory.record(LastBenchmarkMemory.key(kind, moid),
+				d.profileName);
+		if (prev != null && !prev.equals(d.profileName)) {
+			logInfo(kind.rollupName + " " + moid + ": benchmark changed '"
+					+ prev + "' -> '" + d.profileName + "'");
+		}
+		if (resourceId != null && stitcher != null) {
+			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
+					d.profileName));
+		}
+	}
+
+	/** One object queued for end-of-cycle cleanup. */
+	private static final class PendingCleanup {
+		final BenchmarkSelector.Kind kind;
+		final String resourceId;
+		final BenchmarkProfile profile;   // null: no benchmark
+		final String profileName;
+
+		PendingCleanup(BenchmarkSelector.Kind kind, String resourceId,
+				BenchmarkProfile profile, String profileName) {
+			this.kind = kind;
+			this.resourceId = resourceId;
+			this.profile = profile;
+			this.profileName = profileName;
+		}
+	}
+
+	/**
+	 * Build 59 (review W1 on build 58): per-control cleanup from LIVE values,
+	 * every cycle. For each pushed object, the candidates are the bundled
+	 * controls outside its current benchmark
+	 * ({@link ComplianceDecisions#candidateControlIds}); their latest
+	 * {@code Compliant} values are bulk-read from VCF Ops (20 resources per
+	 * request), and only a candidate whose latest value is 0 is set to -1
+	 * ({@link ComplianceDecisions#staleZeroControls}). No key is ever
+	 * created, a cleaned key is not touched again, and a missed or failed
+	 * cleanup is retried next cycle. If a bulk read fails, that batch is
+	 * skipped this cycle (logged), with no fallback.
+	 */
+	private void cleanStaleControls(CycleStats cs) {
+		if (stitcher == null || pendingCleanup.isEmpty()) return;
+		java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
+		if (bundled == null) return;
+		java.util.Map<BenchmarkSelector.Kind, java.util.List<PendingCleanup>>
+				byKind = new java.util.EnumMap<>(BenchmarkSelector.Kind.class);
+		for (PendingCleanup p : pendingCleanup) {
+			byKind.computeIfAbsent(p.kind, k -> new java.util.ArrayList<>())
+					.add(p);
+		}
+		for (java.util.Map.Entry<BenchmarkSelector.Kind,
+				java.util.List<PendingCleanup>> e : byKind.entrySet()) {
+			java.util.List<PendingCleanup> objs = e.getValue();
+			for (int i = 0; i < objs.size(); i += CLEANUP_BATCH) {
+				cleanBatch(e.getKey(), objs.subList(i,
+						Math.min(objs.size(), i + CLEANUP_BATCH)),
+						bundled.values(), cs);
 			}
 		}
-		tracker.record(key, d.profileName);
+		pendingCleanup.clear();
+		if (cs.cleanupSkipped > 0) {
+			logWarn("Stale-control cleanup skipped for " + cs.cleanupSkipped
+					+ " object(s) this cycle (latest-value read failed); "
+					+ "retrying next cycle");
+		}
+	}
+
+	private static final int CLEANUP_BATCH = 20;
+
+	private void cleanBatch(BenchmarkSelector.Kind kind,
+			java.util.List<PendingCleanup> batch,
+			java.util.Collection<BenchmarkProfile> bundled, CycleStats cs) {
+		java.util.Map<String, java.util.Set<String>> candidates =
+				new java.util.LinkedHashMap<>();
+		java.util.Set<String> allCandidates = new java.util.TreeSet<>();
+		for (PendingCleanup p : batch) {
+			java.util.Set<String> c = ComplianceDecisions.candidateControlIds(
+					kind, p.profile, bundled);
+			if (!c.isEmpty()) {
+				candidates.put(p.resourceId, c);
+				allCandidates.addAll(c);
+			}
+		}
+		if (candidates.isEmpty()) return;
+		java.util.Map<String, java.util.Map<String, Double>> latest =
+				stitcher.latestCompliant(
+						new java.util.ArrayList<>(candidates.keySet()),
+						allCandidates);
+		if (latest == null) {
+			cs.cleanupSkipped += candidates.size();
+			return;
+		}
+		long ts = System.currentTimeMillis();
+		for (PendingCleanup p : batch) {
+			java.util.Set<String> c = candidates.get(p.resourceId);
+			if (c == null) continue;
+			java.util.Set<String> stale = ComplianceDecisions.staleZeroControls(
+					c, latest.get(p.resourceId));
+			if (stale.isEmpty()) continue;
+			stitcher.pushProperties(p.resourceId,
+					ComplianceDecisions.orphanProps(stale, p.profileName), ts);
+			stitcher.pushStats(p.resourceId,
+					ComplianceDecisions.orphanStats(stale), ts);
+			cs.cleanedObjects++;
+			cs.cleanedKeys += stale.size();
+			logInfo(kind.rollupName + " resource " + p.resourceId + ": "
+					+ stale.size() + " control(s) outside " + p.profileName
+					+ " still read Compliant=0; set to -1 (not evaluated)");
+		}
 	}
 
 	/**
@@ -698,7 +776,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String hostName = hostInfo.name;
 			cs.hosts++;
 			if (hostId != null) {
-				seen.add(AppliedBenchmarkTracker.key(
+				seen.add(LastBenchmarkMemory.key(
 						BenchmarkSelector.Kind.HOST, hostId));
 			}
 
@@ -902,7 +980,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		for (VSphereClient.VmInfo vm : vms) {
 			cs.vms++;
 			if (vm.moid != null) {
-				seen.add(AppliedBenchmarkTracker.key(
+				seen.add(LastBenchmarkMemory.key(
 						BenchmarkSelector.Kind.VM, vm.moid));
 			}
 			String hostVersion = selector.isAuto()
@@ -997,7 +1075,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> seen) {
 		String resourceName = config.vcenterHost;
 		String moid = "vcenter";
-		seen.add(AppliedBenchmarkTracker.key(BenchmarkSelector.Kind.VCENTER,
+		seen.add(LastBenchmarkMemory.key(BenchmarkSelector.Kind.VCENTER,
 				moid));
 
 		ComplianceStitcher.HostEntry he = null;
@@ -1175,7 +1253,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) {
-		if (moid != null) seen.add(AppliedBenchmarkTracker.key(kind, moid));
+		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
 		String resourceId = he == null ? null : he.resourceId;
 
 		ComplianceDecisions.Decision d = decide(selector, kind, moid,
@@ -1472,7 +1550,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private static final class CycleStats {
 		int hosts; int vms; int dvs; int dvpg; int clusters;
 		int noBenchmark; int versionUnreadable; int unreadable;
-		int cleanedObjects; int cleanedKeys;
+		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
 	}
 
 	// -----------------------------------------------------------------------

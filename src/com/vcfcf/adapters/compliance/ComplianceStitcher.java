@@ -366,6 +366,71 @@ public final class ComplianceStitcher {
 		return null;
 	}
 
+	/**
+	 * Build 59: latest {@code VCF-CF Compliance|<control_id>|Compliant}
+	 * values for a batch of resources, via
+	 * {@code GET /api/resources/stats/latest?resourceId=..&statKey=..}
+	 * (documented in the vendor operations API spec; same ambient identity
+	 * and client as the /api/resources reads). Requests are chunked by
+	 * {@link ComplianceDecisions#latestCompliantPaths}.
+	 *
+	 * <p>Returns resourceId -> (control id -> latest value); a key the
+	 * resource does not have is simply absent. Returns NULL if any request
+	 * fails or a response cannot be parsed: the caller then cleans nothing
+	 * for the batch this cycle. Only numeric values are returned (a missing
+	 * or non-numeric data point is skipped, never read as 0).
+	 */
+	public Map<String, Map<String, Double>> latestCompliant(
+			List<String> resourceIds, java.util.Set<String> controlIds) {
+		Map<String, Map<String, Double>> out = new HashMap<>();
+		for (String rid : resourceIds) out.put(rid, new HashMap<>());
+		for (String path : ComplianceDecisions.latestCompliantPaths(
+				resourceIds, controlIds, 20, 30)) {
+			try {
+				SimpleJson parsed = SimpleJson.parse(stitcher.get(path));
+				if (parsed == null || parsed.isNull()) return null;
+				SimpleJson values = parsed.get("values");
+				if (values == null || values.isNull()) continue;   // no stats
+				if (!values.isList()) return null;
+				for (SimpleJson v : values.asList()) {
+					String rid = v.get("resourceId").asString(null);
+					Map<String, Double> into = rid == null ? null : out.get(rid);
+					if (into == null) continue;
+					SimpleJson stats = v.get("stat-list").get("stat");
+					if (stats == null || !stats.isList()) continue;
+					for (SimpleJson st : stats.asList()) {
+						String cid = ComplianceDecisions.controlIdOfCompliantKey(
+								st.get("statKey").get("key").asString(null));
+						SimpleJson data = st.get("data");
+						if (cid == null || data == null || !data.isList()
+								|| data.size() == 0) {
+							continue;
+						}
+						Double d = numeric(data.get(data.size() - 1));
+						if (d != null) into.put(cid, d);
+					}
+				}
+			} catch (Exception e) {
+				logger.warn("ComplianceStitcher: latest Compliant read failed ("
+						+ e.getClass().getSimpleName() + ": " + e.getMessage()
+						+ ")");
+				return null;
+			}
+		}
+		return out;
+	}
+
+	private static Double numeric(SimpleJson node) {
+		if (node == null || node.isNull()) return null;
+		String s = node.asString(null);
+		if (s == null) return null;
+		try {
+			return Double.valueOf(s.trim());
+		} catch (NumberFormatException e) {
+			return null;
+		}
+	}
+
 	public int countOfKind(String resourceKind) {
 		Map<String, HostEntry> byName = resourcesByName.get(resourceKind);
 		return byName == null ? 0 : byName.size();
