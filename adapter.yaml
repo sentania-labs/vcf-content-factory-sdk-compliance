@@ -1,20 +1,45 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 56
+build_number: 79
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
-  Compliance reporting for ESXi hosts (remediation planned). Evaluates
-  host configuration against the VMware Security Configuration Guide
-  (SCG) — included profiles cover SCG 8.0, 9.0, and 9.1 from
-  vmware/vcf-security-and-compliance-guidelines. Queries vCenter, pushes per-control
-  results and per-host aggregate scores onto existing VMWARE HostSystem
-  resources via ARIA_OPS stitching for fleet-wide compliance posture
-  monitoring in VCF Operations.
+  Compliance reporting for vSphere (no remediation). Evaluates ESX hosts,
+  VMs, vCenter, clusters (vSAN), distributed switches and distributed
+  portgroups against the VMware Security Configuration Guide (SCG). Bundled
+  profiles cover SCG 6.7, 7.0, 8.0, 9.0, and 9.1 from
+  vmware/vcf-security-and-compliance-guidelines. "Auto (by version)" (the
+  default) scores each object against the SCG for its own version: hosts
+  by ESX version, VMs by their host's ESX version, everything else by
+  the vCenter version; an unmapped version is reported as having no
+  benchmark and is not scored. Pushes per-control results, per-object
+  scores and flags onto the existing VMWARE resources, a per-vCenter
+  rollup onto each vCenter object, and one compliance alert (with its
+  SCG remediation as the recommendation) per scored control.
 entry_class: "com.vcfcf.adapters.compliance.ComplianceAdapter"
 released: false
 bundled_content:
+  # Build 61: the v3 content round (four dashboards, their views and the
+  # environment super metrics). views/compliance-host-overview.yaml is
+  # replaced by compliance-host-detail.yaml and
+  # dashboards/compliance-overview.yaml (Fleet Overview, retired world keys)
+  # stays unbundled; both files remain in the repo.
+  supermetrics:
+    - supermetrics/compliance-objects-scored.yaml
+    - supermetrics/compliance-non-compliant-objects.yaml
+    - supermetrics/compliance-objects-without-benchmark.yaml
+    - supermetrics/compliance-average-score.yaml
   views:
-    - views/compliance-host-overview.yaml
+    - views/compliance-by-vcenter.yaml
+    - views/compliance-scg-versions.yaml
+    - views/compliance-host-detail.yaml
+    - views/compliance-vm-detail.yaml
+    - views/compliance-vcenter-list.yaml
+    - views/compliance-cluster-list.yaml
+    - views/compliance-vds-list.yaml
+    - views/compliance-portgroup-list.yaml
   dashboards:
-    - dashboards/compliance-overview.yaml
+    - dashboards/compliance-environment-overview.yaml
+    - dashboards/compliance-esxi-hosts.yaml
+    - dashboards/compliance-vms.yaml
+    - dashboards/compliance-vcenter-networking.yaml

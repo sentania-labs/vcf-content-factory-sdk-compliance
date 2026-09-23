@@ -13,12 +13,17 @@ package com.vcfcf.adapters.compliance;
 public final class BenchmarkLoaderTest {
 
 	public static void main(String[] args) {
-		// Known bundled names resolve to themselves.
+		// Known bundled names resolve to themselves (6.7 / 7.0 added in
+		// build 57).
+		expectResolved("VMware_SCG_6.7", "VMware_SCG_6.7");
+		expectResolved("VMware_SCG_7.0", "VMware_SCG_7.0");
 		expectResolved("VMware_SCG_8.0", "VMware_SCG_8.0");
 		expectResolved("VMware_SCG_9.0", "VMware_SCG_9.0");
 		expectResolved("VMware_SCG_9.1", "VMware_SCG_9.1");
 
-		// Absent name (null / blank) keeps the describe.xml default.
+		// Absent name (null / blank) keeps the pre-v3 fallback (8.0), NOT
+		// Auto: an existing instance with no stored value behaves exactly as
+		// before the upgrade.
 		expectResolved(null, "VMware_SCG_8.0");
 		expectResolved("", "VMware_SCG_8.0");
 		expectResolved("   ", "VMware_SCG_8.0");
@@ -29,7 +34,8 @@ public final class BenchmarkLoaderTest {
 		// a visible failed state, not silently score as SCG 8.0).
 		expectThrows("CIS_vSphere_8", "not bundled in this version");
 		expectThrows("CIS_vSphere_8", "CIS_vSphere_8");
-		expectThrows("VMware_SCG_7.0", "not bundled in this version");
+		expectThrows("VMware_SCG_6.5", "not bundled in this version");
+		expectThrows("VMware_SCG_10.0", "not bundled in this version");
 
 		// Custom without a path reaches the resolver and gets its own
 		// actionable message (the valid Custom+path branch never calls
@@ -37,7 +43,9 @@ public final class BenchmarkLoaderTest {
 		expectThrows("Custom", "custom_profile_path");
 		expectThrows("custom", "custom_profile_path");
 
-		// Filename mapping covers exactly the three bundled profiles.
+		// Filename mapping covers every bundled profile.
+		expectFilename("VMware_SCG_6.7", "scg_6.7.csv");
+		expectFilename("VMware_SCG_7.0", "scg_7.0.csv");
 		expectFilename("VMware_SCG_8.0", "scg_8.0.csv");
 		expectFilename("VMware_SCG_9.0", "scg_9.0.csv");
 		expectFilename("VMware_SCG_9.1", "scg_9.1.csv");

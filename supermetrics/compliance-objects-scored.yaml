@@ -1,0 +1,25 @@
+id: c72131ad-ee25-4e89-8190-1c93d78eeb5a
+name: "[VCF Content Factory] Compliance Objects Scored"
+resource_kinds:
+  - resource_kind_key: vSphere World
+    adapter_kind_key: VMWARE
+description: >
+  Whole-environment count of objects the compliance adapter has scored
+  against a Security Configuration Guide, summed across every vCenter.
+  Assigned to the vSphere World rollup resource (1 live object per
+  instance; recon 2026-09-23 confirmed the three VMwareAdapter Instance
+  vCenters are its only depth-1 children on both devel and prod) and
+  sums the per-vCenter VCF-CF Compliance|Rollup|All|scored metric
+  (adapter v3 build 60+) over those children.
+
+  Depends on the compliance adapter v3 stitching the Rollup|All|scored
+  metric onto each VMwareAdapter Instance; these keys are a declared
+  contract (content/sdk-adapters/compliance/docs/overview.md,
+  content/sdk-adapters/compliance/README.md) and do not exist live yet
+  because v3 is not installed on either recon target. Formula is
+  structurally grounded, not live-verified.
+
+  Feeds the Compliance Environment Overview dashboard (Environment
+  Compliance scoreboard, W1) and its 30-day trend chart (W5).
+formula: |
+  sum(${adaptertype=VMWARE, objecttype=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored, depth=1})

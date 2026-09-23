@@ -112,6 +112,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Adapter reproducibility gates (compliance build 58, review W3). Run
+      # before build-sdk so a tag never builds a pak whose generated alert
+      # blocks are stale or whose decision logic fails its tests.
+      #  - generate_compliance_alerts.py --check: describe.xml and
+      #    resources.properties generated blocks must match the canonical
+      #    profiles + manual_review.csv byte for byte (stdlib only).
+      #  - ci/run_java_tests.sh: the adapter's JDK-only unit tests plus the
+      #    generator's unittest suite (needs no SDK jar).
+      - name: Check generated alert definitions are current
+        run: python3 scripts/generate_compliance_alerts.py --check
+
+      - name: Run adapter unit tests
+        run: bash ci/run_java_tests.sh
+
       # The kit is pure stdlib + pyyaml. The image has python3 + pip on PATH.
       - name: Download sdk-buildkit from factory releases
         env:

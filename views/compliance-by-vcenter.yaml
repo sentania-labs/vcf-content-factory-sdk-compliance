@@ -1,0 +1,86 @@
+id: e4838292-faf0-494a-a6af-fb92ada63585
+name: "[VCF Content Factory] Compliance by vCenter and Object Type"
+description: >
+  Per-vCenter compliance rollup by object kind (Host, VM, Cluster, vDS,
+  Portgroup) from the VCF-CF Compliance adapter (per-vCenter rollups
+  stitched onto VMWARE VMwareAdapter Instance). Each kind shows its
+  average score beside the objects it was computed from (scored) and how
+  many are non-compliant, so a retained average (scored = 0, avg_score
+  holding a prior cycle's value) is identifiable at a glance. Feeds
+  Environment Overview W3 (Compliance by vCenter and Object Type).
+  Sort by the vCenter's own Compliance Score ascending in the dashboard
+  widget to surface the worst vCenter first.
+subject:
+  adapter_kind: VMWARE
+  resource_kind: VMwareAdapter Instance
+columns:
+  - attribute: summary|version
+    display_name: "vCenter Version"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|score
+    display_name: "vCenter Compliance Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|Host|avg_score
+    display_name: "Host Avg Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|Host|scored
+    display_name: "Host Scored"
+  - attribute: VCF-CF Compliance|Rollup|Host|non_compliant
+    display_name: "Host Non-Compliant"
+  - attribute: VCF-CF Compliance|Rollup|VM|avg_score
+    display_name: "VM Avg Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|VM|scored
+    display_name: "VM Scored"
+  - attribute: VCF-CF Compliance|Rollup|VM|non_compliant
+    display_name: "VM Non-Compliant"
+  - attribute: VCF-CF Compliance|Rollup|Cluster|avg_score
+    display_name: "Cluster Avg Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|Cluster|scored
+    display_name: "Cluster Scored"
+  - attribute: VCF-CF Compliance|Rollup|Cluster|non_compliant
+    display_name: "Cluster Non-Compliant"
+  - attribute: VCF-CF Compliance|Rollup|vDS|avg_score
+    display_name: "vDS Avg Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|vDS|scored
+    display_name: "vDS Scored"
+  - attribute: VCF-CF Compliance|Rollup|vDS|non_compliant
+    display_name: "vDS Non-Compliant"
+  - attribute: VCF-CF Compliance|Rollup|Portgroup|avg_score
+    display_name: "Portgroup Avg Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|Rollup|Portgroup|scored
+    display_name: "Portgroup Scored"
+  - attribute: VCF-CF Compliance|Rollup|Portgroup|non_compliant
+    display_name: "Portgroup Non-Compliant"
+  - attribute: VCF-CF Compliance|Rollup|All|no_benchmark
+    display_name: "No Benchmark"
+
+summary:
+  display_name: "Environment Totals"
+  aggregation: SUM
+  columns: [3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 17]
+
+released: false
+version: "1.0.0"

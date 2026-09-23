@@ -28,8 +28,8 @@ import java.util.Map;
  * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
  * VMWARE kinds resolve by {@code VMEntityName} (name) +
  * {@code VMEntityObjectID} (moid); the non-vim25 {@code VMwareAdapter Instance}
- * resolves by {@code VCURL} (vCenter FQDN) and {@code VMEntityVCID} (vCenter
- * Instance UUID), with a display-name and singleton fallback. moid is tried
+ * resolves by {@code VMEntityVCID} (vCenter Instance UUID), or an exact
+ * {@code VCURL} (vCenter FQDN) only when the UUID is unreadable. moid is tried
  * first (most authoritative), then exact name, then dot-prefix fuzzy match
  * (FQDN/shortname tolerance).
  *
@@ -292,37 +292,34 @@ public final class ComplianceStitcher {
 	}
 
 	/**
-	 * Resolve the {@code VMwareAdapter Instance} resource by vCenter Instance
-	 * UUID (most authoritative — survives DNS/hostname renames) against
-	 * {@code VMEntityVCID}, then by FQDN against {@code VCURL} (exact then
-	 * dot-prefix fuzzy), then display-name match, then singleton fallback.
+	 * Resolve the {@code VMwareAdapter Instance} resource for this instance's
+	 * vCenter. Build 58 (review B1): the decision is
+	 * {@link ComplianceDecisions#matchVCenter}. A known vCenter Instance UUID
+	 * resolves ONLY through {@code VMEntityVCID}; an unreadable UUID falls
+	 * back to an exact {@code VCURL} match only. The pre-58 prefix,
+	 * display-name and single-vCenter fallbacks are gone: each could push
+	 * this vCenter's compliance data and rollup onto another vCenter's
+	 * object. Null means "do not push" and is logged.
 	 */
 	public HostEntry matchVCenterAdapterInstance(String hostname,
 			String vcInstanceUuid) {
-		if (vcInstanceUuid != null && !vcInstanceUuid.isEmpty()) {
-			HostEntry m = vcByVcUuid.get(vcInstanceUuid);
-			if (m != null) return m;
-		}
-
-		if (hostname != null && !hostname.isEmpty()) {
-			HostEntry m = vcByHost.get(hostname);
-			if (m != null) return m;
-
-			for (Map.Entry<String, HostEntry> e : vcByHost.entrySet()) {
-				String registered = e.getKey();
-				if (registered.equalsIgnoreCase(hostname)) return e.getValue();
-				if (registered.startsWith(hostname + ".")
-						|| hostname.startsWith(registered + ".")) {
-					return e.getValue();
-				}
+		HostEntry m = ComplianceDecisions.matchVCenter(vcInstanceUuid,
+				vcByVcUuid, vcByHost, hostname);
+		if (m == null) {
+			if (vcInstanceUuid != null && !vcInstanceUuid.isEmpty()) {
+				logger.warn("ComplianceStitcher: no VMwareAdapter Instance "
+						+ "carries VMEntityVCID=" + vcInstanceUuid + " (vCenter "
+						+ hostname + "); not pushing vCenter data. Is this "
+						+ "vCenter monitored by the VMWARE adapter in this VCF "
+						+ "Ops?");
+			} else {
+				logger.warn("ComplianceStitcher: vCenter instance UUID "
+						+ "unreadable and no VMwareAdapter Instance has "
+						+ "VCURL exactly '" + hostname + "'; not pushing "
+						+ "vCenter data");
 			}
-
-			HostEntry n = matchResource("VMwareAdapter Instance",
-					hostname, null);
-			if (n != null) return n;
 		}
-
-		return singletonOfKind("VMwareAdapter Instance");
+		return m;
 	}
 
 	public HostEntry matchDvs(String name, String moid) {
@@ -335,18 +332,6 @@ public final class ComplianceStitcher {
 
 	public HostEntry matchCluster(String name, String moid) {
 		return matchResource("ClusterComputeResource", name, moid);
-	}
-
-	/**
-	 * Returns the single resource of a given kind when there is exactly one
-	 * in inventory; null when ambiguous (&gt;1) or missing (0).
-	 */
-	public HostEntry singletonOfKind(String resourceKind) {
-		Map<String, HostEntry> byName = resourcesByName.get(resourceKind);
-		if (byName == null || byName.size() != 1) {
-			return null;
-		}
-		return byName.values().iterator().next();
 	}
 
 	/**
@@ -379,6 +364,110 @@ public final class ComplianceStitcher {
 		logger.warn("ComplianceStitcher: no " + resourceKind
 				+ " match for " + name + " (moid=" + moid + ")");
 		return null;
+	}
+
+	/** Outcome of one bulk latest-Compliant read (build 60, review W1). */
+	public static final class LatestRead {
+		/** resourceId -> (control id -> latest value); null when failed. */
+		public final Map<String, Map<String, Double>> values;
+		/** GET requests completed (all of them when not failed). */
+		public final int requests;
+		/** Numeric Compliant values returned across completed requests. */
+		public final int valuesReturned;
+		/** Failure reason, null on success. */
+		public final String error;
+
+		LatestRead(Map<String, Map<String, Double>> values, int requests,
+				int valuesReturned, String error) {
+			this.values = values;
+			this.requests = requests;
+			this.valuesReturned = valuesReturned;
+			this.error = error;
+		}
+
+		public boolean failed() {
+			return values == null;
+		}
+	}
+
+	/**
+	 * Latest {@code VCF-CF Compliance|<control_id>|Compliant} values for a
+	 * batch of resources, via
+	 * {@code GET /api/resources/stats/latest?resourceId=..&statKey=..}
+	 * (vendor operations API spec; same ambient identity and client as the
+	 * /api/resources reads). Requests are sized by URL length
+	 * ({@link ComplianceDecisions#latestCompliantPaths}); the framework
+	 * stitcher exposes GET only, so the POST .../query form is not used.
+	 *
+	 * <p>A key the resource does not have is simply absent. If any request
+	 * fails or a response cannot be parsed, {@link LatestRead#values} is null
+	 * and the caller cleans nothing for the batch this cycle. Only numeric
+	 * data points are returned (a missing or non-numeric value is never read
+	 * as 0). The counts are for the caller's log line, so "the read returned
+	 * nothing" is visible and distinguishable from "nothing was stale".
+	 */
+	public LatestRead latestCompliant(List<String> resourceIds,
+			java.util.Set<String> controlIds) {
+		Map<String, Map<String, Double>> out = new HashMap<>();
+		for (String rid : resourceIds) out.put(rid, new HashMap<>());
+		int requests = 0;
+		int returned = 0;
+		for (String path : ComplianceDecisions.latestCompliantPaths(
+				resourceIds, controlIds, ComplianceDecisions.URL_BUDGET)) {
+			try {
+				SimpleJson parsed = SimpleJson.parse(stitcher.get(path));
+				if (parsed == null || parsed.isNull()) {
+					return new LatestRead(null, requests, returned,
+							"empty response body");
+				}
+				SimpleJson values = parsed.get("values");
+				if (values != null && !values.isNull()) {
+					if (!values.isList()) {
+						return new LatestRead(null, requests, returned,
+								"'values' is not a list");
+					}
+					for (SimpleJson v : values.asList()) {
+						String rid = v.get("resourceId").asString(null);
+						Map<String, Double> into = rid == null ? null
+								: out.get(rid);
+						if (into == null) continue;
+						SimpleJson stats = v.get("stat-list").get("stat");
+						if (stats == null || !stats.isList()) continue;
+						for (SimpleJson st : stats.asList()) {
+							String cid = ComplianceDecisions
+									.controlIdOfCompliantKey(st.get("statKey")
+											.get("key").asString(null));
+							SimpleJson data = st.get("data");
+							if (cid == null || data == null || !data.isList()
+									|| data.size() == 0) {
+								continue;
+							}
+							Double d = numeric(data.get(data.size() - 1));
+							if (d != null) {
+								into.put(cid, d);
+								returned++;
+							}
+						}
+					}
+				}
+				requests++;
+			} catch (Exception e) {
+				return new LatestRead(null, requests, returned,
+						e.getClass().getSimpleName() + ": " + e.getMessage());
+			}
+		}
+		return new LatestRead(out, requests, returned, null);
+	}
+
+	private static Double numeric(SimpleJson node) {
+		if (node == null || node.isNull()) return null;
+		String s = node.asString(null);
+		if (s == null) return null;
+		try {
+			return Double.valueOf(s.trim());
+		} catch (NumberFormatException e) {
+			return null;
+		}
 	}
 
 	public int countOfKind(String resourceKind) {

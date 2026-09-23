@@ -1,0 +1,34 @@
+id: 32491ab8-e6c3-4f01-ac7d-4d656604f8f6
+name: "[VCF Content Factory] Compliance Objects by SCG Version"
+description: >
+  Per-vCenter object counts by the SCG benchmark actually applied, from
+  the VCF-CF Compliance adapter's per-vCenter rollup (stitched onto
+  VMWARE VMwareAdapter Instance). Includes the unknown bucket for
+  objects whose governing version could not be read and had no prior
+  benchmark (never a guess, never "no benchmark"). Feeds Environment
+  Overview W4 (Objects by SCG Version).
+subject:
+  adapter_kind: VMWARE
+  resource_kind: VMwareAdapter Instance
+columns:
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_6.7|objects
+    display_name: "SCG 6.7"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_7.0|objects
+    display_name: "SCG 7.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_8.0|objects
+    display_name: "SCG 8.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.0|objects
+    display_name: "SCG 9.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.1|objects
+    display_name: "SCG 9.1"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|none|objects
+    display_name: "No Benchmark"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|unknown|objects
+    display_name: "Unknown (Version Unreadable)"
+
+summary:
+  display_name: "Environment Totals"
+  aggregation: SUM
+
+released: false
+version: "1.0.0"

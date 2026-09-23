@@ -1,0 +1,246 @@
+id: e2e42416-53d7-49fb-85d6-68bd9323aae8
+name: "[VCF Content Factory] Compliance ESX Hosts"
+description: >
+  Pick a scope (whole environment, one vCenter, or one cluster), see
+  every host in it worst first with its score and applied SCG, then
+  select a host to see exactly which controls fail and their runbook
+  remediation. "Which controls fail" comes from the per-control
+  compliance alerts (subType 21), one alert per failing control. See
+  knowledge/designs/dashboards/compliance-esxi-hosts.md.
+
+released: false
+version: "1.0.0"
+hidden: true
+
+widgets:
+
+  # ── W1: Scope picker (World / vCenter) ───────────────────────────────
+
+  - id: scope_picker
+    type: ResourceList
+    title: "Scope"
+    coords: {x: 1, y: 1, w: 3, h: 12}
+    column_preset: name-only
+    resource_kinds:
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+      - adapter_kind: VMWARE
+        resource_kind: "VMwareAdapter Instance"
+
+  # ── W2: Host Compliance list, driven by W1, sorted worst-first ──────
+
+  - id: host_compliance_view
+    type: View
+    title: "Host Compliance"
+    coords: {x: 4, y: 1, w: 9, h: 12}
+    # sort_by_column / sort_by_dir requested in the brief are not
+    # implemented for View widgets (loader accepts and silently drops
+    # them; render.py's sortBy/sortByDir only exists on HealthChart).
+    # See TOOLSET GAP in the authoring report. Sort order is UI-set by
+    # the user on first load, per the design guide's "Initial sort
+    # order in YAML: Not configurable" row.
+    view: "[VCF Content Factory] Compliance Host Detail"
+
+  # ── W3: Host Score Heatmap, driven by W1, grouped by parent cluster ──
+
+  - id: host_score_heatmap
+    type: Heatmap
+    title: "Host Score Heatmap"
+    coords: {x: 1, y: 13, w: 5, h: 8}
+    mode: all
+    depth: 10
+    configs:
+      - name: "Compliance Score"
+        adapter_kind: VMWARE
+        resource_kind: HostSystem
+        color_by:
+          metric_key: "VCF-CF Compliance|score"
+          label: "Compliance Score"
+        group_by:
+          adapter_kind: VMWARE
+          resource_kind: ClusterComputeResource
+          text: "Cluster"
+        color:
+          min_value: 0
+          thresholds:
+            values: [0, 80, 95]
+            colors: ["#DE3F30", "#ECC33E", "#74B43B"]
+        solid_coloring: false
+        focus_on_groups: false
+
+  # ── W4: Failing Controls on Selected Host, driven by W2 ─────────────
+
+  - id: failing_controls
+    type: AlertList
+    title: "Failing Controls on Selected Host"
+    coords: {x: 6, y: 13, w: 7, h: 8}
+    criticality: [2, 3, 4]
+    mode: all
+    depth: 1
+    alert_definitions:
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_auto_unlock_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_dcui"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout_duration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_lockout_max_attempts"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_history"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_max_days"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_password_policies"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_account_vpxuser"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ad_admin_group_autoadd"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ad_admin_validate_interval"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_api_soap_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ceip_disable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_cpu_hyperthread_warning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_dcui_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_cim"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_mob"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_shell"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_slp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_snmp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_deactivate_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_disable_accounts_dcui"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_firewall_incoming_default"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_forensic_snapshots"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_hardware_virtual_nic"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_host_client_session_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_hw_virtual_nic"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_key_persistence"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_lockdown_dcui_access"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_lockdown_mode"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_local"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_local_capacity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_audit_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_filter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_forwarding_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_forwarding_tls_x509"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_level"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_log_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_local"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_local_capacity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_audit_remote"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_filter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_level"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_level_global"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_persistent"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_remote_tls"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_logs_remote_tls_x509"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_memeagerzero"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_memory_tiering_encryption"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_bpdu"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_dvfilter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_network_rpf_promisc"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_password_complexity"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_password_max_age"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_secureboot_enforcement"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_session_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_interactive_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_timeout"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_shell_warning"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_snmp"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_fips_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_gateway_ports"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_host_based_auth"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_idle_timeout_count"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_idle_timeout_interval"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_login_banner"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_rhosts"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_stream_local_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_tcp_forwarding"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_tunnels"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_ssh_user_environment"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_time"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_timekeeping_services"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_timekeeping_sources"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_ciphers"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_profile"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tls_protocols"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tpm_configuration"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_tpm_trusted_binaries"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_transparent_page_sharing"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vib_trusted_binaries"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_esx_vmotion_encryption_offload"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_host"
+
+  # ── W5: Score Trend, driven by W2 ────────────────────────────────────
+
+  - id: host_score_trend
+    type: MetricChart
+    title: "Score Trend"
+    coords: {x: 1, y: 21, w: 6, h: 6}
+    metrics:
+      - adapter_kind: VMWARE
+        resource_kind: HostSystem
+        metric_key: "VCF-CF Compliance|score"
+        metric_name: "Compliance Score"
+        color_method: 2
+      - adapter_kind: VMWARE
+        resource_kind: HostSystem
+        metric_key: "VCF-CF Compliance|fail_count"
+        metric_name: "Failing Controls"
+        color_method: 2
+
+  # ── W6: Compliance Details, driven by W2 ────────────────────────────
+
+  - id: host_compliance_details
+    type: PropertyList
+    title: "Compliance Details"
+    coords: {x: 7, y: 21, w: 6, h: 6}
+    property_list:
+      visual_theme: 0
+      depth: 1
+      show_metric_full_name: true
+      properties:
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "summary|version"
+          metric_name: "Summary|Version"
+          label: "ESX Version"
+          is_string_metric: true
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|profile_name"
+          metric_name: "VCF-CF Compliance|Profile Name"
+          label: "SCG Applied"
+          is_string_metric: true
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|total_count"
+          metric_name: "VCF-CF Compliance|Total Count"
+          label: "Total Controls"
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|pass_count"
+          metric_name: "VCF-CF Compliance|Pass Count"
+          label: "Passing"
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|fail_count"
+          metric_name: "VCF-CF Compliance|Fail Count"
+          label: "Failing"
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|unreadable_count"
+          metric_name: "VCF-CF Compliance|Unreadable Count"
+          label: "Unreadable"
+
+interactions:
+  - from: scope_picker
+    to: host_compliance_view
+    type: resourceId
+  - from: scope_picker
+    to: host_score_heatmap
+    type: resourceId
+  - from: host_compliance_view
+    to: failing_controls
+    type: resourceId
+  - from: host_compliance_view
+    to: host_score_trend
+    type: resourceId
+  - from: host_compliance_view
+    to: host_compliance_details
+    type: resourceId
