@@ -107,6 +107,10 @@ public final class MixedVersionSimulationTest {
 				"4 read hosts + the disconnected host at 0");
 		T.near(0, ops.get("HOST|host-91").get(K + "score"),
 				"disconnected host scores 0 (nothing collected)");
+		T.near(1, ops.get("HOST|host-91").get(K + "collection_failed"),
+				"disconnected host: collection_failed = 1");
+		T.near(0, ops.get("HOST|host-90").get(K + "collection_failed"),
+				"read host: collection_failed = 0");
 		T.check(!r1.toStats().containsKey(P + "Host|scored_stale"),
 				"scored_stale retired");
 
@@ -163,6 +167,8 @@ public final class MixedVersionSimulationTest {
 		T.near(0, hn.get(K + "no_benchmark"), "not no_benchmark");
 		T.check(!hn.containsKey(K + "unreadable_count"),
 				"unreadable_count not pushed when the version is unreadable");
+		T.near(0, hn.get(K + "score"), "version unreadable scores 0");
+		T.near(1, hn.get(K + "collection_failed"), "collection_failed = 1");
 		T.check(memory.previous("HOST|host-new") == null,
 				"unreadable object not remembered");
 		T.check(!cleaned.containsKey("HOST|host-new"), "no cleanup");
@@ -199,6 +205,25 @@ public final class MixedVersionSimulationTest {
 		T.eq(before.get("HOST|host-80").keySet(),
 				ops.get("HOST|host-80").keySet(), "no keys created");
 		bulkReadFails = false;
+
+		// ---------------- restart case (build 65, review W1)
+		// Collector restart: benchmark memory is gone. host-90's version
+		// read now fails, so there is nothing to reuse: the object scores
+		// 0, collection_failed = 1 (collection alert), non-compliant, in the
+		// unknown bucket, counted as scored 0 in the rollup.
+		memory.clear();
+		cleaned.clear();
+		hosts.put("host-90", null);
+		ComplianceRollup r4 = cycle(vc, hosts, vmHost, "host-91");
+		Map<String, Double> h90 = ops.get("HOST|host-90");
+		T.near(0, h90.get(K + "score"), "after restart: score 0");
+		T.near(1, h90.get(K + "collection_failed"), "after restart: failed");
+		T.near(1, h90.get(K + "non_compliant"), "after restart: nc");
+		T.near(0, h90.get(K + "no_benchmark"), "after restart: not nb");
+		Map<String, Double> s4 = r4.toStats();
+		T.near(3, s4.get(P + "Benchmark|unknown|objects"),
+				"unknown: host-70, host-new, host-90 (no memory after restart)");
+		T.check(!cleaned.containsKey("HOST|host-90"), "no cleanup");
 	}
 
 	/** The control the 9.0/8.0 host fails in the simulation (lockout). */

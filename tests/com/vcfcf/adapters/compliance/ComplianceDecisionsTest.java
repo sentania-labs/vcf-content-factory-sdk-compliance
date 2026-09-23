@@ -56,7 +56,15 @@ public final class ComplianceDecisionsTest {
 		Map<String, Double> vu = ComplianceDecisions.versionUnreadableStats();
 		T.near(1, vu.get(K + "non_compliant"), "version unreadable is nc");
 		T.near(0, vu.get(K + "no_benchmark"), "version unreadable not nb");
-		T.check(!vu.containsKey(K + "score"), "no score when unreadable");
+		// Build 65 (W1): nothing collected -> score 0, collection_failed 1,
+		// and no invented unreadable_count.
+		T.near(0, vu.get(K + "score"), "version unreadable scores 0");
+		T.near(1, vu.get(K + "collection_failed"), "collection_failed = 1");
+		T.check(!vu.containsKey(K + "unreadable_count"),
+				"no invented unreadable_count");
+		T.near(0, nb.get(K + "collection_failed"), "nb collection ok");
+		T.near(0, ComplianceDecisions.nothingEvaluatedStats().get(
+				K + "collection_failed"), "nothing-evaluated collection ok");
 
 		ControlEvaluator.ComplianceResult allUnread =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 3,
@@ -67,6 +75,8 @@ public final class ComplianceDecisionsTest {
 		// Build 63: all unreadable = nothing collected = score 0, pushed.
 		T.near(0, cs.get(K + "score"), "all unreadable scores 0");
 		T.near(3, cs.get(K + "unreadable_count"), "unreadable counted apart");
+		T.near(1, cs.get(K + "collection_failed"),
+				"all unreadable = collection failed");
 		T.near(0, cs.get(K + "pass_count"), "pass zeroed when nothing scored");
 		T.near(0, cs.get(K + "fail_count"), "fail zeroed when nothing scored");
 		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
@@ -81,6 +91,8 @@ public final class ComplianceDecisionsTest {
 		T.near(1, ps.get(K + "fail_count"), "fail_count = evaluated failures");
 		T.near(2, ps.get(K + "unreadable_count"), "unreadable kept separate");
 		T.near(1, ps.get(K + "non_compliant"), "non-compliant");
+		T.near(0, ps.get(K + "collection_failed"),
+				"partial read: collection did not fail");
 		// Nothing attempted: still no score (never a placeholder).
 		ControlEvaluator.ComplianceResult none =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 0,

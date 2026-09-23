@@ -67,9 +67,10 @@ public final class ControlEvaluator {
 	 * the property-value map when a control declared a {@code read_recipe}
 	 * but the read produced nothing (null / style couldn't extract /
 	 * unknown style). Mirrors {@code VSphereClient.UNREADABLE}; compared
-	 * by reference. An unreadable control is NEVER compliant and is
-	 * excluded from pass / fail / the score denominator — it is surfaced
-	 * via {@code unreadableCount} as a profile/coverage signal instead.
+	 * by reference. An unreadable control is NEVER compliant. It is not a
+	 * pass or an evaluated fail (not in pass / fail / total), is counted in
+	 * {@code unreadableCount}, and since build 63 counts as failing in the
+	 * score ({@link #score}).
 	 *
 	 * <p>Held as an {@code Object} the caller passes in (so this class
 	 * has no compile dependency on VSphereClient) — see
@@ -221,9 +222,9 @@ public final class ControlEvaluator {
 	 *
 	 * <p>This is the third leg of the cardinal "unreadable is NOT compliant"
 	 * rule: an unreadable channel must surface every declared control as
-	 * UNREADABLE — counted in {@code unreadableCount}, excluded from
-	 * pass/fail/total (the score denominator) — never silently dropped. The
-	 * denominator story stays honest: total attempted = scored + unreadable.
+	 * UNREADABLE: counted in {@code unreadableCount}, not in pass/fail/total,
+	 * and (build 63) counted as failing in the score, never silently
+	 * dropped. Attempted = pass + fail + unreadable.
 	 *
 	 * <p>The control set and per-control filtering exactly mirror
 	 * {@link #evaluateControls} (same {@code advanced_setting} parameterKind
@@ -326,11 +327,11 @@ public final class ControlEvaluator {
 	 * <p><b>Unreadable outcome.</b> A value equal (by reference) to
 	 * {@code unreadableSentinel} means the control declared a recipe but
 	 * the read produced nothing. Such controls are counted in
-	 * {@code unreadableCount}, are NEVER compliant, and are EXCLUDED from
-	 * pass, fail, and the score denominator (total). They are recorded as
-	 * a {@link ControlResult} with {@code compliant=false} and
-	 * {@code actual="(unreadable)"} so the per-control raw push surfaces
-	 * them in the metric browser, but they do not move the score.
+	 * {@code unreadableCount}, are NEVER compliant, and are not in pass,
+	 * fail or total; since build 63 they count as failing in the score
+	 * ({@link #score}). They are recorded as a {@link ControlResult} with
+	 * {@code unreadable=true} and {@code actual="(unreadable)"}, pushed as
+	 * Compliant = -1 (no per-control violation alert).
 	 */
 	public static ComplianceResult evaluateVimProperties(
 			List<BenchmarkProfile.Control> controls,
@@ -384,8 +385,8 @@ public final class ControlEvaluator {
 			Object actualObj = propertyValues.get(param);
 
 			// Declared-but-unreadable: recipe present but the read found
-			// nothing. Never compliant, excluded from pass/fail/total,
-			// surfaced via unreadableCount + a (unreadable) ControlResult.
+			// nothing. Never compliant, not in pass/fail/total, counted in
+			// unreadableCount (and as failing in the score, build 63).
 			if (unreadableSentinel != null && actualObj == unreadableSentinel) {
 				unreadable++;
 				results.add(new ControlResult(
@@ -670,8 +671,8 @@ public final class ControlEvaluator {
 		public final int failCount;
 		public final int totalCount;
 		// Declared-but-unreadable controls — recipe present but the read
-		// produced nothing. Excluded from pass/fail/totalCount; surfaced
-		// as a coverage signal (VCF-CF Compliance|unreadable_count).
+		// produced nothing. Not in pass/fail/totalCount; counted as failing
+		// in the score since build 63 (VCF-CF Compliance|unreadable_count).
 		public final int unreadableCount;
 		public final double score;
 		public final List<ControlResult> controlResults;

@@ -156,7 +156,14 @@ score**: score = pass / (pass + fail + unreadable) * 100, so an object
 whose every attempted control is unreadable scores 0 and is pushed and
 averaged. A per-resource `VCF-CF Compliance|unreadable_count` stat carries
 them separately from `fail_count`, and a per-kind "Compliance data not
-collected" alert fires on `unreadable_count > 0`. Since build 57 an object with any unreadable
+collected" alert fires on `unreadable_count > 0` OR on
+`VCF-CF Compliance|collection_failed = 1` (build 65): a 0/1 metric pushed
+on every object every cycle, 1 when nothing could be read on the object
+(every attempted control unreadable, or the governing version unreadable
+with no previous benchmark; such an object scores 0 and is counted with
+its 0 in the rollup). `unreadable_count` is never invented: for an
+unreadable version it is not pushed, because which benchmark's controls
+apply is unknown. Since build 57 an object with any unreadable
 control also has `VCF-CF Compliance|non_compliant` = 1 (unreadable is not
 compliant), while the unreadable control's own
 `VCF-CF Compliance|<control_id>|Compliant` is **-1** (not evaluated), not

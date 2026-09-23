@@ -39,12 +39,15 @@ adapter never pushes):
   P2 Warning.
 * Collection alerts (build 63, owner decision "If unreadable = not
   collected/etc, let's count it as failing, but can we tell the user it's
-  failing to collect?"): one more symptom + alert per resource kind (6),
-  metric condition `VCF-CF Compliance|unreadable_count > 0`, severity
-  Immediate, type 15 subType 21, impact badge risk, all six sharing one
-  recommendation that explains what unreadable means and what to check.
-  Ids use the `vcfcf_compliance_collection_` prefix, distinct from the
-  per-control `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
+  failing to collect?"): one alert per resource kind (6), type 15
+  subType 21, impact badge risk, all six sharing one recommendation that
+  explains what unreadable means and what to check. Each alert fires on
+  either of two Immediate symptoms (build 65): `VCF-CF
+  Compliance|unreadable_count > 0` (some settings unreadable) OR `VCF-CF
+  Compliance|collection_failed = 1` (nothing could be read, including a
+  version that could not be read). Ids use the
+  `vcfcf_compliance_collection_` prefix, distinct from the per-control
+  `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
 * Title, priority and remediation come from the NEWEST profile in which
   the control is scored. If that row has no usable remediation text
   (empty or N/A), the next-newest scored row with one is used. When the
@@ -96,6 +99,7 @@ SEVERITY = {"P0": "Critical", "P1": "Immediate", "P2": "Warning"}
 
 NAMEKEY_BASE = 1000   # generated nameKeys: 1000 + 3*i (+0 sym, +1 alert, +2 rec)
 COLLECTION_NAMEKEY_BASE = 2000   # 2000 + 2*i (+0 sym, +1 alert); rec 2100
+COLLECTION_FAILED_NAMEKEY_BASE = 2020   # 2020 + i: collection_failed symptoms
 
 # Per-kind "Compliance data not collected" alerts (build 63).
 # canonical resource_kind -> (id slug, label used in names)
@@ -115,7 +119,9 @@ COLLECTION_REC_TEXT = (
     "per-control alert). Common causes: the object or its ESXi host is "
     "disconnected or not responding in vCenter; the adapter's vCenter "
     "account lacks read permission for the setting; or the read method is "
-    "not supported on this product version. To see which settings: open "
+    "not supported on this product version. If the object's product "
+    "version itself could not be read, nothing was collected: the object "
+    "scores 0 and collection_failed is 1. To see which settings: open "
     "the object's VCF-CF Compliance metrics; unreadable_count gives the "
     "number, and each control whose Compliant value is -1 with Actual "
     "\"(unreadable)\" is one of them (the compliance dashboards' object "
@@ -124,6 +130,12 @@ COLLECTION_REC_TEXT = (
     "(read-only at the vCenter root, propagated to children), and the "
     "adapter log for read errors naming this object. The alert clears on "
     "the first collection cycle in which every setting is read.")
+
+
+def collection_failed_symptom_id(unreadable_sid: str) -> str:
+    """Build 65: the collection_failed symptom paired with a kind's
+    unreadable_count symptom."""
+    return unreadable_sid[:-len("_unreadable")] + "_failed"
 
 
 def collection_ids():
@@ -332,6 +344,23 @@ def render(controls: list):
             f'                   valueType="numeric" thresholdType="static"/>\n'
             f'      </State>\n'
             f'    </SymptomDefinition>\n')
+        fsid = collection_failed_symptom_id(sid)
+        fnk = COLLECTION_FAILED_NAMEKEY_BASE + i
+        sym.append(
+            f'    <SymptomDefinition id="{fsid}"\n'
+            f'                       nameKey="{fnk}"\n'
+            f'                       adapterKind="VMWARE"\n'
+            f'                       resourceKind="{xml_attr(ops_kind)}"\n'
+            f'                       waitCycle="1"\n'
+            f'                       cancelCycle="1">\n'
+            f'      <State severity="Immediate">\n'
+            f'        <Condition type="metric" '
+            f'key="VCF-CF Compliance|collection_failed"\n'
+            f'                   operator="=" value="1"\n'
+            f'                   valueType="numeric" thresholdType="static"/>\n'
+            f'      </State>\n'
+            f'    </SymptomDefinition>\n')
+        props.append(f"{fnk}={prop_value('Compliance data collection failed on ' + label)}")
         alert.append(
             f'    <AlertDefinition id="{aid}"\n'
             f'                     nameKey="{nk + 1}"\n'
@@ -341,9 +370,14 @@ def render(controls: list):
             f'                     waitCycle="1" cancelCycle="1">\n'
             f'      <State severity="Automatic">\n'
             f'        <Impact type="badge" key="risk"/>\n'
-            f'        <SymptomSet ref="{sid}" operator="and"\n'
-            f'                    aggregation="any" applyOn="self" '
+            f'        <SymptomSets operator="or">\n'
+            f'          <SymptomSet ref="{sid}" operator="and"\n'
+            f'                      aggregation="any" applyOn="self" '
             f'negateCondition="false"/>\n'
+            f'          <SymptomSet ref="{fsid}" operator="and"\n'
+            f'                      aggregation="any" applyOn="self" '
+            f'negateCondition="false"/>\n'
+            f'        </SymptomSets>\n'
             f'        <Recommendations>\n'
             f'          <Recommendation ref="{COLLECTION_REC_ID}" priority="1"/>\n'
             f'        </Recommendations>\n'
@@ -396,8 +430,9 @@ def main(argv: list) -> int:
           + ", ".join(f"{k}={by_kind[k]}" for k in KIND_ORDER if k in by_kind),
           file=sys.stderr)
     print(f"[generate_compliance_alerts] plus {len(collection_ids())} "
-          f"collection symptoms and alerts (unreadable_count > 0) and 1 "
-          f"shared collection recommendation", file=sys.stderr)
+          f"collection alerts (unreadable_count > 0 OR collection_failed = 1; "
+          f"{2 * len(collection_ids())} symptoms) and 1 shared collection "
+          f"recommendation", file=sys.stderr)
     print(f"[generate_compliance_alerts] by severity: "
           + ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())),
           file=sys.stderr)

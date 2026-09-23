@@ -37,8 +37,9 @@ import java.util.Map;
  * evaluable, e.g. a non-vSAN cluster) contributes no score. The build-49
  * last-known-score carry-forward for unreadable hosts and the
  * {@code Rollup|Host|scored_stale} key are retired: an unreadable host now
- * contributes its real score, 0. No-benchmark and version-unreadable
- * objects are counted, never scored.
+ * contributes its real score, 0. A version-unreadable object with no
+ * previous benchmark also scores 0 (build 65). No-benchmark objects are
+ * counted, never scored.
  *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
@@ -85,12 +86,16 @@ public final class ComplianceRollup {
 
 	/**
 	 * An object whose governing version could not be read and that had no
-	 * benchmark to fall back on (build 58, review B2). Unreadable is not
-	 * compliant: counted as non-compliant and in the {@code unknown}
-	 * bucket, never as no_benchmark, never scored.
+	 * benchmark to fall back on (build 58 B2, build 65 W1). Nothing was
+	 * collected, so by the build 63 rule it scores 0: counted as scored
+	 * with 0, non-compliant, in the {@code unknown} bucket, never as
+	 * no_benchmark.
 	 */
 	public void recordVersionUnreadable(BenchmarkSelector.Kind kind) {
-		byKind.get(kind).nonCompliant++;
+		Tally t = byKind.get(kind);
+		t.nonCompliant++;
+		t.scored++;
+		t.scoreSum += 0.0;
 		bump(BenchmarkSelector.BUCKET_UNKNOWN);
 	}
 

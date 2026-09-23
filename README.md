@@ -53,9 +53,10 @@ fallback, SCG 8.0.
   counters zeroed, no score.
 - **Version the adapter could not read:** never a guess and never "no
   benchmark". The object is scored against the SCG it had last cycle; with
-  no previous SCG it is reported as unreadable (`profile_name` =
-  `benchmark unknown: ESXi version unreadable`, `non_compliant` = 1, not
-  scored).
+  no previous SCG (e.g. right after a collector restart) nothing was
+  collected: `profile_name` = `benchmark unknown: ESXi version unreadable`,
+  score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
+  "Compliance data not collected").
 - **Fixed profile:** that SCG for every object regardless of version.
 - **Custom:** a canonical-schema CSV on the collector, for every object.
 
@@ -103,6 +104,9 @@ VCF-CF Compliance|total_count        pass + fail (0 when nothing was evaluated)
 VCF-CF Compliance|unreadable_count   not pushed when the governing version cannot be read
 VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
 VCF-CF Compliance|no_benchmark       1 when the version has no SCG
+VCF-CF Compliance|collection_failed  1 when nothing could be read on the object (every attempted
+                                     control unreadable, or its version unreadable with no
+                                     previous SCG); 0 otherwise; pushed every cycle
 ```
 
 Per vCenter (on each VMWARE `VMwareAdapter Instance`), `<K>` in `All`,
@@ -169,9 +173,10 @@ collection cycle has scored something.
 
 - One "Compliance data not collected (<kind>)" alert per object kind
   (ESXi host, VM, vCenter, cluster, distributed switch, distributed
-  portgroup), severity Immediate, raised when `unreadable_count` > 0: the
-  adapter could not read some settings on the object, and they are counting
-  as failing in its score. Its recommendation explains the causes
+  portgroup), severity Immediate, raised when `unreadable_count` > 0 (the
+  adapter could not read some settings, and they count as failing in the
+  score) OR `collection_failed` = 1 (nothing could be read at all,
+  including an object whose version could not be read). Its recommendation explains the causes
   (connectivity, permissions, read method not supported on this version),
   where to see which settings (`unreadable_count`, and the controls whose
   `Compliant` is -1 with Actual "(unreadable)"), and what to check. Alert

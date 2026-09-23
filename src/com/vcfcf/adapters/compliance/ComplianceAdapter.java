@@ -568,9 +568,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Version unreadable and no previous benchmark (review B2): an
-	 * unreadable object. Non-compliant, counted in the rollup's unknown
-	 * bucket, never no_benchmark, no alert cleanup, benchmark memory untouched.
+	 * Version unreadable and no previous benchmark (review B2; build 65 W1):
+	 * nothing collected. Score 0 (build 63 rule), non-compliant,
+	 * collection_failed = 1 (raises "Compliance data not collected"),
+	 * counted as scored 0 in the rollup's unknown bucket, never
+	 * no_benchmark, no alert cleanup, benchmark memory untouched.
 	 */
 	private void recordVersionUnreadable(BenchmarkSelector.Kind kind,
 			String name, ComplianceDecisions.Decision d, String resourceId,
@@ -578,8 +580,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.versionUnreadable++;
 		rollup.recordVersionUnreadable(kind);
 		logWarn(kind.rollupName + " " + name + ": " + d.profileName
-				+ " and no previous benchmark; counted as unreadable "
-				+ "(non-compliant), not scored");
+				+ " and no previous benchmark; nothing collected: score 0, "
+				+ "non-compliant, collection_failed=1");
 		if (resourceId != null) {
 			long ts = System.currentTimeMillis();
 			stitcher.pushProperties(resourceId,
@@ -596,7 +598,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.noBenchmark++;
 		rollup.recordNoBenchmark(kind);
 		logInfo(kind.rollupName + " " + name + ": " + d.profileName
-				+ " (not scored)");
+				+ " (no benchmark, not scored)");
 		if (resourceId != null) {
 			pushNoBenchmark(resourceId, d.profileName);
 		}

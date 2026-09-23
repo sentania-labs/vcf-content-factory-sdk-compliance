@@ -14,7 +14,8 @@ import java.util.function.Function;
  *
  * <ul>
  *   <li>{@link #decide}: which benchmark an object is scored against, or
- *       why it is not scored (no benchmark / version unreadable).</li>
+ *       why it is not scored normally (no benchmark / version
+ *       unreadable).</li>
  *   <li>{@link #resolveVmHostVersion}: a VM follows its host.</li>
  *   <li>The per-object stat payloads for every outcome.</li>
  *   <li>{@link #candidateControlIds} / {@link #staleZeroControls}: which
@@ -59,8 +60,9 @@ public final class ComplianceDecisions {
 	 * benchmark". If the object had a benchmark last cycle (and that profile
 	 * is loaded) it is scored against it again; otherwise the outcome is
 	 * {@link Outcome#VERSION_UNREADABLE}, which the caller treats as an
-	 * unreadable object (non-compliant, no alert cleanup, last-known host
-	 * score). Only a READABLE version with no bundled SCG is
+	 * object where nothing was collected (score 0, non-compliant,
+	 * collection_failed = 1, no alert cleanup; build 65). Only a READABLE
+	 * version with no bundled SCG is
 	 * {@link Outcome#NO_BENCHMARK}.
 	 *
 	 * @param previousProfileName benchmark applied to this object last
@@ -136,7 +138,19 @@ public final class ComplianceDecisions {
 		stats.put(K + "non_compliant", ComplianceRollup.isNonCompliant(
 				cr.failCount, cr.unreadableCount) ? 1.0 : 0.0);
 		stats.put(K + "no_benchmark", 0.0);
+		stats.put(K + "collection_failed", collectionFailed(cr) ? 1.0 : 0.0);
 		return stats;
+	}
+
+	/**
+	 * Build 65 (review W1 on build 64): true when nothing could be read on
+	 * the object at all: controls were attempted and every one was
+	 * unreadable (e.g. a disconnected host). Pushed as
+	 * {@code VCF-CF Compliance|collection_failed}; the version-unreadable
+	 * payload sets it to 1 as well.
+	 */
+	public static boolean collectionFailed(ControlEvaluator.ComplianceResult cr) {
+		return cr.totalCount == 0 && cr.unreadableCount > 0;
 	}
 
 	/** Properties for an evaluated object. */
@@ -158,6 +172,7 @@ public final class ComplianceDecisions {
 		Map<String, Double> stats = zeroCounters();
 		stats.put(K + "no_benchmark", 1.0);
 		stats.put(K + "non_compliant", 0.0);
+		stats.put(K + "collection_failed", 0.0);
 		return stats;
 	}
 
@@ -166,22 +181,27 @@ public final class ComplianceDecisions {
 		Map<String, Double> stats = zeroCounters();
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "non_compliant", 0.0);
+		stats.put(K + "collection_failed", 0.0);
 		return stats;
 	}
 
 	/**
-	 * Governing version unreadable and no previous benchmark (B2):
-	 * non-compliant, not no_benchmark. unreadable_count is left as is: the
-	 * adapter does not know which benchmark's controls apply, so it cannot
-	 * count them honestly.
+	 * Governing version unreadable and no previous benchmark (build 58 B2,
+	 * build 65 W1): nothing could be collected, so by the build 63 rule
+	 * (unreadable counts as failing) the object scores 0, is non-compliant,
+	 * and {@code collection_failed} = 1 raises its "Compliance data not
+	 * collected" alert. unreadable_count is NOT pushed: the adapter does not
+	 * know which benchmark's controls apply, so it will not invent a count.
 	 */
 	public static Map<String, Double> versionUnreadableStats() {
 		Map<String, Double> stats = new LinkedHashMap<>();
+		stats.put(K + "score", 0.0);
 		stats.put(K + "pass_count", 0.0);
 		stats.put(K + "fail_count", 0.0);
 		stats.put(K + "total_count", 0.0);
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "non_compliant", 1.0);
+		stats.put(K + "collection_failed", 1.0);
 		return stats;
 	}
 
