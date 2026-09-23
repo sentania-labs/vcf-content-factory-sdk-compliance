@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.0.79 (2026-09-23)
+
+- fix(adapter): build 79: close the build-78 review WARNING (knowledge/context/reviews/compliance-build-78.md): a persistently failing VM / vDS / portgroup / cluster listing froze that vCenter's held-back rollup keys indefinitely with only a log WARN. Now:
+  1. New 0/1 metric `VCF-CF Compliance|Rollup|incomplete` on the vCenter object, pushed EVERY cycle with the rest of the rollup (never omitted, so it cannot go stale): 1 when any listing failed and rollup keys were held back, 0 otherwise.
+  2. The existing `vcfcf_compliance_collection_vcenter` alert gains a third symptom under its OR set, `vcfcf_compliance_collection_vcenter_rollup_incomplete` (metric `Rollup|incomplete = 1`, Immediate, nameKey 2030). Same alert id, so the dashboard alert lists and the drift test are unchanged.
+  3. The shared collection recommendation adds one line for this case: which listing failed is in the adapter log; check the collection account's inventory read permissions on that vCenter.
+  4. docs/overview.md says where to look (the "Inventory listing failed this cycle for" and "Failed to enumerate" log lines); README key list gains the metric.
+  - describe.xml totals: 151 symptoms (one new), 143 alert definitions, 140 recommendations. Generated, `--check` clean.
+  - Tests: Build77FaultTest (a failed listing sets `Rollup|incomplete` = 1; the next complete cycle pushes 0), generator test (the vCenter collection alert references the three symptoms and the new condition; the other five kinds keep two).
+
 ## 0.0.0.78 (2026-09-23)
 
 - fix(adapter): build 78: close the build-77 review (knowledge/context/reviews/compliance-build-77.md: 1 BLOCKING, 1 NIT). Numbered by finding:

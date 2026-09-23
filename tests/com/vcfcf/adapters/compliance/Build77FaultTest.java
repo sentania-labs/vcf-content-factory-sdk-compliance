@@ -122,11 +122,16 @@ public final class Build77FaultTest {
 		T.near(80, st.get(P + "vCenter|avg_score"), "vCenter still pushed");
 		T.check(!st.keySet().stream().anyMatch(k -> k.startsWith(P + "VM|")),
 				"no VM key at all");
+		// Build 79: the incomplete flag is pushed every cycle.
+		T.near(1, st.get(ComplianceRollup.INCOMPLETE_KEY),
+				"failed listing: Rollup|incomplete = 1");
 		ComplianceRollup ok = new ComplianceRollup();
 		ok.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0, 100.0);
 		T.check(ok.toStats().containsKey(P + "All|scored")
 				&& ok.toStats().containsKey(P + "VM|scored"),
 				"complete cycle pushes everything (VM zero included)");
+		T.near(0, ok.toStats().get(ComplianceRollup.INCOMPLETE_KEY),
+				"next complete cycle clears Rollup|incomplete to 0 (never omitted)");
 
 		System.out.println("Build77FaultTest: all assertions passed");
 	}

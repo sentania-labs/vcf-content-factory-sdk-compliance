@@ -45,7 +45,9 @@ adapter never pushes):
   either of two Immediate symptoms (build 65): `VCF-CF
   Compliance|unreadable_count > 0` (some settings unreadable) OR `VCF-CF
   Compliance|collection_failed = 1` (nothing could be read, including a
-  version that could not be read). Ids use the
+  version that could not be read). The vCenter alert has a third
+  symptom (build 79), `VCF-CF Compliance|Rollup|incomplete = 1`: an
+  inventory listing failed and rollup keys were held back. Ids use the
   `vcfcf_compliance_collection_` prefix, distinct from the per-control
   `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
 * Title, priority and remediation come from the NEWEST profile in which
@@ -100,6 +102,9 @@ SEVERITY = {"P0": "Critical", "P1": "Immediate", "P2": "Warning"}
 NAMEKEY_BASE = 1000   # generated nameKeys: 1000 + 3*i (+0 sym, +1 alert, +2 rec)
 COLLECTION_NAMEKEY_BASE = 2000   # 2000 + 2*i (+0 sym, +1 alert); rec 2100
 COLLECTION_FAILED_NAMEKEY_BASE = 2020   # 2020 + i: collection_failed symptoms
+# Build 79: third symptom on the vCenter collection alert only.
+ROLLUP_INCOMPLETE_SYMPTOM = "vcfcf_compliance_collection_vcenter_rollup_incomplete"
+ROLLUP_INCOMPLETE_NAMEKEY = 2030
 
 # Per-kind "Compliance data not collected" alerts (build 63).
 # canonical resource_kind -> (id slug, label used in names)
@@ -136,8 +141,13 @@ COLLECTION_REC_TEXT = (
     "group also grants appliance WRITE access (there is no read-only "
     "appliance role), so decide whether that trade-off is acceptable before "
     "granting it, or turn the option off to report those settings for "
-    "manual review. The alert clears on the first collection cycle in which "
-    "every setting is read.")
+    "manual review. On a vCenter, the alert also fires when an inventory "
+    "listing failed (VCF-CF Compliance|Rollup|incomplete = 1, so some "
+    "rollup counts were held back): which listing failed (VMs, distributed "
+    "switches, portgroups or clusters) is in the adapter log; check the "
+    "collection account's inventory read permissions on that vCenter. The "
+    "alert clears on the first collection cycle in which every setting is "
+    "read and every listing succeeds.")
 
 
 def collection_failed_symptom_id(unreadable_sid: str) -> str:
@@ -336,7 +346,7 @@ def render(controls: list):
         props.append(f"{nk}={prop_value(c['control_id'] + ' is not compliant')}")
         props.append(f"{nk + 1}={prop_value(name)}")
         props.append(f"{nk + 2}={prop_value(recommendation_text(c))}")
-    for i, (_kind, ops_kind, sid, aid, label) in enumerate(collection_ids()):
+    for i, (kind, ops_kind, sid, aid, label) in enumerate(collection_ids()):
         nk = COLLECTION_NAMEKEY_BASE + 2 * i
         sym.append(
             f'    <SymptomDefinition id="{sid}"\n'
@@ -369,6 +379,28 @@ def render(controls: list):
             f'      </State>\n'
             f'    </SymptomDefinition>\n')
         props.append(f"{fnk}={prop_value('Compliance data collection failed on ' + label)}")
+        extra_sets = ""
+        if kind == "VCenterAdapterInstance":
+            sym.append(
+                f'    <SymptomDefinition id="{ROLLUP_INCOMPLETE_SYMPTOM}"\n'
+                f'                       nameKey="{ROLLUP_INCOMPLETE_NAMEKEY}"\n'
+                f'                       adapterKind="VMWARE"\n'
+                f'                       resourceKind="{xml_attr(ops_kind)}"\n'
+                f'                       waitCycle="1"\n'
+                f'                       cancelCycle="1">\n'
+                f'      <State severity="Immediate">\n'
+                f'        <Condition type="metric" '
+                f'key="VCF-CF Compliance|Rollup|incomplete"\n'
+                f'                   operator="=" value="1"\n'
+                f'                   valueType="numeric" thresholdType="static"/>\n'
+                f'      </State>\n'
+                f'    </SymptomDefinition>\n')
+            props.append(f"{ROLLUP_INCOMPLETE_NAMEKEY}="
+                         + prop_value("Compliance inventory listing failed on vCenter"))
+            extra_sets = (
+                f'          <SymptomSet ref="{ROLLUP_INCOMPLETE_SYMPTOM}" operator="and"\n'
+                f'                      aggregation="any" applyOn="self" '
+                f'negateCondition="false"/>\n')
         alert.append(
             f'    <AlertDefinition id="{aid}"\n'
             f'                     nameKey="{nk + 1}"\n'
@@ -385,6 +417,7 @@ def render(controls: list):
             f'          <SymptomSet ref="{fsid}" operator="and"\n'
             f'                      aggregation="any" applyOn="self" '
             f'negateCondition="false"/>\n'
+            + extra_sets +
             f'        </SymptomSets>\n'
             f'        <Recommendations>\n'
             f'          <Recommendation ref="{COLLECTION_REC_ID}" priority="1"/>\n'
@@ -438,8 +471,9 @@ def main(argv: list) -> int:
           + ", ".join(f"{k}={by_kind[k]}" for k in KIND_ORDER if k in by_kind),
           file=sys.stderr)
     print(f"[generate_compliance_alerts] plus {len(collection_ids())} "
-          f"collection alerts (unreadable_count > 0 OR collection_failed = 1; "
-          f"{2 * len(collection_ids())} symptoms) and 1 shared collection "
+          f"collection alerts (unreadable_count > 0 OR collection_failed = 1, "
+          f"plus Rollup|incomplete = 1 on the vCenter; "
+          f"{2 * len(collection_ids()) + 1} symptoms) and 1 shared collection "
           f"recommendation", file=sys.stderr)
     print(f"[generate_compliance_alerts] by severity: "
           + ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())),

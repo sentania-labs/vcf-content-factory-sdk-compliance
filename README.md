@@ -121,6 +121,8 @@ VCF-CF Compliance|Rollup|<K>|non_compliant
 VCF-CF Compliance|Rollup|<K>|no_benchmark
 VCF-CF Compliance|Rollup|<K>|score_sum
 VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
+VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
+                                               failed and rollup keys were held back
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
                                                (+ Custom)
