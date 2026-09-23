@@ -762,7 +762,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// ----- Per-kind collectors --------------------------------------------
 
 	/**
-	 * Hosts. Returns host MOID -> ESXi version (null values allowed) so VMs
+	 * Hosts. Returns host MOID -> ESX version (null values allowed) so VMs
 	 * can follow their host in Auto mode.
 	 */
 	private java.util.Map<String, String> collectHosts(
@@ -790,7 +790,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				try {
 					version = vsphere.getHostProductVersion(hostInfo.moRef);
 				} catch (Exception e) {
-					logWarn("Host " + hostName + ": could not read the ESXi "
+					logWarn("Host " + hostName + ": could not read the ESX "
 							+ "version (" + e.getMessage() + ")");
 				}
 			}
@@ -988,7 +988,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * The ESXi version of the host a VM runs on (Auto mode). The host MOID
+	 * The ESX version of the host a VM runs on (Auto mode). The host MOID
 	 * comes from the bulk VM enumeration (review N1); only when that was
 	 * unavailable is runtime.host read per VM. The version itself is
 	 * resolved by {@link ComplianceDecisions#resolveVmHostVersion}.

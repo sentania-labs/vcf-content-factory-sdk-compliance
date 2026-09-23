@@ -11,15 +11,15 @@ import java.util.regex.Pattern;
  * <p>Two modes, set by the {@code benchmark_profile} connection setting:
  * <ul>
  *   <li><b>Auto (by version)</b>: each object is scored against the SCG
- *       matching its own product version. HostSystem uses its ESXi
- *       version; VirtualMachine uses its host's ESXi version; vCenter,
+ *       matching its own product version. HostSystem uses its ESX
+ *       version; VirtualMachine uses its host's ESX version; vCenter,
  *       cluster, distributed switch and distributed portgroup use the
  *       vCenter version (a vDS's own version, e.g. 9.0.0 under a 9.1.1
  *       vCenter, is deliberately NOT used: the switch is configured and
  *       hardened through that vCenter). The version's {@code major.minor}
  *       picks SCG 6.7 / 7.0 / 8.0 / 9.0 / 9.1 (8.0 U3 reports 8.0.3 and
  *       maps to 8.0). Any other version gets NO benchmark: profile name
- *       {@code "no benchmark for <ESXi|vCenter> X.Y"}, no score, no
+ *       {@code "no benchmark for <ESX|vCenter> X.Y"}, no score, no
  *       per-control results.</li>
  *   <li><b>Fixed</b> (any bundled profile or Custom): that profile for
  *       every object regardless of version (the pre-v3 behavior).</li>
@@ -39,7 +39,7 @@ public final class BenchmarkSelector {
 
 	public static final String AUTO = "Auto (by version)";
 
-	public static final String PRODUCT_ESXI = "ESXi";
+	public static final String PRODUCT_ESXI = "ESX";
 	public static final String PRODUCT_VCENTER = "vCenter";
 
 	/** Rollup benchmark bucket for objects with no applicable SCG. */
@@ -115,8 +115,8 @@ public final class BenchmarkSelector {
 
 	/**
 	 * Select the benchmark for an object of {@code kind} whose governing
-	 * product version is {@code version} (the ESXi version for a host, the
-	 * host's ESXi version for a VM, the vCenter version for everything
+	 * product version is {@code version} (the ESX version for a host, the
+	 * host's ESX version for a VM, the vCenter version for everything
 	 * else; see {@link #governingVersion}). Ignored in fixed mode.
 	 */
 	public Selection select(Kind kind, String version) {

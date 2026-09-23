@@ -3,7 +3,7 @@ name: "[VCF Content Factory] Compliance VM Detail"
 description: >
   Per-VM compliance scores, control counts and applied SCG benchmark
   from the VCF-CF Compliance adapter (stitched onto VMWARE
-  VirtualMachine; a VM's SCG follows its host's ESXi version). Feeds
+  VirtualMachine; a VM's SCG follows its host's ESX version). Feeds
   VMs W2 (VM Compliance). Score columns list every row, unfiltered:
   VCF Ops keeps a metric's last value, so a VM that moved to a version
   with no SCG can show a retained score, identified by the No SCG flag

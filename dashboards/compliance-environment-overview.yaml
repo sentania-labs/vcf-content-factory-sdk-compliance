@@ -9,7 +9,7 @@ description: >
   instances sharing one ComplianceWorld; this dashboard reads
   per-vCenter rollups stitched onto each VMWARE VMwareAdapter Instance
   instead, plus environment-wide super metrics on vSphere World). The
-  per-kind dashboards (ESXi Hosts, VMs, vCenter & Networking) are where
+  per-kind dashboards (ESX Hosts, VMs, vCenter & Networking) are where
   a user acts on a single object. See
   knowledge/designs/dashboards/compliance-environment-overview.md.
 
@@ -91,7 +91,7 @@ widgets:
       <p><b>Without benchmark</b> means the object's version has no
       matching Security Configuration Guide in this pak; it is counted,
       never scored.</p>
-      <p>Drill into a single object type: Compliance ESXi Hosts,
+      <p>Drill into a single object type: Compliance ESX Hosts,
       Compliance VMs, Compliance vCenter &amp; Networking.</p>
 
   # ── W3/W4: per-vCenter rollups (self-provider, pinned vSphere World,

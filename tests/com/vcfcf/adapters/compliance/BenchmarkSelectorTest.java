@@ -22,7 +22,7 @@ public final class BenchmarkSelectorTest {
 		T.eq(null, BenchmarkSelector.majorMinor(null), "null");
 		T.eq(null, BenchmarkSelector.majorMinor("unknown"), "garbage");
 
-		// Hosts by their own ESXi version.
+		// Hosts by their own ESX version.
 		host(auto, "6.7.0", "VMware_SCG_6.7", "SCG_6.7");
 		host(auto, "7.0.3", "VMware_SCG_7.0", "SCG_7.0");
 		host(auto, "8.0.3", "VMware_SCG_8.0", "SCG_8.0");   // 8.0 U3
@@ -33,12 +33,12 @@ public final class BenchmarkSelectorTest {
 		// Unmapped and unreadable versions: no benchmark, never a guess.
 		BenchmarkSelector.Selection s10 =
 				auto.select(BenchmarkSelector.Kind.HOST, "10.0.0");
-		T.check(s10.noBenchmark(), "ESXi 10.0 has no benchmark");
-		T.eq("no benchmark for ESXi 10.0", s10.profileName, "10.0 label");
+		T.check(s10.noBenchmark(), "ESX 10.0 has no benchmark");
+		T.eq("no benchmark for ESX 10.0", s10.profileName, "10.0 label");
 		T.eq("none", s10.bucket, "10.0 bucket");
 		BenchmarkSelector.Selection s65 =
 				auto.select(BenchmarkSelector.Kind.HOST, "6.5.0");
-		T.eq("no benchmark for ESXi 6.5", s65.profileName, "6.5 label");
+		T.eq("no benchmark for ESX 6.5", s65.profileName, "6.5 label");
 		T.check(s10.noBenchmark() && !s10.versionUnreadable(),
 				"unmapped is no-benchmark, not unreadable");
 		// Review B2: an unreadable version is NOT "no benchmark".
@@ -49,7 +49,7 @@ public final class BenchmarkSelectorTest {
 			T.check(!u.noBenchmark(), "unreadable is not no-benchmark: " + bad);
 			T.check(u.profile == null, "unreadable has no profile: " + bad);
 			T.eq("unknown", u.bucket, "unreadable bucket");
-			T.eq("benchmark unknown: ESXi version unreadable", u.profileName,
+			T.eq("benchmark unknown: ESX version unreadable", u.profileName,
 					"unreadable label");
 		}
 		T.eq("no benchmark for vCenter 10.0",
@@ -63,7 +63,7 @@ public final class BenchmarkSelectorTest {
 				BenchmarkSelector.governingVersion(
 						BenchmarkSelector.Kind.VM, vc, vmHost)).profileName,
 				"VM follows host 8.0 under vCenter 9.1");
-		T.eq("no benchmark for ESXi 10.0", auto.select(
+		T.eq("no benchmark for ESX 10.0", auto.select(
 				BenchmarkSelector.Kind.VM,
 				BenchmarkSelector.governingVersion(
 						BenchmarkSelector.Kind.VM, vc, "10.0.0")).profileName,
@@ -119,10 +119,10 @@ public final class BenchmarkSelectorTest {
 			String wantProfile, String wantBucket) {
 		BenchmarkSelector.Selection s =
 				auto.select(BenchmarkSelector.Kind.HOST, version);
-		T.check(!s.noBenchmark(), "ESXi " + version + " has a benchmark");
-		T.eq(wantProfile, s.profileName, "ESXi " + version + " profile");
-		T.eq(wantBucket, s.bucket, "ESXi " + version + " bucket");
-		T.eq(wantProfile, s.profile.name, "ESXi " + version + " object");
+		T.check(!s.noBenchmark(), "ESX " + version + " has a benchmark");
+		T.eq(wantProfile, s.profileName, "ESX " + version + " profile");
+		T.eq(wantBucket, s.bucket, "ESX " + version + " bucket");
+		T.eq(wantProfile, s.profile.name, "ESX " + version + " object");
 	}
 
 	static BenchmarkProfile.Control control(String kind, String pk,

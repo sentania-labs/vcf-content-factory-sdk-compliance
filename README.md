@@ -2,7 +2,7 @@
 
 Monitors vSphere for VMware Security Configuration Guide (SCG) compliance
 by querying vCenter configuration and evaluating each object against the
-SCG that matches its version. Covers ESXi hosts, VMs, vCenter, clusters
+SCG that matches its version. Covers ESX hosts, VMs, vCenter, clusters
 (vSAN controls), distributed switches and distributed portgroups. Pushes
 per-control results, per-object scores and flags onto the existing VMWARE
 resources via ARIA_OPS stitching, a per-vCenter rollup onto each vCenter
@@ -44,17 +44,17 @@ fallback, SCG 8.0.
 
 ## Benchmark selection
 
-- **Auto (by version):** hosts by their ESXi version, VMs by their host's
-  ESXi version, and vCenter, clusters, distributed switches and portgroups
+- **Auto (by version):** hosts by their ESX version, VMs by their host's
+  ESX version, and vCenter, clusters, distributed switches and portgroups
   by the vCenter version (a distributed switch's own version is not used).
   `major.minor` picks SCG 6.7, 7.0, 8.0, 9.0 or 9.1 (8.0 U3 is 8.0). A
   readable version with no bundled SCG gets no benchmark:
-  `profile_name` = `no benchmark for ESXi 10.0`, `no_benchmark` = 1,
+  `profile_name` = `no benchmark for ESX 10.0`, `no_benchmark` = 1,
   counters zeroed, no score.
 - **Version the adapter could not read:** never a guess and never "no
   benchmark". The object is scored against the SCG it had last cycle; with
   no previous SCG (e.g. right after a collector restart) nothing was
-  collected: `profile_name` = `benchmark unknown: ESXi version unreadable`,
+  collected: `profile_name` = `benchmark unknown: ESX version unreadable`,
   score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
   "Compliance data not collected").
 - **Fixed profile:** that SCG for every object regardless of version.
@@ -144,7 +144,7 @@ The pak installs four dashboards (plus their eight views):
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESXi Hosts | Pick a scope (environment, vCenter or cluster), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
@@ -172,7 +172,7 @@ collection cycle has scored something.
   the generated blocks in `describe.xml` or `resources.properties`.
 
 - One "Compliance data not collected (<kind>)" alert per object kind
-  (ESXi host, VM, vCenter, cluster, distributed switch, distributed
+  (ESX host, VM, vCenter, cluster, distributed switch, distributed
   portgroup), severity Immediate, raised when `unreadable_count` > 0 (the
   adapter could not read some settings, and they count as failing in the
   score) OR `collection_failed` = 1 (nothing could be read at all,

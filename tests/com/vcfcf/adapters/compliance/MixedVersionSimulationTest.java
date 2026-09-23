@@ -8,7 +8,7 @@ import java.util.Set;
 
 /**
  * Simulated mixed-version vCenter over two collect cycles (owner-approved
- * approach: fake the inventory in tests; the lab runs one ESXi build).
+ * approach: fake the inventory in tests; the lab runs one ESX build).
  *
  * <p>Build 58 (review W4): every per-object decision is made by the SAME
  * SDK-free code the adapter calls ({@link ComplianceDecisions#decide},
@@ -19,7 +19,7 @@ import java.util.Set;
  * and the Suite API are simulated: {@code ops} keeps the last value pushed
  * to every key of every object, as VCF Ops does.
  *
- * <p>Cycle 1: vCenter 9.1.1; hosts on ESXi 6.7, 7.0, 8.0 U3, 9.0, 9.1
+ * <p>Cycle 1: vCenter 9.1.1; hosts on ESX 6.7, 7.0, 8.0 U3, 9.0, 9.1
  * (disconnected: every control unreadable, scores 0) and unmapped 10.0; VMs on the 6.7,
  * 8.0 U3 and 10.0 hosts; a vDS reporting its own 9.0.0 (ignored) and a
  * portgroup. Cycle 2: the 8.0 host was upgraded to 9.0 while one of its

@@ -1,16 +1,16 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 67
+build_number: 68
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
-  Compliance reporting for vSphere (no remediation). Evaluates ESXi hosts,
+  Compliance reporting for vSphere (no remediation). Evaluates ESX hosts,
   VMs, vCenter, clusters (vSAN), distributed switches and distributed
   portgroups against the VMware Security Configuration Guide (SCG). Bundled
   profiles cover SCG 6.7, 7.0, 8.0, 9.0, and 9.1 from
   vmware/vcf-security-and-compliance-guidelines. "Auto (by version)" (the
   default) scores each object against the SCG for its own version: hosts
-  by ESXi version, VMs by their host's ESXi version, everything else by
+  by ESX version, VMs by their host's ESX version, everything else by
   the vCenter version; an unmapped version is reported as having no
   benchmark and is not scored. Pushes per-control results, per-object
   scores and flags onto the existing VMWARE resources, a per-vCenter

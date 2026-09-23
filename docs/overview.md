@@ -19,7 +19,7 @@ The full key list, with when each key is pushed, is in the repo
 ## What's in the Pack
 
 VCF Content Factory Compliance is a Tier 2 (Java SDK) management pack that
-evaluates ESXi host, VM, vCenter, cluster (vSAN), distributed switch and
+evaluates ESX host, VM, vCenter, cluster (vSAN), distributed switch and
 distributed portgroup configuration against the VMware Security
 Configuration Guide (SCG) and reports per-control results, per-object
 scores, per-vCenter rollups and per-control compliance alerts into VCF
@@ -36,7 +36,7 @@ detail.
 
 Bundled profiles cover SCG 6.7, 7.0, 8.0, 9.0, and 9.1. The default,
 `Auto (by version)`, scores each object against the SCG for its own
-version (hosts by ESXi version, VMs by their host's ESXi version,
+version (hosts by ESX version, VMs by their host's ESX version,
 everything else by the vCenter version); an object whose version has no
 bundled SCG is reported as "no benchmark" and not scored. A fixed SCG or
 a custom canonical-schema CSV can be forced instead.
@@ -73,7 +73,7 @@ key list is in the repo README.
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESXi Hosts | Pick a scope (environment, vCenter or cluster), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 

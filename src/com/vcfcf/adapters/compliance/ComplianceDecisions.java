@@ -93,7 +93,7 @@ public final class ComplianceDecisions {
 	}
 
 	/**
-	 * The ESXi version governing a VM: its host's version from this cycle's
+	 * The ESX version governing a VM: its host's version from this cycle's
 	 * host map; a host missing from the map is read once through
 	 * {@code fallbackReader} and cached. Null (version unreadable) when the
 	 * VM has no host or no read succeeds; never a default version.
