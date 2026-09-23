@@ -302,6 +302,99 @@ public final class ComplianceDecisions {
 		return out;
 	}
 
+	/**
+	 * Build 76 (review of build 75, WARNING): the stale-control cleanup plan
+	 * for ONE object, based on what was actually pushed this cycle.
+	 *
+	 * <ul>
+	 *   <li>{@link #zeroOrOne}: controls the object's CURRENT benchmark
+	 *       evaluates for its kind but that were NOT pushed this cycle (not
+	 *       applicable, e.g. vSAN controls on a cluster where vSAN is not
+	 *       enabled, or an advanced setting that was absent without an "or
+	 *       Undefined" default). Any lingering 0 OR 1 is retired to -1: a 1
+	 *       left from an earlier false pass is as wrong as a 0.</li>
+	 *   <li>{@link #zeroOnly}: controls outside the current benchmark
+	 *       ({@link #candidateControlIds}), not pushed this cycle. Only a
+	 *       lingering 0 is retired (unchanged since build 59).</li>
+	 * </ul>
+	 * Controls pushed this cycle are never touched (their value is live).
+	 * Values are read back first; a key the object never had is never
+	 * created.
+	 */
+	public static final class CleanupPlan {
+		public final Set<String> zeroOrOne;
+		public final Set<String> zeroOnly;
+
+		CleanupPlan(Set<String> zeroOrOne, Set<String> zeroOnly) {
+			this.zeroOrOne = java.util.Collections.unmodifiableSet(zeroOrOne);
+			this.zeroOnly = java.util.Collections.unmodifiableSet(zeroOnly);
+		}
+
+		/** Every control id whose latest value must be read back. */
+		public Set<String> queryIds() {
+			Set<String> all = new TreeSet<>(zeroOrOne);
+			all.addAll(zeroOnly);
+			return all;
+		}
+
+		public boolean isEmpty() {
+			return zeroOrOne.isEmpty() && zeroOnly.isEmpty();
+		}
+	}
+
+	/**
+	 * @param current the benchmark applied to the object (null: none)
+	 * @param pushed  control ids whose Compliant value was pushed for the
+	 *                object this cycle (empty when nothing was pushed)
+	 */
+	public static CleanupPlan cleanupPlan(BenchmarkSelector.Kind kind,
+			BenchmarkProfile current, Set<String> pushed,
+			Collection<BenchmarkProfile> allBundled) {
+		Set<String> live = pushed == null
+				? java.util.Collections.<String>emptySet() : pushed;
+		Set<String> zeroOrOne = new TreeSet<>();
+		if (current != null) {
+			addEvaluated(zeroOrOne, kind, current);
+			zeroOrOne.removeAll(live);
+		}
+		Set<String> zeroOnly = candidateControlIds(kind, current, allBundled);
+		zeroOnly.removeAll(live);
+		zeroOnly.removeAll(zeroOrOne);
+		return new CleanupPlan(zeroOrOne, zeroOnly);
+	}
+
+	/**
+	 * Controls to set to -1 for one object under {@code plan}.
+	 * {@code latest} null means the read-back failed: nothing is cleaned
+	 * (never a guess; retried next cycle).
+	 */
+	public static Set<String> staleControls(CleanupPlan plan,
+			Map<String, Double> latest) {
+		Set<String> out = new TreeSet<>();
+		if (latest == null || plan == null) return out;
+		for (Map.Entry<String, Double> e : latest.entrySet()) {
+			Double v = e.getValue();
+			if (v == null) continue;
+			String id = e.getKey();
+			if (plan.zeroOrOne.contains(id) && (v == 0.0 || v == 1.0)) {
+				out.add(id);
+			} else if (plan.zeroOnly.contains(id) && v == 0.0) {
+				out.add(id);
+			}
+		}
+		return out;
+	}
+
+	/** Control ids whose Compliant value a result pushes. */
+	public static Set<String> pushedIds(ControlEvaluator.ComplianceResult cr) {
+		Set<String> out = new TreeSet<>();
+		if (cr == null) return out;
+		for (ControlEvaluator.ControlResult r : cr.controlResults) {
+			out.add(r.scgId);
+		}
+		return out;
+	}
+
 	/** Full stat key for a control's Compliant metric. */
 	public static String compliantKey(String controlId) {
 		return K + controlId + "|Compliant";

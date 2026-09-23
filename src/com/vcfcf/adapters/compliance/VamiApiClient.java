@@ -209,6 +209,19 @@ final class VamiApiClient {
 	 * ({@link #failureReason} / the returned reason say why).
 	 */
 	Object readField(String appliancePath, String field) {
+		return readField(VamiRecipe.parse("vami:" + appliancePath + ":" + field));
+	}
+
+	/**
+	 * Build 76: read one recipe, honouring its absent default
+	 * ({@link VamiRecipe#absentValue}) for a field missing from a successful
+	 * JSON-object body. HTTP / session failures and non-object bodies stay
+	 * {@link #FAILED}.
+	 */
+	Object readField(VamiRecipe recipe) {
+		if (recipe == null) return FAILED;
+		String appliancePath = recipe.appliancePath;
+		String field = recipe.field;
 		SimpleJson body = getEndpoint(appliancePath);
 		if (body == null) {
 			return FAILED;
@@ -228,7 +241,10 @@ final class VamiApiClient {
 		}
 		if (node == null || node.isNull()) {
 			// Field absent in a successful response: UNREADABLE, never a
-			// guessed default.
+			// guessed default, unless the recipe declares the vendor-defined
+			// meaning of absence (build 76, `?absent=`).
+			Object dflt = recipe.absentValue(body.isObject());
+			if (dflt != null) return dflt;
 			absent(appliancePath, field, "field '" + field + "' absent");
 			return FAILED;
 		}

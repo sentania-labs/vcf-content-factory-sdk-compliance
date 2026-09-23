@@ -126,11 +126,12 @@ reference/docs/vcenter-9.1.1-appliance-api.json).
   with the new `(value)` token; `vc.vami-password-max-age` /
   `vc.vami-administration-password-expiration` read
   `local-accounts/root:max_days_between_password_change` (the old
-  `local-accounts/policy` path does not exist). **Expected value
-  unverified:** the vendor spec says "If unset, password never expires",
-  so on a root account that never expires the field may be absent, which
-  reads UNREADABLE; the SCG expected value (`-1`) is left as it is until
-  a wire capture shows the real shape. `vc.fips-enable` (8.0, 9.0) reads
+  `local-accounts/policy` path does not exist). The vendor spec says "If
+  unset, password never expires"; since build 76 the recipe's
+  `?absent=-1` option reads an absent field in a successful response as
+  -1 (the SCG's "never expires" value), so a never-expiring root passes.
+  An HTTP failure (for example 403 before the SSO grant) stays UNREADABLE.
+  The real response shape is still to be confirmed on the wire. `vc.fips-enable` (8.0, 9.0) reads
   `system/global-fips` (not `system/security/global-fips`); the vendor
   spec marks its `enabled` field deprecated as of vSphere API 9.0.0.0.
   SCG 9.1 `vc.tls-ciphers` now expects `NIST_2024_TLS_13_ONLY`, the

@@ -40,6 +40,7 @@ public final class MixedVersionSimulationTest {
 	// This cycle: object -> controls cleaned; objects pushed with a benchmark.
 	private final Map<String, Set<String>> cleaned = new HashMap<>();
 	private final Map<String, BenchmarkProfile> pending = new LinkedHashMap<>();
+	private final Map<String, Set<String>> pendingPushed = new HashMap<>();
 	private boolean bulkReadFails;
 
 	private MixedVersionSimulationTest() {
@@ -252,6 +253,7 @@ public final class MixedVersionSimulationTest {
 			Map<String, String> vmHost, String disconnectedHost) {
 		ComplianceRollup rollup = new ComplianceRollup();
 		pending.clear();
+		pendingPushed.clear();
 		Map<String, String> hostVersions = new HashMap<>();
 		for (Map.Entry<String, String> h : hosts.entrySet()) {
 			hostVersions.put(h.getKey(), h.getValue());
@@ -346,22 +348,23 @@ public final class MixedVersionSimulationTest {
 		rollup.recordNoBenchmark(kind);
 		push(LastBenchmarkMemory.key(kind, moid),
 				ComplianceDecisions.noBenchmarkStats());
-		afterPush(kind, moid, d);
+		afterPush(kind, moid, d, new java.util.TreeSet<String>());
 	}
 
 	private void scored(BenchmarkSelector.Kind kind, String moid,
 			ComplianceDecisions.Decision d, ControlEvaluator.ComplianceResult cr) {
 		push(LastBenchmarkMemory.key(kind, moid),
 				ComplianceDecisions.complianceStats(cr));
-		afterPush(kind, moid, d);
+		afterPush(kind, moid, d, ComplianceDecisions.pushedIds(cr));
 	}
 
 	/** Mirrors ComplianceAdapter.afterPush (remember + queue). */
 	private void afterPush(BenchmarkSelector.Kind kind, String moid,
-			ComplianceDecisions.Decision d) {
+			ComplianceDecisions.Decision d, Set<String> pushedIds) {
 		String key = LastBenchmarkMemory.key(kind, moid);
 		memory.record(key, d.profileName);
 		pending.put(key, d.profile);
+		pendingPushed.put(key, pushedIds);
 	}
 
 	/**
@@ -373,20 +376,19 @@ public final class MixedVersionSimulationTest {
 		for (Map.Entry<String, BenchmarkProfile> e : pending.entrySet()) {
 			BenchmarkSelector.Kind kind = BenchmarkSelector.Kind.valueOf(
 					e.getKey().substring(0, e.getKey().indexOf('|')));
-			Set<String> cand = ComplianceDecisions.candidateControlIds(kind,
-					e.getValue(), all.values());
+			ComplianceDecisions.CleanupPlan plan = ComplianceDecisions.cleanupPlan(
+					kind, e.getValue(), pendingPushed.get(e.getKey()), all.values());
 			Map<String, Double> latest = null;
 			if (!bulkReadFails) {
 				latest = new HashMap<>();
 				Map<String, Double> store = ops.getOrDefault(e.getKey(),
 						new HashMap<>());
-				for (String cid : cand) {
+				for (String cid : plan.queryIds()) {
 					Double v = store.get(ComplianceDecisions.compliantKey(cid));
 					if (v != null) latest.put(cid, v);
 				}
 			}
-			Set<String> stale = ComplianceDecisions.staleZeroControls(cand,
-					latest);
+			Set<String> stale = ComplianceDecisions.staleControls(plan, latest);
 			if (!stale.isEmpty()) {
 				push(e.getKey(), ComplianceDecisions.orphanStats(stale));
 				cleaned.put(e.getKey(), stale);

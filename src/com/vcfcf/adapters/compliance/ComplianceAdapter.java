@@ -639,7 +639,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (resourceId != null) {
 			pushNoBenchmark(resourceId, d.profileName);
 		}
-		afterPush(kind, moid, d, resourceId, cs);
+		afterPush(kind, moid, d, resourceId, cs,
+				java.util.Collections.<String>emptySet());
 	}
 
 	/**
@@ -648,7 +649,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * this cycle's stale-control cleanup when it was pushed.
 	 */
 	private void afterPush(BenchmarkSelector.Kind kind, String moid,
-			ComplianceDecisions.Decision d, String resourceId, CycleStats cs) {
+			ComplianceDecisions.Decision d, String resourceId, CycleStats cs,
+			java.util.Set<String> pushed) {
 		if (moid == null) return;
 		String prev = memory.record(LastBenchmarkMemory.key(kind, moid),
 				d.profileName);
@@ -658,7 +660,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		if (resourceId != null && stitcher != null) {
 			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
-					d.profileName));
+					d.profileName, pushed));
 		}
 	}
 
@@ -668,13 +670,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		final String resourceId;
 		final BenchmarkProfile profile;   // null: no benchmark
 		final String profileName;
+		// Build 76: control ids whose Compliant value was pushed this cycle.
+		final java.util.Set<String> pushed;
 
 		PendingCleanup(BenchmarkSelector.Kind kind, String resourceId,
-				BenchmarkProfile profile, String profileName) {
+				BenchmarkProfile profile, String profileName,
+				java.util.Set<String> pushed) {
 			this.kind = kind;
 			this.resourceId = resourceId;
 			this.profile = profile;
 			this.profileName = profileName;
+			this.pushed = pushed;
 		}
 	}
 
@@ -734,18 +740,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void cleanBatch(BenchmarkSelector.Kind kind,
 			java.util.List<PendingCleanup> batch,
 			java.util.Collection<BenchmarkProfile> bundled, CycleStats cs) {
-		java.util.Map<String, java.util.Set<String>> candidates =
+		// Build 76: the plan is per object and based on what was actually
+		// pushed this cycle (ComplianceDecisions.cleanupPlan): a control in
+		// the object's benchmark but not pushed (not applicable, e.g. vSAN
+		// controls on a non-vSAN cluster) retires a lingering 0 OR 1; a
+		// control outside the benchmark retires a lingering 0.
+		java.util.Map<String, ComplianceDecisions.CleanupPlan> plans =
 				new java.util.LinkedHashMap<>();
 		java.util.Set<String> allCandidates = new java.util.TreeSet<>();
 		for (PendingCleanup p : batch) {
-			java.util.Set<String> c = ComplianceDecisions.candidateControlIds(
-					kind, p.profile, bundled);
-			if (!c.isEmpty()) {
-				candidates.put(p.resourceId, c);
-				allCandidates.addAll(c);
+			ComplianceDecisions.CleanupPlan plan =
+					ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed,
+							bundled);
+			if (!plan.isEmpty()) {
+				plans.put(p.resourceId, plan);
+				allCandidates.addAll(plan.queryIds());
 			}
 		}
-		if (candidates.isEmpty()) return;
+		if (plans.isEmpty()) return;
+		java.util.Map<String, java.util.Set<String>> candidates =
+				new java.util.LinkedHashMap<>();
+		for (java.util.Map.Entry<String, ComplianceDecisions.CleanupPlan> e
+				: plans.entrySet()) {
+			candidates.put(e.getKey(), e.getValue().queryIds());
+		}
 		ComplianceStitcher.LatestRead read = stitcher.latestCompliant(
 				new java.util.ArrayList<>(candidates.keySet()), allCandidates);
 		cs.cleanupQueried += candidates.size();
@@ -764,10 +782,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				read.values;
 		long ts = System.currentTimeMillis();
 		for (PendingCleanup p : batch) {
-			java.util.Set<String> c = candidates.get(p.resourceId);
-			if (c == null) continue;
-			java.util.Set<String> stale = ComplianceDecisions.staleZeroControls(
-					c, latest.get(p.resourceId));
+			ComplianceDecisions.CleanupPlan plan = plans.get(p.resourceId);
+			if (plan == null) continue;
+			java.util.Set<String> stale = ComplianceDecisions.staleControls(
+					plan, latest.get(p.resourceId));
 			if (stale.isEmpty()) continue;
 			stitcher.pushProperties(p.resourceId,
 					ComplianceDecisions.orphanProps(stale, p.profileName), ts);
@@ -776,8 +794,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cs.cleanedObjects++;
 			cs.cleanedKeys += stale.size();
 			logInfo(kind.rollupName + " resource " + p.resourceId + ": "
-					+ stale.size() + " control(s) outside " + p.profileName
-					+ " still read Compliant=0; set to -1 (not evaluated)");
+					+ stale.size() + " control(s) not evaluated this cycle under "
+					+ p.profileName + " still held a 0 or 1; set to -1 (not "
+					+ "evaluated)");
 		}
 	}
 
@@ -946,7 +965,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (resourceId != null) {
 				pushComplianceViaClient(resourceId, cr, d.profileName);
 			}
-			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs);
+			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
+					ComplianceDecisions.pushedIds(cr));
 		}
 		return hostVersions;
 	}
@@ -1034,7 +1054,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (resourceId != null) {
 				pushComplianceViaClient(resourceId, cr, d.profileName);
 			}
-			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs);
+			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
+					ComplianceDecisions.pushedIds(cr));
 		}
 		logInfo("VM compliance: " + cs.vms + " VMs seen");
 	}
@@ -1155,7 +1176,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
 					+ ")");
 		}
-		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs);
+		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs,
+				ComplianceDecisions.pushedIds(cr));
 		return he;
 	}
 
@@ -1300,7 +1322,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (resourceId != null) {
 			pushOrProfileName(resourceId, cr, d.profileName);
 		}
-		afterPush(kind, moid, d, resourceId, cs);
+		afterPush(kind, moid, d, resourceId, cs,
+				ComplianceDecisions.pushedIds(cr));
 	}
 
 	/**
@@ -1499,7 +1522,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 							"recipe-malformed: " + c.readRecipe);
 					continue;
 				}
-				Object read = client.readField(r.appliancePath, r.field);
+				Object read = client.readField(r);
 				if (read == VamiApiClient.FAILED || read == null) {
 					values.put(c.configParameter, VSphereClient.UNREADABLE);
 					String why = client.failureReason(r.appliancePath, r.field);
