@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.61 (2026-09-23)
+
+- feat(content): build 61: bundle the v3 content round (authored and validated by the content authors; YAML shipped unedited). adapter.yaml `bundled_content` now ships 4 super metrics (`supermetrics/compliance-objects-scored.yaml`, `compliance-non-compliant-objects.yaml`, `compliance-objects-without-benchmark.yaml`, `compliance-average-score.yaml`), 8 views (`views/compliance-by-vcenter.yaml`, `compliance-scg-versions.yaml`, `compliance-host-detail.yaml`, `compliance-vm-detail.yaml`, `compliance-vcenter-list.yaml`, `compliance-cluster-list.yaml`, `compliance-vds-list.yaml`, `compliance-portgroup-list.yaml`) and 4 dashboards (`dashboards/compliance-environment-overview.yaml`, `compliance-esxi-hosts.yaml`, `compliance-vms.yaml`, `compliance-vcenter-networking.yaml`). `views/compliance-host-overview.yaml` is no longer bundled (replaced by Compliance Host Detail); `dashboards/compliance-overview.yaml` stays unbundled; both files remain. No adapter code change. The pak also still carries the 146 symptoms, 145 alert definitions and 147 recommendations in describe.xml (144 generated per-control sets plus the score symptoms, alert and recommendations).
+
 ## 0.0.0.60 (2026-09-23)
 
 - fix(adapter): build 60: close the build-59 review (knowledge/context/reviews/compliance-build-59.md: 1 BLOCKING, 1 WARNING, 1 NIT). Numbered by finding:

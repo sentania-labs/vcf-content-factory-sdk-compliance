@@ -1,0 +1,152 @@
+id: 692972c7-29f3-4d00-a069-331d82a457bd
+name: "[VCF Content Factory] Compliance VMs"
+description: >
+  The ESXi Hosts pattern applied to VMs, sized for thousands of
+  objects: pick a scope, see the VMs in it worst first, select one to
+  see its failing controls with runbooks. No heatmap: at VM counts it
+  stops being readable, the sorted list and its totals row carry the
+  overview. See knowledge/designs/dashboards/compliance-vms.md.
+
+released: false
+version: "1.0.0"
+hidden: true
+
+widgets:
+
+  # ── W1: Scope picker (World / vCenter / Cluster / Host) ─────────────
+
+  - id: scope_picker
+    type: ResourceList
+    title: "Scope"
+    coords: {x: 1, y: 1, w: 3, h: 12}
+    column_preset: name-only
+    resource_kinds:
+      - adapter_kind: VMWARE
+        resource_kind: "vSphere World"
+      - adapter_kind: VMWARE
+        resource_kind: "VMwareAdapter Instance"
+      - adapter_kind: VMWARE
+        resource_kind: ClusterComputeResource
+      - adapter_kind: VMWARE
+        resource_kind: HostSystem
+
+  # ── W2: VM Compliance list, driven by W1, sorted worst-first ────────
+
+  - id: vm_compliance_view
+    type: View
+    title: "VM Compliance"
+    coords: {x: 4, y: 1, w: 9, h: 12}
+    # sort_by_column / sort_by_dir (score ascending) requested in the
+    # brief are not implemented for View widgets (see TOOLSET GAP in
+    # the authoring report). Sort order is UI-set by the user.
+    view: "[VCF Content Factory] Compliance VM Detail"
+
+  # ── W3: Failing Controls on Selected VM, driven by W2, vm.* family ───
+
+  - id: failing_controls
+    type: AlertList
+    title: "Failing Controls on Selected VM"
+    coords: {x: 1, y: 13, w: 7, h: 8}
+    criticality: [2, 3, 4]
+    mode: all
+    depth: 1
+    alert_definitions:
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_copy"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_paste"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_shrink"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_wiper"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_non_essential_3d_features"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_dvfilter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_efi_boot_types"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_ft_encrypted"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_device_connectable_deactivate"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_tools_dnd_deactivate"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_console_connections"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_setinfo_size"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_enable"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_retention"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_rotation_size"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_minimize_console_vnc_use"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_pci_passthrough"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_restrict_host_info"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_secure_boot"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_transparentpagesharing_inter_vm_enabled"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_virtual_hardware"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmotion_encrypted"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmrc_lock"
+
+  # ── W4: Compliance Details, driven by W2 ────────────────────────────
+
+  - id: vm_compliance_details
+    type: PropertyList
+    title: "Compliance Details"
+    coords: {x: 8, y: 13, w: 5, h: 8}
+    property_list:
+      visual_theme: 0
+      depth: 1
+      show_metric_full_name: true
+      properties:
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "summary|parentHost"
+          metric_name: "Summary|Parent Host"
+          label: "Host"
+          is_string_metric: true
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "VCF-CF Compliance|profile_name"
+          metric_name: "VCF-CF Compliance|Profile Name"
+          label: "SCG Applied"
+          is_string_metric: true
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "VCF-CF Compliance|total_count"
+          metric_name: "VCF-CF Compliance|Total Count"
+          label: "Total Controls"
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "VCF-CF Compliance|pass_count"
+          metric_name: "VCF-CF Compliance|Pass Count"
+          label: "Passing"
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "VCF-CF Compliance|fail_count"
+          metric_name: "VCF-CF Compliance|Fail Count"
+          label: "Failing"
+        - adapter_kind: VMWARE
+          resource_kind: VirtualMachine
+          metric_key: "VCF-CF Compliance|unreadable_count"
+          metric_name: "VCF-CF Compliance|Unreadable Count"
+          label: "Unreadable"
+
+  # ── W5: Score Trend, driven by W2 ────────────────────────────────────
+
+  - id: vm_score_trend
+    type: MetricChart
+    title: "Score Trend"
+    coords: {x: 1, y: 21, w: 12, h: 5}
+    metrics:
+      - adapter_kind: VMWARE
+        resource_kind: VirtualMachine
+        metric_key: "VCF-CF Compliance|score"
+        metric_name: "Compliance Score"
+        color_method: 2
+      - adapter_kind: VMWARE
+        resource_kind: VirtualMachine
+        metric_key: "VCF-CF Compliance|fail_count"
+        metric_name: "Failing Controls"
+        color_method: 2
+
+interactions:
+  - from: scope_picker
+    to: vm_compliance_view
+    type: resourceId
+  - from: vm_compliance_view
+    to: failing_controls
+    type: resourceId
+  - from: vm_compliance_view
+    to: vm_compliance_details
+    type: resourceId
+  - from: vm_compliance_view
+    to: vm_score_trend
+    type: resourceId

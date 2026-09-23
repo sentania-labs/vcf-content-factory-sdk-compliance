@@ -1,0 +1,56 @@
+id: 17b8d01a-587e-4f88-9c96-32ce952a4340
+name: "[VCF Content Factory] Compliance Host Detail"
+description: >
+  Per-host compliance scores, control counts and applied SCG benchmark
+  from the VCF-CF Compliance adapter (stitched onto VMWARE HostSystem).
+  Feeds ESXi Hosts W2 (Host Compliance). Replaces Compliance Host
+  Overview. Score, Failing and Unreadable reflect the last cycle a host
+  was evaluated; VCF Ops retains the last value once pushes stop, so a
+  host with No SCG or nothing evaluated may show a stale score. The No
+  SCG and Non-Compliant flag columns make that visible per row; this
+  view does not filter rows to no_benchmark = 0 / total_count > 0 (see
+  Known constraints below) so unscored hosts still list. Sort by
+  Compliance Score ascending in the dashboard widget to surface
+  non-compliant hosts first.
+subject:
+  adapter_kind: VMWARE
+  resource_kind: HostSystem
+columns:
+  - attribute: summary|parentCluster
+    display_name: "Cluster"
+    is_property: true
+    is_string_attribute: true
+  - attribute: summary|parentVcenter
+    display_name: "vCenter"
+    is_property: true
+    is_string_attribute: true
+  - attribute: summary|version
+    display_name: "ESXi Version"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|profile_name
+    display_name: "SCG Applied"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|score
+    display_name: "Compliance Score (%)"
+    red_bound: 80
+    orange_bound: 90
+    yellow_bound: 95
+    ascending_range: true
+  - attribute: VCF-CF Compliance|fail_count
+    display_name: "Failing"
+  - attribute: VCF-CF Compliance|unreadable_count
+    display_name: "Unreadable"
+  - attribute: VCF-CF Compliance|non_compliant
+    display_name: "Non-Compliant"
+  - attribute: VCF-CF Compliance|no_benchmark
+    display_name: "No SCG"
+
+summary:
+  display_name: "Totals"
+  aggregation: SUM
+  columns: [5, 6, 7, 8]
+
+released: false
+version: "1.0.0"
