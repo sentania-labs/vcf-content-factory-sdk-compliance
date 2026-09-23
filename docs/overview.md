@@ -143,12 +143,16 @@ collection continues; compliance is never failed over a stitch error.
   upgraded from 8.0 to 9.0, an instance switched from a fixed profile to
   Auto). At the end of every cycle the adapter reads the latest `Compliant`
   values of the controls outside each object's current SCG from VCF Ops
-  (one bulk `stats/latest` request per 20 objects), and sets only the ones
+  (bulk `stats/latest` requests packed up to a URL-length limit: about 41
+  requests for 5,000 VMs, 7 for 500 hosts on SCG 9.1), and sets only the ones
   still at 0 to -1 with an explanatory `Actual`, which cancels their
   alerts. It never creates a key the object did not have and does not
   touch a key already at -1 or 1, so after the first cleanup there is
   nothing more to push. If that read fails, the object is skipped for the
-  cycle (logged) and retried next cycle. Objects whose version could not
+  cycle (logged) and retried next cycle. Every cycle the adapter log
+  carries one "Stale-control cleanup read" line with the objects queried,
+  requests made, Compliant values returned and zeros cleaned, so a read
+  that silently returns nothing can be told apart from "nothing stale". Objects whose version could not
   be read are not cleaned.
 
 - **Strict TLS to vCenter by default.** Since build 50 the adapter

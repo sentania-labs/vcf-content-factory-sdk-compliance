@@ -366,58 +366,97 @@ public final class ComplianceStitcher {
 		return null;
 	}
 
+	/** Outcome of one bulk latest-Compliant read (build 60, review W1). */
+	public static final class LatestRead {
+		/** resourceId -> (control id -> latest value); null when failed. */
+		public final Map<String, Map<String, Double>> values;
+		/** GET requests completed (all of them when not failed). */
+		public final int requests;
+		/** Numeric Compliant values returned across completed requests. */
+		public final int valuesReturned;
+		/** Failure reason, null on success. */
+		public final String error;
+
+		LatestRead(Map<String, Map<String, Double>> values, int requests,
+				int valuesReturned, String error) {
+			this.values = values;
+			this.requests = requests;
+			this.valuesReturned = valuesReturned;
+			this.error = error;
+		}
+
+		public boolean failed() {
+			return values == null;
+		}
+	}
+
 	/**
-	 * Build 59: latest {@code VCF-CF Compliance|<control_id>|Compliant}
-	 * values for a batch of resources, via
+	 * Latest {@code VCF-CF Compliance|<control_id>|Compliant} values for a
+	 * batch of resources, via
 	 * {@code GET /api/resources/stats/latest?resourceId=..&statKey=..}
-	 * (documented in the vendor operations API spec; same ambient identity
-	 * and client as the /api/resources reads). Requests are chunked by
-	 * {@link ComplianceDecisions#latestCompliantPaths}.
+	 * (vendor operations API spec; same ambient identity and client as the
+	 * /api/resources reads). Requests are sized by URL length
+	 * ({@link ComplianceDecisions#latestCompliantPaths}); the framework
+	 * stitcher exposes GET only, so the POST .../query form is not used.
 	 *
-	 * <p>Returns resourceId -> (control id -> latest value); a key the
-	 * resource does not have is simply absent. Returns NULL if any request
-	 * fails or a response cannot be parsed: the caller then cleans nothing
-	 * for the batch this cycle. Only numeric values are returned (a missing
-	 * or non-numeric data point is skipped, never read as 0).
+	 * <p>A key the resource does not have is simply absent. If any request
+	 * fails or a response cannot be parsed, {@link LatestRead#values} is null
+	 * and the caller cleans nothing for the batch this cycle. Only numeric
+	 * data points are returned (a missing or non-numeric value is never read
+	 * as 0). The counts are for the caller's log line, so "the read returned
+	 * nothing" is visible and distinguishable from "nothing was stale".
 	 */
-	public Map<String, Map<String, Double>> latestCompliant(
-			List<String> resourceIds, java.util.Set<String> controlIds) {
+	public LatestRead latestCompliant(List<String> resourceIds,
+			java.util.Set<String> controlIds) {
 		Map<String, Map<String, Double>> out = new HashMap<>();
 		for (String rid : resourceIds) out.put(rid, new HashMap<>());
+		int requests = 0;
+		int returned = 0;
 		for (String path : ComplianceDecisions.latestCompliantPaths(
-				resourceIds, controlIds, 20, 30)) {
+				resourceIds, controlIds, ComplianceDecisions.URL_BUDGET)) {
 			try {
 				SimpleJson parsed = SimpleJson.parse(stitcher.get(path));
-				if (parsed == null || parsed.isNull()) return null;
+				if (parsed == null || parsed.isNull()) {
+					return new LatestRead(null, requests, returned,
+							"empty response body");
+				}
 				SimpleJson values = parsed.get("values");
-				if (values == null || values.isNull()) continue;   // no stats
-				if (!values.isList()) return null;
-				for (SimpleJson v : values.asList()) {
-					String rid = v.get("resourceId").asString(null);
-					Map<String, Double> into = rid == null ? null : out.get(rid);
-					if (into == null) continue;
-					SimpleJson stats = v.get("stat-list").get("stat");
-					if (stats == null || !stats.isList()) continue;
-					for (SimpleJson st : stats.asList()) {
-						String cid = ComplianceDecisions.controlIdOfCompliantKey(
-								st.get("statKey").get("key").asString(null));
-						SimpleJson data = st.get("data");
-						if (cid == null || data == null || !data.isList()
-								|| data.size() == 0) {
-							continue;
+				if (values != null && !values.isNull()) {
+					if (!values.isList()) {
+						return new LatestRead(null, requests, returned,
+								"'values' is not a list");
+					}
+					for (SimpleJson v : values.asList()) {
+						String rid = v.get("resourceId").asString(null);
+						Map<String, Double> into = rid == null ? null
+								: out.get(rid);
+						if (into == null) continue;
+						SimpleJson stats = v.get("stat-list").get("stat");
+						if (stats == null || !stats.isList()) continue;
+						for (SimpleJson st : stats.asList()) {
+							String cid = ComplianceDecisions
+									.controlIdOfCompliantKey(st.get("statKey")
+											.get("key").asString(null));
+							SimpleJson data = st.get("data");
+							if (cid == null || data == null || !data.isList()
+									|| data.size() == 0) {
+								continue;
+							}
+							Double d = numeric(data.get(data.size() - 1));
+							if (d != null) {
+								into.put(cid, d);
+								returned++;
+							}
 						}
-						Double d = numeric(data.get(data.size() - 1));
-						if (d != null) into.put(cid, d);
 					}
 				}
+				requests++;
 			} catch (Exception e) {
-				logger.warn("ComplianceStitcher: latest Compliant read failed ("
-						+ e.getClass().getSimpleName() + ": " + e.getMessage()
-						+ ")");
-				return null;
+				return new LatestRead(null, requests, returned,
+						e.getClass().getSimpleName() + ": " + e.getMessage());
 			}
 		}
-		return out;
+		return new LatestRead(out, requests, returned, null);
 	}
 
 	private static Double numeric(SimpleJson node) {

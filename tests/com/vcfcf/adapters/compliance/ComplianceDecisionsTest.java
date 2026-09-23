@@ -113,24 +113,34 @@ public final class ComplianceDecisionsTest {
 		T.eq(null, ComplianceDecisions.controlIdOfCompliantKey(
 				"VCF-CF Compliance|score"), "aggregate key");
 
-		// Query paths: chunked, encoded, every pair covered.
-		java.util.List<String> ids = new java.util.ArrayList<>();
-		for (int i = 0; i < 45; i++) ids.add("00000000-0000-0000-0000-0000000000" + (10 + i));
-		Set<String> keys = new java.util.TreeSet<>();
-		for (int i = 0; i < 70; i++) keys.add("esx.c" + i);
-		java.util.List<String> paths =
-				ComplianceDecisions.latestCompliantPaths(ids, keys, 20, 30);
-		T.eq(9, paths.size(), "3 id chunks x 3 key chunks");
-		for (String path : paths) {
+		// Query paths sized by URL length (build 60): every path within the
+		// budget, every (id, key) pair covered exactly once, and a VM-sized
+		// query (one candidate key) packs ~100+ objects per request.
+		java.util.List<String> vmIds = new java.util.ArrayList<>();
+		for (int i = 0; i < 5000; i++) {
+			vmIds.add(String.format("00000000-0000-0000-0000-%012d", i));
+		}
+		Set<String> oneKey = new java.util.TreeSet<>(Arrays.asList(
+				"vm.transparentpagesharing-inter-vm-enabled"));
+		java.util.List<String> vmPaths = ComplianceDecisions.latestCompliantPaths(
+				vmIds, oneKey, ComplianceDecisions.URL_BUDGET);
+		T.check(vmPaths.size() <= 50,
+				"5000 VMs x 1 key in <= 50 requests, got " + vmPaths.size());
+		assertCoverage(vmPaths, vmIds, oneKey);
+
+		java.util.List<String> hostIds = vmIds.subList(0, 300);
+		Set<String> manyKeys = new java.util.TreeSet<>(union);   // 86 host keys
+		java.util.List<String> hostPaths = ComplianceDecisions.latestCompliantPaths(
+				hostIds, manyKeys, ComplianceDecisions.URL_BUDGET);
+		assertCoverage(hostPaths, hostIds, manyKeys);
+		for (String path : hostPaths) {
 			T.check(path.startsWith("/api/resources/stats/latest?resourceId="),
 					"endpoint");
-			T.check(count(path, "resourceId=") <= 20, "<= 20 ids");
-			T.check(count(path, "statKey=") <= 30, "<= 30 keys");
-			T.check(path.contains("VCF-CF%20Compliance%7Cesx.c"), "encoded");
-			T.check(path.length() < 4000, "URL stays small");
+			T.check(path.contains("VCF-CF%20Compliance%7Cesx."), "encoded");
 		}
-		T.check(ComplianceDecisions.latestCompliantPaths(ids, new
-				java.util.TreeSet<>(), 20, 30).isEmpty(), "nothing to ask");
+		T.check(ComplianceDecisions.latestCompliantPaths(vmIds, new
+				java.util.TreeSet<>(), ComplianceDecisions.URL_BUDGET).isEmpty(),
+				"nothing to ask");
 
 		// ---- benchmark memory (B2, N3): only restart / edit wipe it
 		LastBenchmarkMemory mem = new LastBenchmarkMemory();
@@ -181,6 +191,36 @@ public final class ComplianceDecisionsTest {
 				single, "mine.lab"), "no singleton fallback");
 
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
+	}
+
+	/** Every path within budget; every (id, key) pair exactly once. */
+	private static void assertCoverage(java.util.List<String> paths,
+			java.util.List<String> ids, Set<String> keys) {
+		Map<String, Integer> pairs = new HashMap<>();
+		for (String path : paths) {
+			T.check(path.length() <= ComplianceDecisions.URL_BUDGET,
+					"path within URL budget: " + path.length());
+			java.util.List<String> pIds = new java.util.ArrayList<>();
+			java.util.List<String> pKeys = new java.util.ArrayList<>();
+			for (String part : path.substring(path.indexOf('?') + 1).split("&")) {
+				String v;
+				try {
+					v = java.net.URLDecoder.decode(part.substring(
+							part.indexOf('=') + 1), "UTF-8");
+				} catch (java.io.UnsupportedEncodingException e) {
+					throw new AssertionError(e);
+				}
+				if (part.startsWith("resourceId=")) pIds.add(v);
+				else if (part.startsWith("statKey=")) {
+					pKeys.add(ComplianceDecisions.controlIdOfCompliantKey(v));
+				}
+			}
+			for (String i : pIds) for (String k : pKeys) {
+				pairs.merge(i + "/" + k, 1, Integer::sum);
+			}
+		}
+		T.eq(ids.size() * keys.size(), pairs.size(), "all pairs covered");
+		for (Integer n : pairs.values()) T.eq(1, n, "each pair once");
 	}
 
 	private static int count(String s, String sub) {

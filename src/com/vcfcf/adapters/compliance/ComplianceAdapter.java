@@ -661,8 +661,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * every cycle. For each pushed object, the candidates are the bundled
 	 * controls outside its current benchmark
 	 * ({@link ComplianceDecisions#candidateControlIds}); their latest
-	 * {@code Compliant} values are bulk-read from VCF Ops (20 resources per
-	 * request), and only a candidate whose latest value is 0 is set to -1
+	 * {@code Compliant} values are bulk-read from VCF Ops (requests sized by
+	 * URL length, see ComplianceDecisions#latestCompliantPaths), and only a candidate whose latest value is 0 is set to -1
 	 * ({@link ComplianceDecisions#staleZeroControls}). No key is ever
 	 * created, a cleaned key is not touched again, and a missed or failed
 	 * cleanup is retried next cycle. If a bulk read fails, that batch is
@@ -688,6 +688,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 		}
 		pendingCleanup.clear();
+		// Build 60 (review W1): one line per cycle with what the read
+		// returned, so a read that silently returns nothing is visible and
+		// not mistaken for "nothing stale".
+		logInfo("Stale-control cleanup read: " + cs.cleanupQueried
+				+ " object(s) with candidate controls queried in "
+				+ cs.cleanupRequests + " request(s); " + cs.cleanupValues
+				+ " Compliant value(s) returned; " + cs.cleanedKeys
+				+ " stale 0(s) set to -1 on " + cs.cleanedObjects
+				+ " object(s); " + cs.cleanupSkipped
+				+ " object(s) skipped (read failed)");
 		if (cs.cleanupSkipped > 0) {
 			logWarn("Stale-control cleanup skipped for " + cs.cleanupSkipped
 					+ " object(s) this cycle (latest-value read failed); "
@@ -695,7 +705,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
-	private static final int CLEANUP_BATCH = 20;
+	// Objects per cleanup batch; requests within a batch are sized by URL
+	// length, so this only bounds the candidate union and memory.
+	private static final int CLEANUP_BATCH = 500;
 
 	private void cleanBatch(BenchmarkSelector.Kind kind,
 			java.util.List<PendingCleanup> batch,
@@ -712,14 +724,22 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 		}
 		if (candidates.isEmpty()) return;
-		java.util.Map<String, java.util.Map<String, Double>> latest =
-				stitcher.latestCompliant(
-						new java.util.ArrayList<>(candidates.keySet()),
-						allCandidates);
-		if (latest == null) {
+		ComplianceStitcher.LatestRead read = stitcher.latestCompliant(
+				new java.util.ArrayList<>(candidates.keySet()), allCandidates);
+		cs.cleanupQueried += candidates.size();
+		cs.cleanupRequests += read.requests;
+		cs.cleanupValues += read.valuesReturned;
+		if (read.failed()) {
 			cs.cleanupSkipped += candidates.size();
+			logWarn("Stale-control cleanup read failed for a batch of "
+					+ candidates.size() + " " + kind.rollupName + " object(s) "
+					+ "after " + read.requests + " request(s) and "
+					+ read.valuesReturned + " value(s) returned: " + read.error
+					+ "; batch skipped this cycle");
 			return;
 		}
+		java.util.Map<String, java.util.Map<String, Double>> latest =
+				read.values;
 		long ts = System.currentTimeMillis();
 		for (PendingCleanup p : batch) {
 			java.util.Set<String> c = candidates.get(p.resourceId);
@@ -1551,6 +1571,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int hosts; int vms; int dvs; int dvpg; int clusters;
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
+		int cleanupQueried; int cleanupRequests; int cleanupValues;
 	}
 
 	// -----------------------------------------------------------------------
