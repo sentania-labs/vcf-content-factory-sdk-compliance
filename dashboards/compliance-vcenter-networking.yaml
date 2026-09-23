@@ -108,6 +108,10 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_reset_port"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_dvpg_network_vgt"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vcenter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_cluster"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vds"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_portgroup"
 
 interactions:
   - from: scope_picker

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.64 (2026-09-23)
+
+- feat(content): build 64: content follow-ups to build 63, committed as the content authors wrote them (no adapter code change). The four dashboards list the six "Compliance data not collected" alerts (`vcfcf_compliance_collection_*`) in their alert lists (Environment Overview 150, ESXi Hosts 87, VMs 24, vCenter & Networking 39), so `tests/test_dashboard_alert_lists.py` passes again; the Environment Overview's W3 widget sets `select_first_row: true` explicitly. Six view descriptions (Compliance Host Detail, VM Detail, vCenter Servers, Clusters, Distributed Switches, Distributed Portgroups) rewritten to stand alone per the owner's Option A: a retained score is flagged by the No SCG column, unreadable settings count as failing, totals rows are SUM-only.
+
 ## 0.0.0.63 (2026-09-23)
 
 - feat(adapter): build 63: unreadable counts as failing, and the adapter tells the user. Owner decision (verbatim in knowledge/designs/sdk-adapters/compliance-v3-version-aware.md, "Owner decisions after build 62"): "If unreadable = not collected/etc, let's count it as failing, but can we tell the user it's failing to collect?" **Behavior change.** Numbered:

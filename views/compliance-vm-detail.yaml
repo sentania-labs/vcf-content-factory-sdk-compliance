@@ -4,14 +4,15 @@ description: >
   Per-VM compliance scores, control counts and applied SCG benchmark
   from the VCF-CF Compliance adapter (stitched onto VMWARE
   VirtualMachine; a VM's SCG follows its host's ESXi version). Feeds
-  VMs W2 (VM Compliance). Score, Failing and Unreadable reflect the
-  last cycle a VM was evaluated; VCF Ops retains the last value once
-  pushes stop, so a VM with No SCG or nothing evaluated may show a
-  stale score. The No SCG and Non-Compliant flag columns make that
-  visible per row; this view does not filter rows to no_benchmark = 0 /
-  total_count > 0 (see Known constraints below) so unscored VMs still
-  list. Sort by Compliance Score ascending in the dashboard widget to
-  surface non-compliant VMs first.
+  VMs W2 (VM Compliance). Score columns list every row, unfiltered:
+  VCF Ops keeps a metric's last value, so a VM that moved to a version
+  with no SCG can show a retained score, identified by the No SCG flag
+  column beside it (owner accepted, 2026-09-23). Unreadable controls
+  count as failing in the score (adapter build 63); the Unreadable
+  column shows how many, and a "Compliance data not collected" alert
+  explains why. The totals row is sums only (issue #168). Sort by
+  Compliance Score ascending in the dashboard widget to surface
+  non-compliant VMs first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VirtualMachine

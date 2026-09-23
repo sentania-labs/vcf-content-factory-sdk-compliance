@@ -102,6 +102,9 @@ widgets:
     title: "Compliance by vCenter and Object Type"
     coords: {x: 1, y: 5, w: 12, h: 8}
     self_provider: true
+    # Owner decision: keep the default (true) explicit so W6 populates
+    # with the first vCenter's alerts on load instead of sitting blank.
+    select_first_row: true
     pin:
       adapter_kind: VMWARE
       resource_kind: "vSphere World"
@@ -295,6 +298,12 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_virtual_hardware"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmotion_encrypted"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmrc_lock"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_host"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vm"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vcenter"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_cluster"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vds"
+        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_portgroup"
 
 interactions:
   - from: vcenter_object_type_view
