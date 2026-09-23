@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.0.69 (2026-09-23)
+
+- docs(adapter): build 69: close two build-68 review NITs (knowledge/context/reviews/compliance-build-68.md). No adapter or content change; the canonical profiles are byte-identical (comments only).
+  1. `scripts/normalize_scg_v70.py`: our own comments (delta 7 docstring and inline comment) say ESX instead of ESXi. The docstring line quoting VMware's source Component value "VMware ESXi" is unchanged.
+  2. **Acceptance plan additions (with builds 60 and 62):** (e2) after upgrading devel, confirm the renamed host dashboard (same id `e2e42416-53d7-49fb-85d6-68bd9323aae8`, now "[VCF Content Factory] Compliance ESX Hosts") replaced "[VCF Content Factory] Compliance ESXi Hosts" rather than leaving a stale copy; removing any leftover needs the owner's verbatim go. (h) Owner decision on the scope pickers: they ship with default columns for now (FB-021), revisit after the beta release.
+
 ## 0.0.0.68 (2026-09-23)
 
 - feat(content): build 68: owner change after seeing devel (verbatim in knowledge/designs/sdk-adapters/compliance-v3-version-aware.md, "Owner change after seeing devel"): scope pickers list only vSphere World and vCenters, and "change all references to ESXi to ESX".
