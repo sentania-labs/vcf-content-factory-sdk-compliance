@@ -70,7 +70,7 @@ drops to informational or scores against the wrong literal):
    the factory's exact-equality caveat is replaced with the
    minimum-version caveat shared with the 9.1 driver.
 7. **Key case of `esx.etc-issue`.** The SCG 7 source names the
-   setting `Config.Etc.Issue`; the ESXi advanced option (and every
+   setting `Config.Etc.Issue`; the ESX advanced option (and every
    later SCG) is `Config.Etc.issue`. The adapter's option lookup is
    case-sensitive, so the wrong case made the control silently skip
    instead of evaluating. Corrected here. (Build 57 also lists the
@@ -209,7 +209,7 @@ def main(argv: list) -> int:
     if rc != 0:
         return rc
 
-    # Delta 7: ESXi option key case for esx.etc-issue.
+    # Delta 7: ESX option key case for esx.etc-issue.
     with open(argv[2], encoding="utf-8", newline="") as f:
         out_rows = list(csv.DictReader(f))
     for r in out_rows:
