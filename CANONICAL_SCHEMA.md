@@ -1,7 +1,7 @@
 # Canonical Benchmark CSV Schema
 
 The compliance adapter consumes benchmarks in a single, header-aware
-CSV format. Source benchmarks (VMware SCG 8.0, 9.0, 9.1) are
+CSV format. Source benchmarks (VMware SCG 6.7, 7.0, 8.0, 9.0, 9.1) are
 normalized into this schema before being loaded by the
 adapter. The adapter does not parse vendor-specific formats — it
 parses only the canonical schema.
@@ -19,10 +19,14 @@ class of bug impossible.
 
 ```
 profiles/                                  # source CSVs (vendor formats)
+  vmware_scg_6.7.csv                       # converted from upstream .xlsx
+  vmware_scg_7.0.csv                       # converted from upstream .xlsx
   vmware_scg_8.0.csv
   vmware_scg_9.0.csv
   vmware_scg_9.1.csv
 profiles/canonical/                        # canonical CSVs (loaded by adapter)
+  scg_6.7.csv
+  scg_7.0.csv
   scg_8.0.csv
   scg_9.0.csv
   scg_9.1.csv
@@ -311,6 +315,8 @@ Sources currently in use:
 
 | Source token | Description |
 |---|---|
+| `SCG-6.7` | VMware vSphere Security Configuration Guide 6.7 (671-20210210-01) |
+| `SCG-7.0` | VMware vSphere Security Configuration Guide 7 (703-20250422-01) |
 | `SCG-8.0` | VMware Security Configuration Guide v8.x |
 | `SCG-9.0` | VMware Cloud Foundation 9.0 Security Configuration Guide |
 | `SCG-9.1` | VMware Cloud Foundation 9.1 Security Configuration Guide |
@@ -336,10 +342,70 @@ Per-source Python scripts under `scripts/`:
   adds a NIST 800-53R5 column, tags `source_ref` `SCG-9.1`, and
   introduces the `automation` / `pnr` / `networks` sub-products)
 
+- `scripts/normalize_scg_v70.py` (this repo): VMware vSphere SCG 7
+  source format. A thin delta driver over the factory's SCG 8
+  normalizer: renames the SCG 7 header names to the SCG 8 ones,
+  rewrites the `Undefined (Defaults to X)` baseline phrasing to the
+  `X or Undefined` form the evaluator recognizes, tags `SCG-7.0`, and
+  re-keys three inherited recipes (VGT source id, discovery-protocol
+  expected `none`, `vm.virtual-hardware` left unscored because
+  `vmx-13 or newer` cannot be compared). Details in the script
+  docstring.
+- `scripts/normalize_scg_v67.py` (this repo): VMware vSphere SCG 6.7
+  source format. Standalone, because 6.7 Guideline IDs
+  (`ESXi.set-account-lockout`) share no slugs with 7.0 and later.
+  control_ids come from a curated `ID_MAP` (6.7 Guideline ID to the
+  control_id the same setting carries in 7.0/8.0/9.x, with evidence
+  tier, priority, and priority source per row); an ID not in the map
+  fails the run. Rows then pass through the same classifier chain as
+  the SCG 8 driver. SCG 6.7 has no priority column: matched controls
+  take the priority of their nearest newer counterpart, unmatched ones
+  default to P2.
+- `scripts/xlsx_to_csv.py` (this repo): converts one worksheet of an
+  upstream `.xlsx` to the source CSV (standard library only; renders
+  cells the way Excel's own CSV export does).
+
 Each script takes `<input.csv> <output.csv>` as positional args. They
 log counts (in / out / skipped, by `parameter_kind`) to stderr and
 exit non-zero on hard errors (missing required source columns,
 unmapped Component values).
+
+### Source provenance and regeneration order
+
+SCG 6.7 and 7.0 are no longer on upstream `main`. Both were removed in
+upstream commit `8300517` (2026-07-27) of
+`vmware/vcf-security-and-compliance-guidelines`; the sources are taken
+from its parent, `8300517^` (`ce883a9e`), the last commit carrying
+each version. Upstream only ever published them as `.xlsx`, so the
+source CSVs in `profiles/` are conversions, not vendor files; the
+conversion keeps the header row and every data row with cell text
+unchanged.
+
+| Source CSV | Upstream file at `8300517^` | Sheet | Version | xlsx sha256 |
+|---|---|---|---|---|
+| `vmware_scg_7.0.csv` | `security-configuration-hardening-guide/vsphere/7.0/VMware vSphere Security Configuration Guide 7 - Controls.xlsx` | `Controls` (122 controls) | 703-20250422-01 | `a2d06218...188a` |
+| `vmware_scg_6.7.csv` | `security-configuration-hardening-guide/vsphere/6.7/VMware vSphere Security Configuration Guide 6.7 - Controls - 671-20210210-01.xlsx` | `vSphere 6.7` (51 controls) | 671-20210210-01 | `220a158c...96d9` |
+
+- SCG 7.0 was also published as
+  `vmware-vsphere-security-configuration-guide-703-20250422-01.zip`
+  in the same directory. The controls workbook inside it is
+  byte-identical to the loose `.xlsx` (same sha256), so the loose file
+  was used; the zip adds only a LICENSE and the guidance PDF.
+- The SCG 6.7 workbook's `Deprecated` sheet (one control,
+  `VM.Enable-VGA-Only-Mode`, retired from the guide) is not part of
+  the baseline and is not converted.
+
+Regeneration, from the adapter repo root inside a factory checkout
+(the `git show` commands are in the `xlsx_to_csv.py` docstring).
+Order matters: the 6.7 driver cross-checks its recorded priorities
+against the generated 7.0 (and 9.1) canonical profiles.
+
+```
+python3 scripts/xlsx_to_csv.py scg7.xlsx Controls 'SCG ID' profiles/vmware_scg_7.0.csv
+python3 scripts/xlsx_to_csv.py scg67.xlsx 'vSphere 6.7' 'Guideline ID' profiles/vmware_scg_6.7.csv
+python3 scripts/normalize_scg_v70.py profiles/vmware_scg_7.0.csv profiles/canonical/scg_7.0.csv
+python3 scripts/normalize_scg_v67.py profiles/vmware_scg_6.7.csv profiles/canonical/scg_6.7.csv
+```
 
 ## Loader contract
 
