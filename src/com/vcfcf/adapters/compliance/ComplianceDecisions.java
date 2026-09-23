@@ -267,34 +267,55 @@ public final class ComplianceDecisions {
 	}
 
 	/**
+	 * Default URL budget for one stats/latest GET: comfortably under the
+	 * common 8 KB request-line / header limit of the Suite API front end.
+	 */
+	public static final int URL_BUDGET = 6000;
+
+	/**
 	 * Suite API paths for {@code GET /api/resources/stats/latest} covering
-	 * every (resource, control) pair, chunked so no URL grows past a few KB:
-	 * at most {@code maxIds} resourceId and {@code maxKeys} statKey
-	 * parameters per request. Deterministic order.
+	 * every (resource, control) pair, sized by URL length (build 60, review
+	 * N1 on build 59): the stat keys are split into chunks of at most half
+	 * the budget, then each request is packed with as many resourceId
+	 * parameters as fit in the rest. One candidate key (the typical VM case)
+	 * packs about 120 objects per request; a host's worst case (86 keys)
+	 * needs two key chunks. At least one id and one key per request, so a
+	 * pathological single key longer than the budget still yields a request.
+	 * Deterministic order.
 	 */
 	public static java.util.List<String> latestCompliantPaths(
 			java.util.List<String> resourceIds, Set<String> controlIds,
-			int maxIds, int maxKeys) {
+			int urlBudget) {
 		java.util.List<String> paths = new java.util.ArrayList<>();
 		if (resourceIds.isEmpty() || controlIds.isEmpty()) return paths;
-		java.util.List<String> keys = new java.util.ArrayList<>(controlIds);
-		for (int i = 0; i < resourceIds.size(); i += maxIds) {
-			java.util.List<String> ids = resourceIds.subList(i,
-					Math.min(resourceIds.size(), i + maxIds));
-			for (int j = 0; j < keys.size(); j += maxKeys) {
-				StringBuilder q = new StringBuilder(
-						"/api/resources/stats/latest?");
-				boolean first = true;
-				for (String id : ids) {
-					q.append(first ? "" : "&").append("resourceId=")
-							.append(enc(id));
-					first = false;
+		String base = "/api/resources/stats/latest?";
+		java.util.List<String> keyChunks = new java.util.ArrayList<>();
+		StringBuilder chunk = new StringBuilder();
+		int keyBudget = Math.max(1, urlBudget / 2);
+		for (String cid : controlIds) {
+			String part = "&statKey=" + enc(compliantKey(cid));
+			if (chunk.length() > 0 && chunk.length() + part.length() > keyBudget) {
+				keyChunks.add(chunk.toString());
+				chunk.setLength(0);
+			}
+			chunk.append(part);
+		}
+		keyChunks.add(chunk.toString());
+		for (String keys : keyChunks) {
+			int i = 0;
+			while (i < resourceIds.size()) {
+				StringBuilder ids = new StringBuilder();
+				while (i < resourceIds.size()) {
+					String part = (ids.length() == 0 ? "" : "&") + "resourceId="
+							+ enc(resourceIds.get(i));
+					if (ids.length() > 0 && base.length() + ids.length()
+							+ part.length() + keys.length() > urlBudget) {
+						break;
+					}
+					ids.append(part);
+					i++;
 				}
-				for (String cid : keys.subList(j,
-						Math.min(keys.size(), j + maxKeys))) {
-					q.append("&statKey=").append(enc(compliantKey(cid)));
-				}
-				paths.add(q.toString());
+				paths.add(base + ids + keys);
 			}
 		}
 		return paths;

@@ -3,9 +3,18 @@
 # build in build-pak-on-tag.yml; running them here catches a stale
 # generated alert block or a failing unit test a round before release.
 #
-# Runner and action pins follow build-pak-on-tag.yml exactly (same
-# self-hosted pool, actions pinned to full commit SHAs). No secrets, no SDK
-# jar: the tested classes and the generator need only a JDK and python3.
+# GitHub-hosted runner, never the self-hosted pool (build 60, review B1 on
+# build 59): this repo is public and the job runs pull-request code, so it
+# must not share a runner with the release job (which holds
+# SDK_RUNTIME_SSH_KEY and contents: write). It needs neither the lab nor a
+# Docker daemon. Actions stay pinned to full commit SHAs.
+#
+# No secrets and no Broadcom SDK jar, ever: every suite in
+# ci/run_java_tests.sh (BenchmarkLoaderTest, ProfileSetTest,
+# BenchmarkSelectorTest, ControlEvaluatorTest, ComplianceRollupTest,
+# ComplianceDecisionsTest, MixedVersionSimulationTest) and the generator's
+# unittest suite compile and run on a plain JDK + python3, so the full set
+# runs here, and the same set gates the tag build.
 name: tests
 
 on:
@@ -23,7 +32,7 @@ concurrency:
 
 jobs:
   tests:
-    runs-on: [self-hosted, Linux, X64, generic]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout adapter source
