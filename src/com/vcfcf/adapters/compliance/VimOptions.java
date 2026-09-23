@@ -68,9 +68,21 @@ public final class VimOptions {
 	/**
 	 * {@code RetrieveProperties} response for one object and one array-of-
 	 * OptionValue property (VM {@code config.extraConfig}) -> key/value map.
-	 * Throws when the call failed or returned no object ({@code returnval}
-	 * absent: the object could not be confirmed). A present object whose
-	 * property is not in the result means the property is unset: empty map.
+	 *
+	 * <p>Build 78 (review of build 77, BLOCKING): an empty map is returned
+	 * ONLY when the property value is present and empty. Everything else
+	 * throws {@link ReadFault}:
+	 * <ul>
+	 *   <li>the call failed ({@code resp == null});</li>
+	 *   <li>no object in the response;</li>
+	 *   <li>a per-property fault inside a normal response
+	 *       ({@code missingSet}, e.g. {@code NoPermission}), named in the
+	 *       message;</li>
+	 *   <li>the property absent from an otherwise normal response (an
+	 *       inaccessible or orphaned VM whose config is unset). The adapter
+	 *       cannot tell "no settings" from "could not read", so it is
+	 *       UNREADABLE, never "nothing set".</li>
+	 * </ul>
 	 */
 	public static Map<String, String> fromPropertyOptions(Document resp,
 			String propPath, String what, String lastFault) throws ReadFault {
@@ -79,19 +91,55 @@ public final class VimOptions {
 		if (rv == null) {
 			throw new ReadFault(what + ": no object in the response");
 		}
-		Map<String, String> out = new HashMap<>();
 		for (Element propSet : children(rv, "propSet")) {
 			if (!propPath.equals(childText(propSet, "name"))) continue;
 			Element val = firstChild(propSet, "val");
-			if (val == null) return out;
+			if (val == null) {
+				throw new ReadFault(what + ": " + propPath + " has no value");
+			}
+			Map<String, String> out = new HashMap<>();
 			for (Element item : children(val, null)) {
 				String key = childText(item, "key");
 				String value = childText(item, "value");
 				if (key != null && value != null) out.put(key, value);
 			}
-			return out;
+			return out;   // present; empty only when the value is empty
 		}
-		return out;   // property unset on the object: read OK, nothing set
+		String fault = missingSetFault(rv, propPath);
+		throw new ReadFault(what + ": " + propPath + " not returned"
+				+ (fault != null ? " (fault " + fault + ")"
+				: " (unset: inaccessible or orphaned object)"));
+	}
+
+	/**
+	 * The per-property fault vCenter reported for {@code propPath} in a
+	 * {@code missingSet}: the fault's xsi:type plus its localized message
+	 * when present, e.g. {@code NoPermission: Permission to perform this
+	 * operation was denied.}; null when there is no missingSet entry.
+	 */
+	static String missingSetFault(Element returnval, String propPath) {
+		for (Element ms : children(returnval, "missingSet")) {
+			if (!propPath.equals(childText(ms, "path"))) continue;
+			Element fault = firstChild(ms, "fault");
+			if (fault == null) return "unknown";
+			String type = null;
+			Element inner = firstChild(fault, "fault");
+			Element typed = inner != null ? inner : fault;
+			String xsiType = typed.getAttributeNS(
+					"http://www.w3.org/2001/XMLSchema-instance", "type");
+			if (xsiType == null || xsiType.isEmpty()) {
+				xsiType = typed.getAttribute("xsi:type");
+			}
+			if (xsiType != null && !xsiType.isEmpty()) {
+				int c = xsiType.indexOf(':');
+				type = c >= 0 ? xsiType.substring(c + 1) : xsiType;
+			}
+			String msg = childText(fault, "localizedMessage");
+			String t = type != null ? type : "unknown";
+			return msg != null && !msg.trim().isEmpty()
+					? t + ": " + msg.trim() : t;
+		}
+		return null;
 	}
 
 	// ----- tiny DOM helpers (local-name based, namespace tolerant) ---------

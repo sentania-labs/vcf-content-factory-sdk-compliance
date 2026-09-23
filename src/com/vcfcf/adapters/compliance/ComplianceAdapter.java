@@ -513,6 +513,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		java.util.Map<String, Double> stats = rollup.toStats();
+		if (!rollup.incompleteKinds().isEmpty()) {
+			logWarn("Inventory listing failed this cycle for "
+					+ rollup.incompleteKinds() + ": their Rollup keys, and the "
+					+ "cross-kind Rollup|All and Rollup|Benchmark keys, are NOT "
+					+ "pushed this cycle (previous values kept rather than "
+					+ "under-counted)");
+		}
 		stitcher.pushStats(vcEntry.resourceId, stats,
 				System.currentTimeMillis());
 		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
@@ -987,6 +994,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			vms = vsphere.getVms();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate VMs: " + e.getMessage());
+			rollup.markIncomplete(BenchmarkSelector.Kind.VM);
 			return;
 		}
 		if (vms.isEmpty()) {
@@ -1190,6 +1198,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			switches = vsphere.getDvSwitches();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVS: " + e.getMessage());
+			rollup.markIncomplete(BenchmarkSelector.Kind.VDS);
 			return;
 		}
 		if (switches.isEmpty()) {
@@ -1215,6 +1224,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			pgs = vsphere.getDvPortgroups();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVPG: " + e.getMessage());
+			rollup.markIncomplete(BenchmarkSelector.Kind.PORTGROUP);
 			return;
 		}
 		if (pgs.isEmpty()) {
@@ -1248,6 +1258,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} catch (Exception e) {
 			logWarn("Failed to enumerate ClusterComputeResource: "
 					+ e.getMessage());
+			rollup.markIncomplete(BenchmarkSelector.Kind.CLUSTER);
 			return;
 		}
 		if (clusters.isEmpty()) {

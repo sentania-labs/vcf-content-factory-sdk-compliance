@@ -146,6 +146,13 @@ collection continues; compliance is never failed over a stitch error.
   to `scored` = 0 is therefore a retained value from an earlier cycle, and
   the Overview view shows `non_compliant` / `scored` beside each average so
   that is visible at a glance.
+- **A failed inventory listing holds back that vCenter's rollup for the
+  kind (build 78).** If vCenter fails to list the VMs, distributed
+  switches, portgroups or clusters in a cycle, the adapter does not push
+  that kind's `Rollup|<K>|*` keys, nor the cross-kind `Rollup|All|*` and
+  `Rollup|Benchmark|*|objects` keys, for that vCenter that cycle. The
+  previous values stay, so the environment totals do not suddenly lose,
+  for example, every VM of one vCenter. The adapter log names the kinds.
 
 - **Version unreadable is not "no benchmark".** If the adapter cannot read
   the version that governs an object's SCG, it scores the object against

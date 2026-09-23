@@ -45,12 +45,40 @@ public final class Build77FaultTest {
 				+ "<value>5</value></returnval>"
 				+ "</QueryOptionsResponse></Body></Envelope>"), "QueryOptions", null);
 		T.eq("5", opts.get("Security.AccountLockFailures"), "option parsed");
-		T.check(VimOptions.fromPropertyOptions(xml(
+		// Build 78: no value in an otherwise normal response is UNREADABLE
+		// (inaccessible / orphaned VM), never "nothing set".
+		expectFault(() -> VimOptions.fromPropertyOptions(xml(
 				"<Envelope><Body><RetrievePropertiesResponse><returnval>"
 				+ "<obj type=\"VirtualMachine\">vm-1</obj>"
 				+ "</returnval></RetrievePropertiesResponse></Body></Envelope>"),
+				"config.extraConfig", "R", null), "not returned");
+		// Build 78: a per-property fault inside a normal response is named.
+		expectFault(() -> VimOptions.fromPropertyOptions(xml(
+				"<Envelope xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+				+ "<Body><RetrievePropertiesResponse><returnval>"
+				+ "<obj type=\"VirtualMachine\">vm-1</obj>"
+				+ "<missingSet><path>config.extraConfig</path><fault>"
+				+ "<fault xsi:type=\"NoPermission\"><object>vm-1</object>"
+				+ "<privilegeId>System.Read</privilegeId></fault>"
+				+ "<localizedMessage>Permission to perform this operation was "
+				+ "denied.</localizedMessage></fault></missingSet>"
+				+ "</returnval></RetrievePropertiesResponse></Body></Envelope>"),
+				"config.extraConfig", "R", null), "NoPermission");
+		// A propSet whose val is missing is also unreadable.
+		expectFault(() -> VimOptions.fromPropertyOptions(xml(
+				"<Envelope><Body><RetrievePropertiesResponse><returnval>"
+				+ "<obj type=\"VirtualMachine\">vm-1</obj><propSet>"
+				+ "<name>config.extraConfig</name></propSet>"
+				+ "</returnval></RetrievePropertiesResponse></Body></Envelope>"),
+				"config.extraConfig", "R", null), "has no value");
+		// Present but empty: the only empty map.
+		T.check(VimOptions.fromPropertyOptions(xml(
+				"<Envelope><Body><RetrievePropertiesResponse><returnval>"
+				+ "<obj type=\"VirtualMachine\">vm-1</obj><propSet>"
+				+ "<name>config.extraConfig</name><val/></propSet>"
+				+ "</returnval></RetrievePropertiesResponse></Body></Envelope>"),
 				"config.extraConfig", "R", null).isEmpty(),
-				"object present, property unset: read OK, nothing set");
+				"value present and empty: read OK, nothing set");
 		Map<String, String> extra = VimOptions.fromPropertyOptions(xml(
 				"<Envelope><Body><RetrievePropertiesResponse><returnval>"
 				+ "<obj type=\"VirtualMachine\">vm-1</obj><propSet>"
@@ -77,6 +105,28 @@ public final class Build77FaultTest {
 		// ---- missing vCenter setting manager
 		assertUnreadableAndProtected("missing setting manager",
 				BenchmarkSelector.Kind.VCENTER, p91, p91.vCenterControls(), all);
+
+		// ---- build 78: a failed inventory listing holds back that kind's
+		// rollup and the cross-kind totals instead of under-counting.
+		String P = ComplianceRollup.PREFIX;
+		ComplianceRollup r = new ComplianceRollup();
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0, 100.0);
+		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 5, 1, 0, 80.0);
+		r.markIncomplete(BenchmarkSelector.Kind.VM);   // VM listing failed
+		Map<String, Double> st = r.toStats();
+		T.check(!st.containsKey(P + "VM|scored"), "failed kind not pushed");
+		T.check(!st.containsKey(P + "All|scored"), "All not pushed (would under-count)");
+		T.check(!st.containsKey(P + "Benchmark|SCG_9.1|objects"),
+				"benchmark counts not pushed");
+		T.near(1, st.get(P + "Host|scored"), "complete kinds still pushed");
+		T.near(80, st.get(P + "vCenter|avg_score"), "vCenter still pushed");
+		T.check(!st.keySet().stream().anyMatch(k -> k.startsWith(P + "VM|")),
+				"no VM key at all");
+		ComplianceRollup ok = new ComplianceRollup();
+		ok.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0, 100.0);
+		T.check(ok.toStats().containsKey(P + "All|scored")
+				&& ok.toStats().containsKey(P + "VM|scored"),
+				"complete cycle pushes everything (VM zero included)");
 
 		System.out.println("Build77FaultTest: all assertions passed");
 	}
