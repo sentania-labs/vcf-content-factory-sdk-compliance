@@ -1,0 +1,46 @@
+id: a3292c87-15b7-4fcd-beea-1b4510b3ca02
+name: "[VCF Content Factory] Compliance Average Score"
+resource_kinds:
+  - resource_kind_key: vSphere World
+    adapter_kind_key: VMWARE
+description: >
+  Whole-environment weighted average compliance score (%), summed
+  across every vCenter. A plain average of per-vCenter averages would
+  under-weight a large vCenter against a small one, so this sums the
+  raw score_sum and scored numerators/denominators across vCenters
+  before dividing, not an average of per-vCenter percentages. Assigned
+  to the vSphere World rollup resource (1 live object per instance;
+  recon 2026-09-23 confirmed the three VMwareAdapter Instance vCenters
+  are its only depth-1 children on both devel and prod) and divides
+  the summed VCF-CF Compliance|Rollup|All|score_sum by the summed
+  VCF-CF Compliance|Rollup|All|scored (adapter v3 build 60+) over
+  those children.
+
+  Zero-scored guard: when the summed scored count is 0 (no objects
+  evaluated anywhere in the environment, e.g. before v3 first
+  collects), this formula is a bare division with no ternary guard.
+  VCF Operations' super metric engine returns no-data for a 0/0 (or
+  N/0) division rather than 0 or a substitute value - confirmed
+  idiom in this repo's "[VCF Content Factory] VCF Total License Usage
+  (%)" super metric (division by zero yields no-data, not an error;
+  see its design note knowledge/designs/supermetrics/vcf-license-vcf-total-license-usage-percent.md).
+  A stand-in score of 0 or 100 here would violate the
+  unreadable-is-not-compliant rule (knowledge/lessons/unreadable-is-not-compliant.md:
+  a zero-divisor result must never be folded into a fleet average as
+  if it were a real score), so no-data is the correct and required
+  behavior, not a gap to work around.
+
+  Depends on the compliance adapter v3 stitching the
+  Rollup|All|score_sum and Rollup|All|scored metrics onto each
+  VMwareAdapter Instance; these keys are a declared contract
+  (content/sdk-adapters/compliance/docs/overview.md,
+  content/sdk-adapters/compliance/README.md) and do not exist live yet
+  because v3 is not installed on either recon target. Formula is
+  structurally grounded, not live-verified.
+
+  Feeds the Compliance Environment Overview dashboard (Environment
+  Compliance scoreboard, W1) and its 30-day trend chart (W5).
+unit_id: percent
+formula: |
+  sum(${adaptertype=VMWARE, objecttype=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|score_sum, depth=1})
+  / sum(${adaptertype=VMWARE, objecttype=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored, depth=1})

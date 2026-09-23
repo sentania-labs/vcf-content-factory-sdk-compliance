@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 60
+build_number: 61
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -19,11 +19,27 @@ description: >
 entry_class: "com.vcfcf.adapters.compliance.ComplianceAdapter"
 released: false
 bundled_content:
+  # Build 61: the v3 content round (four dashboards, their views and the
+  # environment super metrics). views/compliance-host-overview.yaml is
+  # replaced by compliance-host-detail.yaml and
+  # dashboards/compliance-overview.yaml (Fleet Overview, retired world keys)
+  # stays unbundled; both files remain in the repo.
+  supermetrics:
+    - supermetrics/compliance-objects-scored.yaml
+    - supermetrics/compliance-non-compliant-objects.yaml
+    - supermetrics/compliance-objects-without-benchmark.yaml
+    - supermetrics/compliance-average-score.yaml
   views:
-    - views/compliance-host-overview.yaml
-  # Build 58 (review B3): the Compliance Fleet Overview dashboard
-  # (dashboards/compliance-overview.yaml) is no longer bundled. It reads the
-  # ComplianceWorld Summary metrics retired in build 57 and would show frozen
-  # build-56 values as current. The file stays until the v3 content round
-  # replaces it with the Environment Overview and bundles that instead.
-  dashboards: []
+    - views/compliance-by-vcenter.yaml
+    - views/compliance-scg-versions.yaml
+    - views/compliance-host-detail.yaml
+    - views/compliance-vm-detail.yaml
+    - views/compliance-vcenter-list.yaml
+    - views/compliance-cluster-list.yaml
+    - views/compliance-vds-list.yaml
+    - views/compliance-portgroup-list.yaml
+  dashboards:
+    - dashboards/compliance-environment-overview.yaml
+    - dashboards/compliance-esxi-hosts.yaml
+    - dashboards/compliance-vms.yaml
+    - dashboards/compliance-vcenter-networking.yaml
