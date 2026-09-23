@@ -78,6 +78,7 @@ public final class VSphereClient {
 	private volatile MoRef settingOptionMgr;   // ServiceContent.setting
 	private volatile String aboutInstanceUuid;
 	private volatile String aboutFullName;
+	private volatile String aboutVersion;      // ServiceContent.about.version
 
 	// esxcli reader (build 36) — rides THIS vCenter session. Rebuilt on
 	// every (re)connect so it carries the live cookie and a fresh per-cycle
@@ -156,6 +157,7 @@ public final class VSphereClient {
 		if (about != null) {
 			this.aboutInstanceUuid = childText(about, "instanceUuid");
 			this.aboutFullName = childText(about, "fullName");
+			this.aboutVersion = childText(about, "version");
 		}
 		if (sessionManager == null || propertyCollector == null
 				|| rootFolder == null) {
@@ -204,6 +206,7 @@ public final class VSphereClient {
 		settingOptionMgr = null;
 		aboutInstanceUuid = null;
 		aboutFullName = null;
+		aboutVersion = null;
 		esxcli = null;
 	}
 
@@ -441,6 +444,45 @@ public final class VSphereClient {
 	public String getVCenterDisplayName() throws Exception {
 		ensureConnected();
 		return aboutFullName;
+	}
+
+	/**
+	 * v3: vCenter product version ({@code ServiceContent.about.version},
+	 * e.g. {@code "8.0.3"}). Governs benchmark choice for the vCenter,
+	 * clusters, distributed switches and portgroups. Null when the about
+	 * block carried no version (never guessed).
+	 */
+	public String getVCenterVersion() throws Exception {
+		ensureConnected();
+		return aboutVersion;
+	}
+
+	/**
+	 * v3: a host's ESXi product version (e.g. {@code "8.0.3"} for 8.0 U3).
+	 * Reads {@code summary.config.product.version} first (vCenter keeps it
+	 * for disconnected hosts too), then {@code config.product.version}.
+	 * Null when neither resolves; the caller treats null as "version
+	 * unreadable", never as a default version.
+	 */
+	public String getHostProductVersion(MoRef hostRef) throws Exception {
+		ensureConnected();
+		if (hostRef == null) return null;
+		String v = getStringProperty(hostRef, "summary.config.product.version");
+		if (v == null) {
+			v = getStringProperty(hostRef, "config.product.version");
+		}
+		return v;
+	}
+
+	/**
+	 * v3: the MOID of the host a VM is registered on
+	 * ({@code runtime.host}). Null when unset (e.g. an orphaned VM).
+	 */
+	public String getVmHostMoid(MoRef vmRef) throws Exception {
+		ensureConnected();
+		if (vmRef == null) return null;
+		MoRef host = getMoRefProperty(vmRef, "runtime.host");
+		return host == null ? null : host.value;
 	}
 
 	// -----------------------------------------------------------------------

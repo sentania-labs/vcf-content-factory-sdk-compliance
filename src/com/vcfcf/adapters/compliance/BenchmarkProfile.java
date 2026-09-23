@@ -25,57 +25,72 @@ public final class BenchmarkProfile {
 	public final String name;
 	public final List<Control> controls;
 
+	// Per-kind slices, computed once. v3 selects a profile per OBJECT, so a
+	// slice is requested once per host / VM rather than once per cycle;
+	// rebuilding the list on every call would allocate per object for no
+	// reason. The slices are unmodifiable (callers only iterate them).
+	private final List<Control> hostSlice;
+	private final List<Control> vmSlice;
+	private final List<Control> vCenterSlice;
+	private final List<Control> dvsSlice;
+	private final List<Control> dvpgSlice;
+	private final List<Control> clusterSlice;
+
+	/** Controls demoted by the manual-review overlay (diagnostics). */
+	public final int manualReviewCount;
+
 	public BenchmarkProfile(String name, List<Control> controls) {
 		this.name = name;
 		this.controls = Collections.unmodifiableList(controls);
+		int manual = 0;
+		for (Control c : this.controls) {
+			if (c.manualReview) manual++;
+		}
+		this.manualReviewCount = manual;
+		List<Control> host = new java.util.ArrayList<>();
+		List<Control> vm = new java.util.ArrayList<>();
+		List<Control> vc = new java.util.ArrayList<>();
+		List<Control> dvs = new java.util.ArrayList<>();
+		List<Control> dvpg = new java.util.ArrayList<>();
+		List<Control> cluster = new java.util.ArrayList<>();
+		for (Control c : this.controls) {
+			if (c.isHostControl()) host.add(c);
+			else if (c.isVmControl()) vm.add(c);
+			else if (c.isVCenterControl()) vc.add(c);
+			else if (c.isDvsControl()) dvs.add(c);
+			else if (c.isDvpgControl()) dvpg.add(c);
+			else if (c.isClusterControl()) cluster.add(c);
+		}
+		this.hostSlice = Collections.unmodifiableList(host);
+		this.vmSlice = Collections.unmodifiableList(vm);
+		this.vCenterSlice = Collections.unmodifiableList(vc);
+		this.dvsSlice = Collections.unmodifiableList(dvs);
+		this.dvpgSlice = Collections.unmodifiableList(dvpg);
+		this.clusterSlice = Collections.unmodifiableList(cluster);
 	}
 
 	public List<Control> hostControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isHostControl()) result.add(c);
-		}
-		return result;
+		return hostSlice;
 	}
 
 	public List<Control> vmControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isVmControl()) result.add(c);
-		}
-		return result;
+		return vmSlice;
 	}
 
 	public List<Control> vCenterControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isVCenterControl()) result.add(c);
-		}
-		return result;
+		return vCenterSlice;
 	}
 
 	public List<Control> dvsControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isDvsControl()) result.add(c);
-		}
-		return result;
+		return dvsSlice;
 	}
 
 	public List<Control> dvpgControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isDvpgControl()) result.add(c);
-		}
-		return result;
+		return dvpgSlice;
 	}
 
 	public List<Control> clusterControls() {
-		List<Control> result = new java.util.ArrayList<>();
-		for (Control c : controls) {
-			if (c.isClusterControl()) result.add(c);
-		}
-		return result;
+		return clusterSlice;
 	}
 
 	/**
@@ -192,11 +207,27 @@ public final class BenchmarkProfile {
 		// Old "assessmentCommand" is dropped — the remediation/
 		// assessment text now lives in remediationText (single field).
 
+		// v3: true when the manual-review overlay demoted this control.
+		public final boolean manualReview;
+
 		public Control(String controlId, String priority, String resourceKind,
 				String adapterKind, String parameter, String parameterKind,
 				String valueType, String expectedValue, String title,
 				String descriptionText, String sourceRef,
 				String remediationText, String readRecipe) {
+			this(controlId, priority, resourceKind, adapterKind, parameter,
+					parameterKind, valueType, expectedValue, title,
+					descriptionText, sourceRef, remediationText, readRecipe,
+					false);
+		}
+
+		private Control(String controlId, String priority, String resourceKind,
+				String adapterKind, String parameter, String parameterKind,
+				String valueType, String expectedValue, String title,
+				String descriptionText, String sourceRef,
+				String remediationText, String readRecipe,
+				boolean manualReview) {
+			this.manualReview = manualReview;
 			this.controlId = controlId != null ? controlId : "";
 			this.priority = priority != null ? priority : "P2";
 			this.resourceKind = resourceKind != null ? resourceKind : "";
@@ -247,6 +278,22 @@ public final class BenchmarkProfile {
 
 		public boolean isEvaluable() {
 			return isEvaluableKind(parameterKind, readRecipe);
+		}
+
+		/**
+		 * v3: a copy of this control demoted to {@code manual_audit} (no
+		 * recipe), used for the bundled-profile "manual review" overlay
+		 * ({@code profiles/manual_review.csv}). Those controls carry a prose
+		 * expected value ("Site-Specific Log Server", "Consult your
+		 * organization's legal advisors ...") that no real read can equal,
+		 * so scoring them fails every object. Demoting them makes them
+		 * non-evaluable: never scored, never pushed, never alerted, and
+		 * never a pass either.
+		 */
+		public Control asManualReview() {
+			return new Control(controlId, priority, resourceKind, adapterKind,
+					parameter, "manual_audit", valueType, expectedValue, title,
+					descriptionText, sourceRef, remediationText, "", true);
 		}
 
 		/**

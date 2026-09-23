@@ -27,6 +27,17 @@ public final class ComplianceConfig {
 		this.allowInsecure = "true".equalsIgnoreCase(allowInsecure);
 	}
 
+	/**
+	 * v3: true when the instance selects the benchmark per object by
+	 * version ({@link BenchmarkSelector#AUTO}). A blank / absent stored value
+	 * stays on the pre-v3 fallback VMware_SCG_8.0 above, NOT Auto: an
+	 * existing instance keeps behaving exactly as it did until someone edits
+	 * it. New instances get Auto from the describe.xml default.
+	 */
+	public boolean isAuto() {
+		return BenchmarkSelector.AUTO.equals(benchmarkProfile);
+	}
+
 	public String baseUrl() {
 		return "https://" + vcenterHost;
 	}
