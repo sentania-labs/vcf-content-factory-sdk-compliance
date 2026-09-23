@@ -39,11 +39,48 @@ public final class ProfileSetTest {
 				T.check(c.manualReview, e.getKey() + " " + id + " flagged");
 			}
 		}
-		T.eq(22, rows, "overlay row count (design note list)");
+		T.eq(37, rows, "overlay rows: 22 prose + 15 standard-switch (build 70)");
 		int flagged = 0;
 		for (BenchmarkProfile p : all.values()) flagged += p.manualReviewCount;
-		T.eq(22, flagged, "every overlay row applied exactly once");
-		T.eq(22, loader.lastManualReviewApplied(), "loader diagnostic");
+		T.eq(37, flagged, "every overlay row applied exactly once");
+		T.eq(37, loader.lastManualReviewApplied(), "loader diagnostic");
+
+		// Build 70 (Codex P1 on PR #12): no control sourced from the ESX
+		// host (standard switch) may be scored on a distributed switch or
+		// portgroup, in any profile. The collector reads the DVS / DVPG
+		// config for these kinds, so a host-side standard-switch control
+		// evaluated there would report the DVS's value (a false pass).
+		for (BenchmarkProfile p : all.values()) {
+			for (BenchmarkProfile.Control c : p.controls) {
+				boolean dvKind = c.isDvsControl() || c.isDvpgControl();
+				if (!dvKind || !c.isEvaluable()) continue;
+				String ref = c.sourceRef;
+				boolean hostSourced = ref.contains(":esxi-")
+						|| ref.contains(":esx-");
+				boolean standardSwitch = c.controlId.contains("standard")
+						|| ref.toLowerCase().contains("standardswitch");
+				T.check(!hostSourced && !standardSwitch, p.name + " "
+						+ c.controlId + " (" + ref + ") is a host-side "
+						+ "control scored on a distributed object");
+			}
+		}
+		for (String prof : new String[] {"VMware_SCG_6.7", "VMware_SCG_7.0",
+				"VMware_SCG_8.0"}) {
+			for (String m : new String[] {"forged-transmit", "mac-changes",
+					"promiscuous-mode"}) {
+				String id = "vds.network-reject-" + m + "-standardswitch";
+				T.check(!find(all.get(prof).controls, id).isEvaluable(),
+						prof + " " + id + " not scored");
+			}
+		}
+		for (String prof : new String[] {"VMware_SCG_9.0", "VMware_SCG_9.1"}) {
+			for (String m : new String[] {"forged-transmit", "mac-changes",
+					"promiscuous-mode"}) {
+				String id = "vds.network-standard-reject-" + m;
+				T.check(!find(all.get(prof).controls, id).isEvaluable(),
+						prof + " " + id + " not scored");
+			}
+		}
 
 		// A demoted control stays evaluable in a profile that does not list
 		// it (overlay is per profile). esx.logs-remote: prose in 6.7/7.0/8.0.
@@ -74,9 +111,20 @@ public final class ProfileSetTest {
 		T.eq("Config.Etc.issue", find(all.get("VMware_SCG_7.0").controls,
 				"esx.etc-issue").parameter, "7.0 etc-issue key case");
 
-		// A missing overlay is an empty overlay, never an error.
 		T.check(BenchmarkLoader.parseManualReview(null).isEmpty(),
-				"null overlay");
+				"null overlay parses to empty");
+		// Build 70: a MISSING overlay file fails the bundled load (it now
+		// guards a false pass, not just a false fail).
+		java.nio.file.Path empty = Files.createTempDirectory("noOverlay");
+		try {
+			BenchmarkLoader.loadManualReview(empty.toString());
+			throw new AssertionError("missing overlay must fail the load");
+		} catch (RuntimeException e) {
+			T.check(String.valueOf(e.getMessage()).contains("false pass"),
+					"actionable message: " + e.getMessage());
+		} finally {
+			Files.deleteIfExists(empty);
+		}
 
 		System.out.println("ProfileSetTest: all assertions passed");
 	}

@@ -57,7 +57,7 @@ class GeneratorTest(unittest.TestCase):
         recs = [r for r in self.root.iter(NS + "Recommendation")
                 if (r.get("key") or "").startswith("vcfcf_compliance_ctl_")]
         self.assertEqual((len(syms), len(alerts), len(recs)), (n, n, n))
-        self.assertEqual(n, 144)
+        self.assertEqual(n, 138)   # build 70: 6 standard-switch controls removed
 
     def test_alert_shape(self):
         for a in self.root.iter(NS + "AlertDefinition"):
@@ -104,6 +104,18 @@ class GeneratorTest(unittest.TestCase):
         for k, v in self.props.items():
             if int(k.split(".")[0]) >= gen.NAMEKEY_BASE:
                 v.encode("ascii")
+
+    def test_standard_switch_controls_not_alerted(self):
+        # Build 70 (Codex P1): host-side standard-switch controls were read
+        # from the distributed switch; they are no longer scored or alerted.
+        ids = {c["control_id"] for c in self.controls}
+        for cid in ("vds.network-reject-forged-transmit-standardswitch",
+                    "vds.network-reject-mac-changes-standardswitch",
+                    "vds.network-reject-promiscuous-mode-standardswitch",
+                    "vds.network-standard-reject-forged-transmit",
+                    "vds.network-standard-reject-mac-changes",
+                    "vds.network-standard-reject-promiscuous-mode"):
+            self.assertNotIn(cid, ids)
 
     def test_manual_review_only_controls_not_alerted(self):
         ids = {c["control_id"] for c in self.controls}

@@ -72,9 +72,12 @@ Bundled profiles ship with the pak under `profiles/canonical/`:
 All derive from vmware/vcf-security-and-compliance-guidelines (6.7 and
 7.0 from its history; source CSVs kept beside them under `profiles/`;
 the canonical form is produced by the normalizer pipeline, see
-CANONICAL_SCHEMA.md). `profiles/manual_review.csv` lists controls whose
-SCG expected value is prose (site-specific text); those are reported for
-manual review and never scored.
+CANONICAL_SCHEMA.md). `profiles/manual_review.csv` lists controls that
+are reported for manual review and never scored: those whose SCG expected
+value is prose (site-specific text), and (build 70) the standard-switch
+security controls, which live on each ESX host's vSwitches and were
+wrongly read from the distributed switch. The file is required: a pak
+without it fails to load rather than scoring those controls.
 
 Custom profiles must follow the canonical CSV schema
 (CANONICAL_SCHEMA.md). Upload the CSV to the VCF Ops appliance and

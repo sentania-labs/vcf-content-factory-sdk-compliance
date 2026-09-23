@@ -204,10 +204,14 @@ public final class BenchmarkLoader {
 
 	/**
 	 * Read {@code <confDir>/profiles/manual_review.csv} (classpath fallback
-	 * {@code /profiles/manual_review.csv}). Absent file = empty overlay:
-	 * the failure mode of a missing overlay is a false FAIL on the prose
-	 * controls, never a false pass, and the adapter logs the applied count
-	 * every load so a missing file is visible.
+	 * {@code /profiles/manual_review.csv}).
+	 *
+	 * <p>Build 70: a missing overlay now FAILS the load (the adapter goes
+	 * Down with this message). The overlay no longer only demotes prose
+	 * expected values (whose failure mode was a false fail); it also demotes
+	 * the host-side standard-switch controls that would otherwise be read
+	 * from the distributed switch, and scoring those is a false PASS. A
+	 * broken install must be visible, never silently less safe.
 	 */
 	static Map<String, java.util.Set<String>> loadManualReview(String confDir) {
 		List<String> lines = null;
@@ -221,6 +225,14 @@ public final class BenchmarkLoader {
 			InputStream is = BenchmarkLoader.class.getResourceAsStream(
 					"/profiles/" + MANUAL_REVIEW_FILE);
 			if (is != null) lines = readStreamStatic(is);
+		}
+		if (lines == null) {
+			throw new RuntimeException("profiles/" + MANUAL_REVIEW_FILE
+					+ " not found (looked under confDir=" + confDir
+					+ " and the classpath). It is required for the bundled "
+					+ "profiles: without it, standard-switch controls would "
+					+ "be scored from the distributed switch (false pass). "
+					+ "Reinstall the pak.");
 		}
 		return parseManualReview(lines);
 	}

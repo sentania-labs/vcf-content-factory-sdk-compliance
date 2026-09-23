@@ -173,6 +173,27 @@ public final class ComplianceDecisionsTest {
 				java.util.TreeSet<>(), ComplianceDecisions.URL_BUDGET).isEmpty(),
 				"nothing to ask");
 
+		// Build 70: overlay-demoted controls stay cleanup candidates, so a
+		// Compliant = 0 pushed by builds 57 to 69 for a standard-switch
+		// control on a DVS is retired (-1), never left open.
+		Set<String> dvsCand = ComplianceDecisions.candidateControlIds(
+				BenchmarkSelector.Kind.VDS, all.get("VMware_SCG_9.1"),
+				all.values());
+		for (String id : new String[] {
+				"vds.network-reject-forged-transmit-standardswitch",
+				"vds.network-reject-mac-changes-standardswitch",
+				"vds.network-reject-promiscuous-mode-standardswitch",
+				"vds.network-standard-reject-forged-transmit",
+				"vds.network-standard-reject-mac-changes",
+				"vds.network-standard-reject-promiscuous-mode"}) {
+			T.check(dvsCand.contains(id), "cleanup candidate on vDS: " + id);
+			Map<String, Double> old = new HashMap<>();
+			old.put(id, 0.0);
+			T.eq(java.util.Collections.singleton(id),
+					ComplianceDecisions.staleZeroControls(dvsCand, old),
+					"old 0 for " + id + " flips to -1");
+		}
+
 		// ---- benchmark memory (B2, N3): only restart / edit wipe it
 		LastBenchmarkMemory mem = new LastBenchmarkMemory();
 		String key = LastBenchmarkMemory.key(HOST, "host-1");

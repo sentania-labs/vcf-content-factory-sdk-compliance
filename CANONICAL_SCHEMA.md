@@ -30,7 +30,7 @@ profiles/canonical/                        # canonical CSVs (loaded by adapter)
   scg_8.0.csv
   scg_9.0.csv
   scg_9.1.csv
-profiles/manual_review.csv                 # per-profile manual-review overlay (build 57)
+profiles/manual_review.csv                 # per-profile manual-review overlay (build 57; required since build 70)
 ```
 
 Source CSVs stay in `profiles/` so future updates can be diffed and
@@ -445,20 +445,35 @@ driver as well; the 7.0 driver imports its shared vm.virtual-hardware
 caveat. All drivers reproduce the committed canonical CSVs byte for
 byte.)
 
-## Manual-review overlay (build 57)
+## Manual-review overlay (build 57, extended in build 70)
 
 `profiles/manual_review.csv` (columns `profile,control_id,reason`) lists
-bundled-profile controls whose SCG `expected_value` is prose rather than
-a value ("Site-Specific Log Server", "Consult your organization's legal
-advisors for text ..."). The adapter can read those settings, but no
-real value can equal the prose, so scoring them fails every object. The
-loader demotes each listed control, in the listed profile only, to
+two groups of bundled-profile controls:
+
+- Controls whose SCG `expected_value` is prose rather than a value
+  ("Site-Specific Log Server", "Consult your organization's legal advisors
+  for text ..."). The adapter can read those settings, but no real value
+  can equal the prose, so scoring them fails every object.
+- (Build 70) The standard-switch security controls
+  (`vds.network-reject-{forged-transmit,mac-changes,promiscuous-mode}-standardswitch`
+  in 6.7 / 7.0 / 8.0, `vds.network-standard-reject-{forged-transmit,mac-changes,promiscuous-mode}`
+  in 9.0 / 9.1). Their SCG source is the ESX host (standard vSwitch), but
+  the normalizers map them to `DistributedVirtualSwitch`, so the adapter
+  read `config.defaultPortConfig` from each distributed switch and could
+  report a pass while the hosts' standard switches were insecure. They
+  stay manual review until a host-side standard-switch reader exists.
+
+The loader demotes each listed control, in the listed profile only, to
 `manual_audit` (no recipe): not evaluable, never pushed, never alerted,
 never a pass. The overlay is applied to bundled profiles, never to a
 Custom profile, and is kept outside the canonical CSVs so regenerating
-a profile cannot silently undo it. A missing overlay file is treated as
-empty (its failure mode is a false fail, never a false pass); the
-adapter logs how many controls it demoted on every load.
+a profile cannot silently undo it. Since build 70 a missing overlay file
+FAILS the bundled-profile load (the adapter goes Down with an actionable
+message): without it the standard-switch controls would be scored (a
+false pass). The adapter logs how many controls it demoted on every load.
+Controls the overlay demotes stay candidates for the stale-control
+cleanup, so a `Compliant = 0` pushed for them by an earlier build is set
+to -1 and its alert cancels.
 
 ## Per-control compliance alerts (build 57)
 
