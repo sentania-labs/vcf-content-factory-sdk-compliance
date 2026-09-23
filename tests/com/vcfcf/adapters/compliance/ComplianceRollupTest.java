@@ -8,54 +8,69 @@ public final class ComplianceRollupTest {
 	private static final String P = ComplianceRollup.PREFIX;
 
 	public static void main(String[] args) {
+		// Build 63 score rule: unreadable counts as failing.
+		T.near(90, ControlEvaluator.score(9, 1, 0), "9/10");
+		T.near(80, ControlEvaluator.score(8, 0, 2),
+				"partial unreadable lowers the score (8 of 10 attempted)");
+		T.near(0, ControlEvaluator.score(0, 0, 40), "all unreadable scores 0");
+		T.near(80, ControlEvaluator.score(4, 0, 1), "4 of 5");
+
 		ComplianceRollup r = new ComplianceRollup();
-		// Hosts: 90 (fails), 100 (clean), unreadable-with-last-known 80,
-		// unreadable-never-read, and one no-benchmark (ESXi 10.0).
-		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 10, 1, 0, 90.0);
-		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0, 100.0);
-		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40, 100.0);
-		r.recordStaleScore(BenchmarkSelector.Kind.HOST, 80.0);
-		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_7.0", 0, 0, 40, 100.0);
+		// Hosts: 90 (fails), 100 (clean), all-unreadable (0), partially
+		// unreadable (80), and one no-benchmark (ESXi 10.0).
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 10, 1, 0,
+				ControlEvaluator.score(9, 1, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0,
+				ControlEvaluator.score(10, 0, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
+				ControlEvaluator.score(0, 0, 40));
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_7.0", 8, 0, 2,
+				ControlEvaluator.score(8, 0, 2));
 		r.recordNoBenchmark(BenchmarkSelector.Kind.HOST);
-		// VMs: one clean, one with an unreadable control but all readable
-		// ones passing (non-compliant: unreadable is not compliant).
-		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 0, 100.0);
-		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 1, 100.0);
-		// vCenter scored 50; a non-vSAN cluster (benchmark, nothing to score).
-		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 2, 1, 0, 50.0);
-		r.recordEvaluated(BenchmarkSelector.Kind.CLUSTER, "SCG_9.1", 0, 0, 0, 100.0);
+		// VMs: one clean, one with an unreadable control.
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 0,
+				ControlEvaluator.score(4, 0, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 1,
+				ControlEvaluator.score(4, 0, 1));
+		// vCenter scored 50; a non-vSAN cluster (nothing attempted).
+		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 2, 1, 0,
+				ControlEvaluator.score(1, 1, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.CLUSTER, "SCG_9.1", 0, 0, 0,
+				ControlEvaluator.score(0, 0, 0));
 		// Portgroup with no benchmark; vDS nothing at all.
 		r.recordNoBenchmark(BenchmarkSelector.Kind.PORTGROUP);
 
 		Map<String, Double> s = r.toStats();
 
-		T.near(3, s.get(P + "Host|scored"), "host scored (2 live + 1 stale)");
-		T.near(270, s.get(P + "Host|score_sum"), "host sum 90+100+80");
-		T.near(90, s.get(P + "Host|avg_score"), "host avg");
+		T.near(4, s.get(P + "Host|scored"),
+				"all-unreadable host is scored (0), not skipped");
+		T.near(270, s.get(P + "Host|score_sum"), "host sum 90+100+0+80");
+		T.near(67.5, s.get(P + "Host|avg_score"), "host avg");
 		T.near(3, s.get(P + "Host|non_compliant"),
-				"host non-compliant: 1 fail + 2 unreadable");
+				"host non-compliant: fail + all-unreadable + partial");
 		T.near(1, s.get(P + "Host|no_benchmark"), "host no benchmark");
-		T.near(1, s.get(P + "Host|scored_stale"), "host stale");
+		T.check(!s.containsKey(P + "Host|scored_stale"),
+				"scored_stale retired in build 63");
 
 		T.near(2, s.get(P + "VM|scored"), "vm scored");
-		T.near(1, s.get(P + "VM|non_compliant"), "vm unreadable-only counts");
-		T.near(100, s.get(P + "VM|avg_score"), "vm avg");
+		T.near(1, s.get(P + "VM|non_compliant"), "vm unreadable counts");
+		T.near(90, s.get(P + "VM|avg_score"), "vm avg (100 + 80) / 2");
 
 		T.near(1, s.get(P + "vCenter|scored"), "vc scored");
 		T.near(50, s.get(P + "vCenter|avg_score"), "vc avg");
 		T.near(1, s.get(P + "vCenter|non_compliant"), "vc non-compliant");
 
-		T.near(0, s.get(P + "Cluster|scored"), "cluster not scored");
+		T.near(0, s.get(P + "Cluster|scored"), "nothing attempted: not scored");
 		T.near(0, s.get(P + "Cluster|non_compliant"), "cluster not non-compl");
 		T.check(!s.containsKey(P + "Cluster|avg_score"),
-				"no avg without a score (no sentinel)");
+				"no avg without a score (no placeholder)");
 		T.check(!s.containsKey(P + "vDS|avg_score"), "vDS no avg");
 		T.near(0, s.get(P + "vDS|scored"), "vDS zero");
 		T.near(1, s.get(P + "Portgroup|no_benchmark"), "pg no benchmark");
 
-		T.near(6, s.get(P + "All|scored"), "all scored 3+2+1");
-		T.near(520, s.get(P + "All|score_sum"), "all sum 270+200+50");
-		T.near(520.0 / 6, s.get(P + "All|avg_score"), "all weighted avg");
+		T.near(7, s.get(P + "All|scored"), "all scored 4+2+1");
+		T.near(500, s.get(P + "All|score_sum"), "all sum 270+180+50");
+		T.near(500.0 / 7, s.get(P + "All|avg_score"), "all weighted avg");
 		T.near(5, s.get(P + "All|non_compliant"), "all non-compliant 3+1+1");
 		T.near(2, s.get(P + "All|no_benchmark"), "all no benchmark");
 
@@ -91,13 +106,13 @@ public final class ComplianceRollupTest {
 		// non-compliant and in the unknown bucket, never no_benchmark.
 		ComplianceRollup u = new ComplianceRollup();
 		u.recordVersionUnreadable(BenchmarkSelector.Kind.HOST);
-		u.recordStaleScore(BenchmarkSelector.Kind.HOST, 70.0);
 		Map<String, Double> us = u.toStats();
 		T.near(1, us.get(P + "Host|non_compliant"), "unreadable version nc");
 		T.near(0, us.get(P + "Host|no_benchmark"), "not no_benchmark");
 		T.near(1, us.get(P + "Benchmark|unknown|objects"), "unknown bucket");
 		T.near(0, us.get(P + "Benchmark|none|objects"), "not none bucket");
-		T.near(70, us.get(P + "Host|avg_score"), "last-known score applies");
+		T.check(!us.containsKey(P + "Host|avg_score"),
+				"version-unreadable is not scored (unchanged in build 63)");
 
 		T.check(ComplianceRollup.isNonCompliant(0, 1), "unreadable -> nc");
 		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");

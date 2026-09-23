@@ -112,12 +112,14 @@ for:
 - **vCenter SOAP fails with a TLS validation error** — the vCenter
   certificate is not trusted. Import it into the platform trust store, or
   set `allowInsecure=true`. See the TLS section.
-- **A host shows no compliance score / "no data"** — the host was
-  unreadable this cycle (e.g. disconnected or not responding). This is the
-  honest no-data state, not a failure to push; the adapter never
-  publishes a sentinel score for an unreadable host. Check host
-  connection state in vCenter.
-- **Fleet `hosts_scored_stale` is non-zero** — some hosts in the fleet
-  average were scored from a last-known cached value rather than a live
-  read this cycle. Expected transiently after a collector restart (the
-  cache re-warms) or while hosts are intermittently unreachable.
+- **"Compliance data not collected" alert, or a host scoring 0** (build
+  63): the adapter could not read some or all of the object's settings,
+  and unreadable settings count as failing. A disconnected or
+  not-responding host scores 0. Check the object's connection state in
+  vCenter, the adapter account's read permissions, and the adapter log for
+  read errors naming the object; `unreadable_count` and the controls whose
+  `Compliant` is -1 with Actual "(unreadable)" show which settings. The
+  alert clears on the first cycle in which everything is read.
+- **An object shows no compliance score / "no data"**: nothing was
+  attempted on it (its version has no bundled SCG, `no_benchmark` = 1, or
+  a non-vSAN cluster with no evaluable controls).

@@ -111,9 +111,12 @@ public final class ComplianceDecisions {
 	// ----- per-object payloads -------------------------------------------
 
 	/**
-	 * Stats for an evaluated object. Review W2: pass_count / fail_count
-	 * are pushed as 0 when nothing was scored, so a previous cycle's
-	 * counters never linger; score stays omitted (never a sentinel).
+	 * Stats for an evaluated object. Score (build 63, owner decision):
+	 * unreadable controls count as failing
+	 * ({@link ControlEvaluator#score}); pushed whenever at least one control
+	 * was attempted, so an all-unreadable object reads 0. Only with nothing
+	 * attempted is score omitted (never a stand-in). pass_count /
+	 * fail_count / unreadable_count are always pushed and stay separate.
 	 */
 	public static Map<String, Double> complianceStats(
 			ControlEvaluator.ComplianceResult cr) {
@@ -123,7 +126,7 @@ public final class ComplianceDecisions {
 					? ComplianceAdapterConstants.COMPLIANT_NOT_EVALUATED
 					: (ctrl.compliant ? 1.0 : 0.0));
 		}
-		if (cr.totalCount > 0) {
+		if (cr.attempted() > 0) {
 			stats.put(K + "score", cr.score);
 		}
 		stats.put(K + "pass_count", (double) cr.passCount);

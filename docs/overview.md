@@ -10,7 +10,8 @@ list to find the data:
 | VMWARE object | What the pack pushes onto it |
 |---|---|
 | HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`. |
-| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, `Rollup\|Host\|scored_stale`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
+| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
+| The same six kinds | One "Compliance data not collected (<kind>)" alert per kind (6, type Compliance, severity Immediate), raised when `unreadable_count` > 0, with a recommendation on what unreadable means and what to check. |
 | The same six kinds | 144 compliance alerts (type Compliance, subType 21), one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation. Plus the Host Compliance Score Degraded alert on HostSystem. |
 
 The full key list, with when each key is pushed, is in the repo
@@ -114,17 +115,20 @@ collection continues; compliance is never failed over a stitch error.
 
 ## Notable Behaviors
 
-- **Unreadable is never flattered.** A host or control the adapter could
-  not read is never folded into a passing score. A channel that vanishes
-  (e.g. a disconnected host whose OptionManager is null) marks the whole
-  host's controls UNREADABLE — counted, excluded from the score numerator
-  and denominator — rather than producing a flattering partial score from
-  the handful of controls that happened to read. A `totalCount == 0` object
-  pushes no `score` (never a stand-in 100 or 0), but VCF Ops keeps showing
-  the last score it had, and the score symptoms keep evaluating that last
-  value. So read `score` together with `total_count` (0 when nothing was
-  scored) and `no_benchmark`. The counters are pushed every cycle, zeroed
-  when nothing was scored, with one exception: when the version that
+- **Unreadable counts as failing, and the adapter says so.** (Build 63,
+  owner decision.) A setting the adapter could not read (connectivity,
+  permissions, or a read method not supported on this version) counts
+  against the object's score like a failure:
+  score = pass / (pass + fail + unreadable). A disconnected host, where
+  every setting is unreadable, scores 0. It is not reported as a
+  violation: `fail_count` excludes it, its `Compliant` is -1 so no
+  per-control alert fires, and `unreadable_count` counts it separately.
+  Instead the object raises "Compliance data not collected (<kind>)"
+  (severity Immediate), whose recommendation says what to check. `score`
+  is not pushed only when nothing was attempted (no benchmark, non-vSAN
+  cluster); VCF Ops then keeps its last value, so read `score` with
+  `total_count`, `unreadable_count` and `no_benchmark`. The counters are
+  pushed every cycle, with one exception: when the version that
   governs the object's SCG cannot be read (and there is no previous SCG to
   fall back on), `unreadable_count` is NOT pushed, because the adapter does
   not know which SCG's controls apply; its last value stays.
@@ -144,19 +148,11 @@ collection continues; compliance is never failed over a stitch error.
   `unknown` benchmark bucket. Only a version the adapter read, with no
   bundled SCG, is "no benchmark".
 
-- **Unreadable counts as non-compliant, never as failing a control.**
-  An object with any unreadable control has `non_compliant` = 1, but the
-  unreadable control itself reports `Compliant` = -1, so its per-control
-  alert (which fires on 0) does not hand out a remediation runbook for a
-  setting the adapter could not read.
-
-- **Stale host scores are visible.** When a host is unreadable this cycle
-  but has a last-known score, that score is folded into its vCenter's
-  `Rollup|Host` average so an unreadable host does not silently shrink the
-  denominator, and the count of such hosts is published every cycle as
-  `Rollup|Host|scored_stale`. Hosts never read since process start stay
-  excluded (the adapter never invents an unobserved score). The cache is
-  in-memory and resets on collector restart.
+- **Unreadable objects are non-compliant and in the averages.** An object
+  with any unreadable control has `non_compliant` = 1 and its real score
+  (0 when nothing was read) in its vCenter's rollup averages. The pre-63
+  "last-known score" carry-forward for unreadable hosts and the
+  `Rollup|Host|scored_stale` key are retired.
 
 - **Stale per-control results clean themselves up, every cycle.** VCF Ops
   keeps a metric's last value, so a control that failed (`Compliant` = 0)

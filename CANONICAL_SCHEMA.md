@@ -148,21 +148,25 @@ profiles via the `_READ_RECIPE_BY_PARAMETER` map in
 - **unreadable** — `read_recipe` present and evaluable, but the read
   resolved to null / the style couldn't extract / the style is unknown.
 
-Unreadable controls are **excluded from pass, fail, and the score
-denominator** — they are not failures (we don't know), and per the
-cardinal rule they are **never compliant / never a sentinel pass**. A
-per-resource `VCF-CF Compliance|unreadable_count` stat surfaces them as a
-*profile/coverage* signal. Since build 57 an object with any unreadable
+Unreadable controls are **excluded from pass and fail** (they are not
+evaluated failures) and per the cardinal rule they are **never compliant /
+never a sentinel pass**. **Since build 63 (owner decision: "If unreadable =
+not collected/etc, let's count it as failing") they count against the
+score**: score = pass / (pass + fail + unreadable) * 100, so an object
+whose every attempted control is unreadable scores 0 and is pushed and
+averaged. A per-resource `VCF-CF Compliance|unreadable_count` stat carries
+them separately from `fail_count`, and a per-kind "Compliance data not
+collected" alert fires on `unreadable_count > 0`. Since build 57 an object with any unreadable
 control also has `VCF-CF Compliance|non_compliant` = 1 (unreadable is not
 compliant), while the unreadable control's own
 `VCF-CF Compliance|<control_id>|Compliant` is **-1** (not evaluated), not
 0, so its per-control compliance alert (which fires on 0) never hands
 out a remediation runbook for a setting the adapter could not read. (The
 world `Summary|total_unreadable_controls` aggregate was retired in build
-57 with the rest of the shared-world Summary numbers.) The
-zero-divisor contract is unchanged: no evaluable controls →
-score=100.0 with `total_count=0`, and callers refuse to fold a
-`total_count==0` result into rollups.
+57 with the rest of the shared-world Summary numbers.) Zero-divisor
+contract: only when NOTHING was attempted (no evaluable controls, and none
+unreadable) is the score the placeholder 100.0; it is never pushed and
+never folded into rollups.
 
 ### `control_id` format
 
@@ -298,8 +302,9 @@ value" — e.g. `ScratchConfig.CurrentScratchLocation` must **not** equal
 read is **never** folded into a pass:
 
 - For `vim_property` / `esxcli`, an unreadable read is the UNREADABLE
-  sentinel — excluded from pass/fail/total and counted in
-  `unreadable_count` — and is short-circuited *before* the mode helpers
+  sentinel (excluded from pass/fail/total, counted in `unreadable_count`,
+  and since build 63 counted against the score), and is short-circuited
+  *before* the mode helpers
   run. (A `string_list_join` of an empty list already resolves to null →
   UNREADABLE upstream, so an empty NTP list is a coverage gap, never a
   `(non-empty)` pass.)

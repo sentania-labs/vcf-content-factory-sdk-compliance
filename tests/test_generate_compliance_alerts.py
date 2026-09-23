@@ -115,6 +115,42 @@ class GeneratorTest(unittest.TestCase):
         # Scored again in build 57 (vmx minimum).
         self.assertIn("vm.virtual-hardware", ids)
 
+    def test_collection_alerts(self):
+        # Build 63: one "Compliance data not collected" alert per kind.
+        ids = gen.collection_ids()
+        self.assertEqual(len(ids), 6)
+        alerts = {a.get("id"): a for a in self.root.iter(NS + "AlertDefinition")}
+        syms = {s.get("id"): s for s in self.root.iter(NS + "SymptomDefinition")}
+        ops_kinds = set()
+        for _kind, ops_kind, sid, aid, label in ids:
+            self.assertTrue(aid.startswith("vcfcf_compliance_collection_"))
+            self.assertFalse(aid.startswith("vcfcf_compliance_ctl_"))
+            a = alerts[aid]
+            self.assertEqual((a.get("type"), a.get("subType")), ("15", "21"))
+            self.assertEqual(a.get("resourceKind"), ops_kind)
+            ops_kinds.add(ops_kind)
+            self.assertEqual(self.props[a.get("nameKey")],
+                             f"Compliance data not collected ({label})")
+            rec = a.find(NS + "State/" + NS + "Recommendations/"
+                         + NS + "Recommendation")
+            self.assertEqual(rec.get("ref"), gen.COLLECTION_REC_ID)
+            sym = syms[sid]
+            state = sym.find(NS + "State")
+            self.assertEqual(state.get("severity"), "Immediate")
+            cond = state.find(NS + "Condition")
+            self.assertEqual((cond.get("type"), cond.get("key"),
+                              cond.get("operator"), cond.get("value")),
+                             ("metric", "VCF-CF Compliance|unreadable_count",
+                              ">", "0"))
+        self.assertEqual(ops_kinds, OPS_KINDS)
+        recs = [r for r in self.root.iter(NS + "Recommendation")
+                if r.get("key") == gen.COLLECTION_REC_ID]
+        self.assertEqual(len(recs), 1)
+        text = self.props[recs[0].find(NS + "Description").get("nameKey")]
+        for needle in ("unreadable_count", "-1", "permission", "disconnected",
+                       "not supported"):
+            self.assertIn(needle, text)
+
     def test_severity_from_priority(self):
         for c in self.controls:
             self.assertIn(c["priority"], gen.SEVERITY)

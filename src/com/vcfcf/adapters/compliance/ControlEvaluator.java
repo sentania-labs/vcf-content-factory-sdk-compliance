@@ -60,7 +60,10 @@ public final class ControlEvaluator {
 			.compile("(?i)^vmx-(\\d+)$");
 
 	/**
-	 * Sentinel value the {@code VSphereClient} recipe reader places in
+	 * (Build 63: unreadable controls now count against the score, see
+	 * {@link #score}; they still never pass and are still not "fail".)
+	 *
+	 * <p>Sentinel value the {@code VSphereClient} recipe reader places in
 	 * the property-value map when a control declared a {@code read_recipe}
 	 * but the read produced nothing (null / style couldn't extract /
 	 * unknown style). Mirrors {@code VSphereClient.UNREADABLE}; compared
@@ -199,7 +202,7 @@ public final class ControlEvaluator {
 		}
 
 		int total = pass + fail;
-		double score = total > 0 ? ((double) pass / total) * 100.0 : 100.0;
+		double score = score(pass, fail, 0);
 
 		// advanced_setting controls have no unreadable outcome: an absent
 		// key is handled by the allowsUndefined / requiresAbsence
@@ -254,11 +257,11 @@ public final class ControlEvaluator {
 					true
 			));
 		}
-		// total = 0 (nothing scored), score=100.0 zero-divisor sentinel — the
-		// caller refuses to fold a totalCount=0 result into a fleet average,
-		// and unreadableCount carries the loud coverage-gap signal.
-		return new ComplianceResult(resourceName, 0, 0, 0, unreadable, 100.0,
-				results);
+		// Build 63 (owner decision): every attempted control is unreadable,
+		// so nothing was collected and the score is 0 (see score());
+		// unreadableCount carries the count, the collection alert fires.
+		return new ComplianceResult(resourceName, 0, 0, 0, unreadable,
+				score(0, 0, unreadable), results);
 	}
 
 	/**
@@ -419,7 +422,7 @@ public final class ControlEvaluator {
 		}
 
 		int total = pass + fail;
-		double score = total > 0 ? ((double) pass / total) * 100.0 : 100.0;
+		double score = score(pass, fail, unreadable);
 
 		return new ComplianceResult(resourceName, pass, fail, total,
 				unreadable, score, results);
@@ -642,6 +645,25 @@ public final class ControlEvaluator {
 		return s;
 	}
 
+	/**
+	 * The compliance score (build 63, owner decision 2026-09-23: "If
+	 * unreadable = not collected/etc, let's count it as failing").
+	 *
+	 * <pre>score = pass / (pass + fail + unreadable) * 100</pre>
+	 *
+	 * An unreadable control counts against the score like a failure, but
+	 * {@code fail_count} stays the count of evaluated failures and
+	 * {@code unreadable_count} stays separate, so the UI can show both. An
+	 * object whose every attempted control is unreadable scores 0 (nothing
+	 * was collected). Only when NOTHING was attempted
+	 * ({@link ComplianceResult#attempted()} == 0) is the value the
+	 * zero-divisor placeholder 100.0, which is never pushed or rolled up.
+	 */
+	public static double score(int pass, int fail, int unreadable) {
+		int attempted = pass + fail + unreadable;
+		return attempted > 0 ? ((double) pass / attempted) * 100.0 : 100.0;
+	}
+
 	public static final class ComplianceResult {
 		public final String hostname;
 		public final int passCount;
@@ -664,6 +686,14 @@ public final class ControlEvaluator {
 			this.unreadableCount = unreadableCount;
 			this.score = score;
 			this.controlResults = controlResults;
+		}
+
+		/**
+		 * Controls attempted: evaluated (pass + fail) plus unreadable. The
+		 * score is pushed and rolled up only when this is &gt; 0 (build 63).
+		 */
+		public int attempted() {
+			return totalCount + unreadableCount;
 		}
 	}
 
