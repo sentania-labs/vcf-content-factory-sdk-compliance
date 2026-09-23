@@ -265,7 +265,6 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_length"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vc_vpxuser_rotation"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_nioc"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_reset_port"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_netflow_usage"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_port_mirroring"

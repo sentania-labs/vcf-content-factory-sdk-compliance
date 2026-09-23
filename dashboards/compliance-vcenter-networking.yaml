@@ -91,7 +91,6 @@ widgets:
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_managed_disk_claim"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_cluster_object_checksum"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_nioc"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_reset_port"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_netflow_usage"
         - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vds_network_restrict_port_mirroring"
