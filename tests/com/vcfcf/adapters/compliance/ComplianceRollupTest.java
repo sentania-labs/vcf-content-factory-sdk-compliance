@@ -67,6 +67,7 @@ public final class ComplianceRollupTest {
 		T.near(2, s.get(P + "Benchmark|none|objects"), "none objects");
 		T.check(!s.containsKey(P + "Benchmark|Custom|objects"),
 				"Custom only when used");
+		T.near(0, s.get(P + "Benchmark|unknown|objects"), "unknown pushed as 0");
 
 		// Benchmark buckets add up to every object recorded.
 		double objects = 0;
@@ -85,6 +86,18 @@ public final class ComplianceRollupTest {
 		c.recordEvaluated(BenchmarkSelector.Kind.HOST,
 				BenchmarkSelector.bucketOf("Custom"), 1, 0, 0, 100.0);
 		T.near(1, c.toStats().get(P + "Benchmark|Custom|objects"), "custom");
+
+		// Review B2: version unreadable (no previous benchmark) is
+		// non-compliant and in the unknown bucket, never no_benchmark.
+		ComplianceRollup u = new ComplianceRollup();
+		u.recordVersionUnreadable(BenchmarkSelector.Kind.HOST);
+		u.recordStaleScore(BenchmarkSelector.Kind.HOST, 70.0);
+		Map<String, Double> us = u.toStats();
+		T.near(1, us.get(P + "Host|non_compliant"), "unreadable version nc");
+		T.near(0, us.get(P + "Host|no_benchmark"), "not no_benchmark");
+		T.near(1, us.get(P + "Benchmark|unknown|objects"), "unknown bucket");
+		T.near(0, us.get(P + "Benchmark|none|objects"), "not none bucket");
+		T.near(70, us.get(P + "Host|avg_score"), "last-known score applies");
 
 		T.check(ComplianceRollup.isNonCompliant(0, 1), "unreadable -> nc");
 		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");

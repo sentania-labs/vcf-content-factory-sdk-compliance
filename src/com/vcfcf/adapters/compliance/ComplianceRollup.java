@@ -24,9 +24,11 @@ import java.util.Map;
  * VCF-CF Compliance|Rollup|Host|scored_stale     hosts scored from their last-known score
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
- * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1 and none
- * (always pushed, 0 when unused) plus Custom when a custom profile is in
- * use.
+ * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
+ * unknown (always pushed, 0 when unused) plus Custom when a custom profile
+ * is in use. {@code unknown} counts objects whose governing version could
+ * not be read and that had no previous benchmark to fall back on (build 58);
+ * they are non-compliant (unreadable), never no_benchmark.
  *
  * <p>Cardinal-rule discipline: an object with {@code total_count == 0}
  * (nothing evaluable, or everything unreadable) never contributes a score.
@@ -45,7 +47,7 @@ public final class ComplianceRollup {
 	/** Benchmark buckets always pushed (0 when unused), in key order. */
 	public static final String[] FIXED_BUCKETS = {
 			"SCG_6.7", "SCG_7.0", "SCG_8.0", "SCG_9.0", "SCG_9.1",
-			BenchmarkSelector.BUCKET_NONE
+			BenchmarkSelector.BUCKET_NONE, BenchmarkSelector.BUCKET_UNKNOWN
 	};
 
 	private static final class Tally {
@@ -78,6 +80,18 @@ public final class ComplianceRollup {
 	public void recordNoBenchmark(BenchmarkSelector.Kind kind) {
 		byKind.get(kind).noBenchmark++;
 		bump(BenchmarkSelector.BUCKET_NONE);
+	}
+
+	/**
+	 * An object whose governing version could not be read and that had no
+	 * benchmark to fall back on (build 58, review B2). Unreadable is not
+	 * compliant: counted as non-compliant and in the {@code unknown}
+	 * bucket, never as no_benchmark, never scored. (A host in this state
+	 * can still contribute a last-known score via recordStaleScore.)
+	 */
+	public void recordVersionUnreadable(BenchmarkSelector.Kind kind) {
+		byKind.get(kind).nonCompliant++;
+		bump(BenchmarkSelector.BUCKET_UNKNOWN);
 	}
 
 	/**

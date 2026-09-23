@@ -1,5 +1,21 @@
 # Overview — VCF Content Factory Compliance
 
+## Stitched onto VMWARE resources (start here)
+
+Almost everything this pack produces lives on objects the VMWARE (vSphere)
+adapter already owns, not on the pack's own object. The generated
+inventory tree shows only the pack's own `ComplianceWorld`, so use this
+list to find the data:
+
+| VMWARE object | What the pack pushes onto it |
+|---|---|
+| HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`. |
+| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, `Rollup\|Host\|scored_stale`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
+| The same six kinds | 144 compliance alerts (type Compliance, subType 21), one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation. Plus the Host Compliance Score Degraded alert on HostSystem. |
+
+The full key list, with when each key is pushed, is in the repo
+`README.md` under "Keys pushed onto VMWARE resources".
+
 ## What's in the Pack
 
 VCF Content Factory Compliance is a Tier 2 (Java SDK) management pack that
@@ -81,9 +97,26 @@ collection continues; compliance is never failed over a stitch error.
   (e.g. a disconnected host whose OptionManager is null) marks the whole
   host's controls UNREADABLE — counted, excluded from the score numerator
   and denominator — rather than producing a flattering partial score from
-  the handful of controls that happened to read. A `totalCount == 0` host
-  pushes no `score` sentinel at all (absent, not a green 100), so per-host
-  compliance symptoms see "no data" instead of a false pass.
+  the handful of controls that happened to read. A `totalCount == 0` object
+  pushes no `score` (never a stand-in 100 or 0), but VCF Ops keeps showing
+  the last score it had, and the score symptoms keep evaluating that last
+  value. So read `score` together with `total_count` (0 when nothing was
+  scored) and `no_benchmark`; the counters are always pushed, zeroed when
+  nothing was scored, so they are never stale.
+
+- **Per-vCenter averages when nothing was scored.** `Rollup|<K>|avg_score`
+  is pushed only when `Rollup|<K>|scored` > 0; `scored` itself is pushed
+  every cycle, 0 when nothing of that kind was scored. An `avg_score` next
+  to `scored` = 0 is therefore a retained value from an earlier cycle, and
+  the Overview view shows `non_compliant` / `scored` beside each average so
+  that is visible at a glance.
+
+- **Version unreadable is not "no benchmark".** If the adapter cannot read
+  the version that governs an object's SCG, it scores the object against
+  the SCG it had last cycle. With no previous SCG, the object is reported
+  as unreadable: non-compliant, not scored, counted in the rollup's
+  `unknown` benchmark bucket. Only a version the adapter read, with no
+  bundled SCG, is "no benchmark".
 
 - **Unreadable counts as non-compliant, never as failing a control.**
   An object with any unreadable control has `non_compliant` = 1, but the
@@ -99,12 +132,16 @@ collection continues; compliance is never failed over a stitch error.
   excluded (the adapter never invents an unobserved score). The cache is
   in-memory and resets on collector restart.
 
-- **Benchmark changes clean up after themselves.** When an object's
-  applied SCG changes (a host upgraded from 8.0 to 9.0, a profile switch),
-  controls the old SCG evaluated and the new one does not are set to
-  `Compliant` = -1 with an explanatory `Actual`, so their alerts cancel
-  instead of lingering. (In-memory history: not detected across a
-  collector restart.)
+- **Stale per-control results clean themselves up.** When an object's
+  applied SCG changes (a host upgraded from 8.0 to 9.0), controls the old
+  SCG evaluated and the new one does not are set to `Compliant` = -1 with
+  an explanatory `Actual`, so their alerts cancel. The same cleanup runs
+  against every bundled SCG's controls the first time the adapter sees an
+  object after a collector start, after the instance is edited (for
+  example switched from a fixed profile to Auto), and once a day, so a
+  missed change or a push that failed silently is corrected within a day.
+  The first-sight pass can create `Compliant` = -1 keys for controls the
+  object never had; they are harmless and read "not evaluated".
 
 - **Strict TLS to vCenter by default.** Since build 50 the adapter
   validates the vCenter certificate against the platform trust store by

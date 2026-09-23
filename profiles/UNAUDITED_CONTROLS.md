@@ -487,7 +487,10 @@ imminent live 8.0 run is exactly what promotes these to proven coverage.
 > field names. Once confirmed, delete this section.
 >
 > Caveat compounding: the 8.0 SSH cluster has never been directly
-> exercised (devel runs 9.0). The upcoming 8.0 run is the confirmation.
+> exercised. As of 2026-09-23 the devel instances are configured fixed
+> `VMware_SCG_9.1` and every devel host runs ESXi 9.1.1, so no 8.0 run
+> exists yet; a live 8.0 host (fixed `VMware_SCG_8.0`, or Auto against an
+> 8.0 host) is the confirmation.
 
 ---
 

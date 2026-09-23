@@ -13,7 +13,8 @@ trap 'rm -rf "$out"' EXIT
 javac -d "$out" -sourcepath src:tests \
     tests/com/vcfcf/adapters/compliance/*.java
 for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
-        ControlEvaluatorTest ComplianceRollupTest MixedVersionSimulationTest; do
+        ControlEvaluatorTest ComplianceRollupTest ComplianceDecisionsTest \
+        MixedVersionSimulationTest; do
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 python3 tests/test_generate_compliance_alerts.py

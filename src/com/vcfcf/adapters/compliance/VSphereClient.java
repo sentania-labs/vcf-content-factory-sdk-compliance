@@ -255,12 +255,39 @@ public final class VSphereClient {
 		return result;
 	}
 
+	/**
+	 * VMs with name and host MOID. Build 58 (review N1): {@code name} and
+	 * {@code runtime.host} come back in the ONE container-view
+	 * RetrieveProperties, not one extra round trip per VM. If the bulk read
+	 * returns nothing the pre-58 walk (listView + per-VM name) is used and
+	 * {@link VmInfo#hostRead} is false, so the caller reads the host per VM.
+	 */
 	public List<VmInfo> getVms() throws Exception {
 		ensureConnected();
 		List<VmInfo> result = new ArrayList<>();
-		for (MoRef ref : listView("VirtualMachine")) {
-			String name = getStringProperty(ref, "name");
-			if (name != null) result.add(new VmInfo(ref, name, ref.value));
+		List<ViewRow> rows = null;
+		MoRef view = createContainerView("VirtualMachine");
+		if (view != null) {
+			try {
+				rows = retrieveViewRows(view, "VirtualMachine",
+						"name", "runtime.host");
+			} finally {
+				destroyViewQuietly(view);
+			}
+		}
+		if (rows != null && !rows.isEmpty()) {
+			for (ViewRow row : rows) {
+				String name = row.values.get("name");
+				if (name == null) name = getStringProperty(row.ref, "name");
+				if (name == null) continue;
+				result.add(new VmInfo(row.ref, name, row.ref.value,
+						row.values.get("runtime.host"), true));
+			}
+		} else {
+			for (MoRef ref : listView("VirtualMachine")) {
+				String name = getStringProperty(ref, "name");
+				if (name != null) result.add(new VmInfo(ref, name, ref.value));
+			}
 		}
 		logInfo("vSphere SOAP: " + result.size() + " VMs");
 		return result;
@@ -1117,6 +1144,73 @@ public final class VSphereClient {
 		return refs;
 	}
 
+	/** One container-view object with the text of the requested paths. */
+	private static final class ViewRow {
+		final MoRef ref;
+		final Map<String, String> values = new HashMap<>();
+		ViewRow(MoRef ref) { this.ref = ref; }
+	}
+
+	/**
+	 * RetrieveProperties over a container view for several property paths
+	 * at once. A MoRef-valued path yields its MOID text. Null on a failed
+	 * call (caller falls back); a path absent for an object is simply
+	 * missing from that row.
+	 */
+	private List<ViewRow> retrieveViewRows(MoRef view, String type,
+			String... paths) throws Exception {
+		StringBuilder pathSet = new StringBuilder();
+		for (String p : paths) {
+			pathSet.append("<pathSet>").append(xmlEscape(p)).append("</pathSet>");
+		}
+		String body =
+				"<RetrieveProperties xmlns=\"urn:vim25\">"
+				+ "<_this type=\"PropertyCollector\">"
+				+ xmlEscape(propertyCollector.value) + "</_this>"
+				+ "<specSet>"
+				+ "<propSet>"
+				+ "<type>" + xmlEscape(type) + "</type>"
+				+ pathSet
+				+ "</propSet>"
+				+ "<objectSet>"
+				+ "<obj type=\"ContainerView\">"
+				+ xmlEscape(view.value) + "</obj>"
+				+ "<skip>true</skip>"
+				+ "<selectSet xsi:type=\"TraversalSpec\">"
+				+ "<name>view</name>"
+				+ "<type>ContainerView</type>"
+				+ "<path>view</path>"
+				+ "<skip>false</skip>"
+				+ "</selectSet>"
+				+ "</objectSet>"
+				+ "</specSet>"
+				+ "</RetrieveProperties>";
+		Document resp = post(body, "urn:vim25/RetrieveProperties", true);
+		if (resp == null) return null;
+		List<ViewRow> rows = new ArrayList<>();
+		for (Element rv : descendantsByLocalName(resp.getDocumentElement(),
+				"returnval")) {
+			Element obj = firstDirectChild(rv, "obj");
+			if (obj == null) continue;
+			String value = elementText(obj);
+			if (value == null || value.trim().isEmpty()) continue;
+			String t = obj.getAttribute("type");
+			ViewRow row = new ViewRow(new MoRef(
+					t != null && !t.isEmpty() ? t : type, value.trim()));
+			for (Element propSet : childrenByLocalName(rv, "propSet")) {
+				String name = childText(propSet, "name");
+				Element val = firstDirectChild(propSet, "val");
+				if (name == null || val == null) continue;
+				String text = elementText(val);
+				if (text != null && !text.trim().isEmpty()) {
+					row.values.put(name, text.trim());
+				}
+			}
+			rows.add(row);
+		}
+		return rows;
+	}
+
 	private void destroyViewQuietly(MoRef view) {
 		if (view == null) return;
 		try {
@@ -1508,11 +1602,23 @@ public final class VSphereClient {
 		public final MoRef moRef;
 		public final String name;
 		public final String moid;
+		// Build 58: host MOID from the bulk enumeration (null when the VM
+		// has no host); hostRead=false means the bulk read was unavailable
+		// and the caller must read runtime.host itself.
+		public final String hostMoid;
+		public final boolean hostRead;
 
 		public VmInfo(MoRef moRef, String name, String moid) {
+			this(moRef, name, moid, null, false);
+		}
+
+		public VmInfo(MoRef moRef, String name, String moid, String hostMoid,
+				boolean hostRead) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
+			this.hostMoid = hostMoid;
+			this.hostRead = hostRead;
 		}
 	}
 
