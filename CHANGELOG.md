@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.0.80 (2026-09-24)
+
+- chore(release): build 80: re-release of build 79 with no adapter change. The `v1.0.0.79` tag was pushed while `build-pak-on-tag.yml` still selected the retired self-hosted `generic` runners, so its release job queued and never ran (cancelled 2026-09-24). A tag run uses the workflow at the tagged commit, so 79 could not be re-run after the runner fix (#13, GitHub-hosted `ubuntu-latest`). Build 80 is the first release built by that workflow. Adapter code, describe.xml, alerts and dashboards are identical to build 79; only the build number and the version stamps in docs/ change.
+
 ## 0.0.0.79 (2026-09-23)
 
 - fix(adapter): build 79: close the build-78 review WARNING (knowledge/context/reviews/compliance-build-78.md): a persistently failing VM / vDS / portgroup / cluster listing froze that vCenter's held-back rollup keys indefinitely with only a log WARN. Now:
