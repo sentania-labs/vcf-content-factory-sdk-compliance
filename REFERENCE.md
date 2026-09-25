@@ -45,5 +45,5 @@ Generated from `describe.xml` and `resources.properties`.
 
 The keys the adapter pushes onto VMWARE resources (per control, per
 object, and the per-vCenter rollup) are not declared in describe.xml;
-they are listed in the repo README under "Keys pushed onto VMWARE
-resources".
+they are listed in [docs/data-reference.md](docs/data-reference.md)
+under "Keys pushed onto VMWARE resources".

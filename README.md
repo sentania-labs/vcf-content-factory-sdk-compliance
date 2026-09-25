@@ -1,269 +1,162 @@
-# VCF Content Factory Compliance Adapter
+# Compliance for VCF Operations
 
-Monitors vSphere for VMware Security Configuration Guide (SCG) compliance
-by querying vCenter configuration and evaluating each object against the
-SCG that matches its version. Covers ESX hosts, VMs, vCenter, clusters
-(vSAN controls), distributed switches and distributed portgroups. Pushes
-per-control results, per-object scores and flags onto the existing VMWARE
-resources via ARIA_OPS stitching, a per-vCenter rollup onto each vCenter
-object, and raises one compliance alert per failing control with the SCG
-remediation as its recommendation.
+See how your vSphere environment measures up against VMware's Security
+Configuration Guide, right inside VCF Operations.
 
-## Documentation
+This management pack reads the security settings on your ESX hosts, VMs,
+vCenter, vSAN clusters, and distributed switches and portgroups. It checks
+each one against the VMware Security Configuration Guide (SCG) written for
+that object's version. The results show up on objects you already monitor:
+every one gets a compliance score, every failing control raises its own
+alert with VMware's fix attached, and four dashboards give you the big
+picture and let you drill down.
 
-Full docset (overview, installing & configuring, inventory tree): [`docs/README.md`](docs/README.md).
+The pack only reads. It never changes a setting.
 
-## Quick start
+![Compliance Environment Overview](docs/images/environment-overview.png)
 
-1. Build: `python3 -m vcfcf_managementpacks build-sdk content/sdk-adapters/compliance`
-2. Install the `.pak` from `dist/` via VCF Ops UI or CLI
-3. Add adapter instance: provide vCenter host and credentials; leave the
-   benchmark profile at `Auto (by version)` unless you want one SCG forced
-4. Wait one collection cycle (default 60 minutes)
-5. Check an object: Environment > select host / VM / vCenter > All Metrics
-   > VCF-CF Compliance
+## What it does for you
 
-## Adapter instance configuration
+**Puts a score on everything you already monitor.** Hosts, VMs,
+vCenters, vSAN clusters, switches and portgroups each get a score from 0
+to 100 (an object with no guide for its version, or a cluster without
+vSAN, has nothing to score and shows none). Open
+any of them in VCF Operations, go to All Metrics, then VCF-CF Compliance,
+and you'll see each control with the value the SCG expects next to the
+value that's actually set. You don't have to learn a separate object tree
+or leave the pages you already use.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| vCenter Host | Yes | - | vCenter FQDN or IP |
-| Username | Yes | - | vCenter SSO credentials |
-| Password | Yes | - | vCenter SSO credentials |
-| Benchmark Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
-| Custom Profile Path | No | - | Filesystem path to CSV if Custom |
-| Allow Insecure SSL | No | false | Accept self-signed certificates |
-| Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
+**Uses the right guide for each object.** Most environments are a mix of
+versions. By default the pack matches each object to its own guide: hosts
+by their ESX version, VMs by their host's version, and everything else by
+the vCenter version. The SCG for 6.7, 7.0, 8.0, 9.0 and 9.1 is bundled.
+If an object runs a version with no guide yet, it's reported as "no
+benchmark" rather than scored against the wrong one. You can also pin
+every object to one guide, or bring your own list of controls as a CSV.
 
-**Existing instances keep their stored profile on upgrade.** VCF Ops
-stores the configured value on each adapter instance, and a pak upgrade
-does not rewrite it (the new default applies to new instances only). The
-devel instances, for example, are stored as fixed `VMware_SCG_9.1` and keep
-scoring every object against SCG 9.1 until someone edits them to
-`Auto (by version)`. An instance with no stored value keeps the pre-v3
-fallback, SCG 8.0.
+**Turns failures into a to-do list.** Each failing control raises its own
+alert, named after the control, with VMware's remediation text as the
+recommendation. Severity follows the SCG's priority (P0 is Critical, P1
+Immediate, P2 Warning), so your alert list sorts itself into what to fix
+first.
 
-## Benchmark selection
+**Tells you when it couldn't check.** If the pack can't read a setting,
+because of permissions, connectivity or an unsupported read method, that
+setting counts against the score instead of being quietly treated as
+fine. A "Compliance data not collected" alert tells you which object is
+affected and what to look at. (One known gap: a setting that is simply
+absent is currently skipped rather than failed; see Known issues.)
 
-- **Auto (by version):** hosts by their ESX version, VMs by their host's
-  ESX version, and vCenter, clusters, distributed switches and portgroups
-  by the vCenter version (a distributed switch's own version is not used).
-  `major.minor` picks SCG 6.7, 7.0, 8.0, 9.0 or 9.1 (8.0 U3 is 8.0). A
-  readable version with no bundled SCG gets no benchmark:
-  `profile_name` = `no benchmark for ESX 10.0`, `no_benchmark` = 1,
-  counters zeroed, no score.
-- **Version the adapter could not read:** never a guess and never "no
-  benchmark". The object is scored against the SCG it had last cycle; with
-  no previous SCG (e.g. right after a collector restart) nothing was
-  collected: `profile_name` = `benchmark unknown: ESX version unreadable`,
-  score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
-  "Compliance data not collected").
-- **Fixed profile:** that SCG for every object regardless of version.
-- **Custom:** a canonical-schema CSV on the collector, for every object.
+## The dashboards
 
-## Benchmark profiles
+Four dashboards install with the pack. These screenshots come from a lab
+with three vCenters.
 
-Bundled profiles ship with the pak under `profiles/canonical/`:
-- `scg_6.7.csv`: vSphere Security Configuration Guide 6.7
-- `scg_7.0.csv`: vSphere Security Configuration Guide 7
-- `scg_8.0.csv`: VMware Security Configuration Guide for vSphere 8.x
-- `scg_9.0.csv`: VMware Cloud Foundation 9.0 Security Configuration Guide
-- `scg_9.1.csv`: VMware Cloud Foundation 9.1 Security Configuration Guide
+**Environment Overview** is the landing page: the average score, how many
+objects are non-compliant, how many have no guide for their version, and
+how each vCenter is doing broken down by object type. Further down it
+shows how many objects are on each SCG version, the score trend and the
+open compliance alerts (both of those have open bugs; see Known issues).
 
-All derive from vmware/vcf-security-and-compliance-guidelines (6.7 and
-7.0 from its history; source CSVs kept beside them under `profiles/`;
-the canonical form is produced by the normalizer pipeline, see
-CANONICAL_SCHEMA.md). `profiles/manual_review.csv` lists controls that
-are reported for manual review and never scored: those whose SCG expected
-value is prose (site-specific text), and (build 70) the standard-switch
-security controls, which live on each ESX host's vSwitches and were
-wrongly read from the distributed switch. The file is required: a pak
-without it fails to load rather than scoring those controls.
+**ESX Hosts** starts with a scope. Pick a vCenter, or all of vSphere,
+and its hosts are listed worst first with their version, the guide
+applied and the score. Select a host to see its trend and details.
 
-Custom profiles must follow the canonical CSV schema
-(CANONICAL_SCHEMA.md). Upload the CSV to the VCF Ops appliance and
-reference the path.
+![Compliance ESX Hosts](docs/images/esx-hosts.png)
 
-## Keys pushed onto VMWARE resources
+**VMs** works the same way, and is built to stay fast with thousands of
+VMs.
 
-Per-control (on the object the control applies to):
-```
-VCF-CF Compliance|<control_id>|Actual        property
-VCF-CF Compliance|<control_id>|Expected      property
-VCF-CF Compliance|<control_id>|Description   property
-VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-compliant,
-                                             -1 not evaluated (unreadable, or no
-                                             longer in the applied benchmark)
-```
+![Compliance VMs](docs/images/vms.png)
 
-Per object:
-```
-VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."
-VCF-CF Compliance|score              0-100%: pass / (pass + fail + unreadable); unreadable
-                                     counts as failing; 0 when every control was unreadable;
-                                     not pushed only when nothing was attempted
-VCF-CF Compliance|pass_count         controls that passed
-VCF-CF Compliance|fail_count         controls evaluated and failed (unreadable NOT included)
-VCF-CF Compliance|total_count        pass + fail (0 when nothing was evaluated)
-VCF-CF Compliance|unreadable_count   not pushed when the governing version cannot be read
-VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
-VCF-CF Compliance|no_benchmark       1 when the version has no SCG
-VCF-CF Compliance|collection_failed  1 when nothing could be read on the object (every attempted
-                                     control unreadable, or its version unreadable with no
-                                     previous SCG); 0 otherwise; pushed every cycle
-```
+**vCenter & Networking** puts the object types you have only a few of on
+one page: vCenter, clusters, distributed switches and portgroups.
 
-Per vCenter (on each VMWARE `VMwareAdapter Instance`), `<K>` in `All`,
-`Host`, `VM`, `vCenter`, `Cluster`, `vDS`, `Portgroup`:
-```
-VCF-CF Compliance|Rollup|<K>|scored
-VCF-CF Compliance|Rollup|<K>|non_compliant
-VCF-CF Compliance|Rollup|<K>|no_benchmark
-VCF-CF Compliance|Rollup|<K>|score_sum
-VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
-VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
-                                               failed and rollup keys were held back
-VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
-                                               SCG_9.0, SCG_9.1, none, unknown
-                                               (+ Custom)
-```
+![Compliance vCenter and Networking](docs/images/vcenter-networking.png)
 
-**Unreadable counts as failing (build 63, owner decision).** A setting the
-adapter could not read is counted against the score like a failure, so an
-object whose every setting was unreadable scores 0. It is not a violation:
-`fail_count` does not include it, its `Compliant` is -1 (no per-control
-alert), and `unreadable_count` carries it separately. Instead each kind has
-a "Compliance data not collected" alert (see Alerts). `score` and
-`avg_score` are not pushed only when nothing was attempted (a no-benchmark
-object, a non-vSAN cluster); VCF Ops then keeps showing the last value it
-had, so read them with `total_count` / `unreadable_count` / `no_benchmark`
-(per object) and `scored` (per vCenter, pushed every cycle).
+## Getting started
 
-The adapter's own Compliance World carries only
-`Summary|last_scan_timestamp`: it is one object shared by every adapter
-instance, so per-vCenter numbers on it would be last-writer-wins.
+1. Download the latest `.pak` from this repo's
+   [Releases](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/releases).
+2. In VCF Operations, install it from **Administration > Integrations >
+   Repository > Add**.
+3. Add an account for **VCF Content Factory Compliance** under
+   **Administration > Integrations > Accounts > Add**. Give it your
+   vCenter address, using the name on the vCenter's certificate rather
+   than its IP, and a vCenter account with read access (see
+   [installing.md](docs/installing.md) for the exact privileges). Leave
+   the compliance profile at `Auto (by version)`.
+4. Click **Validate Connection**. If it fails with a certificate error
+   (common with a private CA or a self-signed vCenter certificate), set
+   **Allow Insecure SSL** to `true` for now. A version that lets you
+   accept the certificate from that dialog instead is in progress.
+5. Enable the four compliance super metrics in the policy that applies to
+   vSphere World. The overview's score tiles and trend use them.
+6. Wait. The pack collects once an hour, and the per-control alerts need
+   a second collection before they fire, so give it two hours before you
+   judge the results.
 
-## Dashboards and super metrics
+The full walkthrough, with permissions, ports and troubleshooting, is in
+[docs/installing.md](docs/installing.md).
 
-The pak installs four dashboards (plus their eight views):
+## Good to know
 
-| Dashboard | What it is for |
-|---|---|
-| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
-| [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
-| [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
+- **It never fixes anything.** There are no remediation actions. The
+  alerts tell you what to change; you change it.
+- **vCenter appliance settings are opt-in.** Checking the vCenter
+  appliance itself (SSH, NTP, syslog, TLS profile, root password expiry,
+  FIPS) requires the account to be in the vsphere.local SSO group
+  `SystemConfiguration.Administrators`. That group can also change those
+  settings, and VMware offers no read-only equivalent. So this is off by
+  default, and those controls are listed for manual review until you
+  turn it on.
+- **Some controls can't be checked automatically.** Some SCG controls
+  expect a written site policy rather than a value, and most vSAN
+  controls need a vSAN SDK the pack doesn't have. These are reported for
+  manual review and never scored. The list is in
+  `profiles/UNAUDITED_CONTROLS.md`.
+- **Upgrades keep your settings.** An existing account keeps the
+  compliance profile it was set to, even if a new version changes the
+  default. An account from before version-aware scoring with no stored
+  profile keeps scoring against SCG 8.0 until you set it to
+  `Auto (by version)`.
 
-The Environment Overview's score tiles and trend read four bundled super
-metrics, all assigned to `VMWARE / vSphere World`: Compliance Objects
-Scored, Compliance Non-Compliant Objects, Compliance Objects Without
-Benchmark, and Compliance Average Score. **They must be enabled in the
-policy active on vSphere World** (in the policy editor, Metrics and
-Properties, filter on "Compliance"; the exact menu path differs between
-Ops 9.0 and 9.1),
-or those tiles and the trend stay empty. Whether the pak import enables
-them automatically is **unconfirmed**; it will be checked at the devel
-install. The other widgets read adapter data directly and need no
-enablement. Compliance Average Score shows no data until the first v3
-collection cycle has scored something.
+## Known issues
 
-## Alerts
+- [#30](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/30):
+  the "Failing Controls on Selected ..." panels on the ESX Hosts, VMs and
+  vCenter & Networking dashboards are empty. Until it's fixed, open the
+  object and look under All Metrics, VCF-CF Compliance.
+- [#31](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/31):
+  the Open Compliance Alerts widget on the overview is empty. The alerts
+  themselves are raised; see them in the Alerts list.
+- [#32](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/32):
+  the Objects by SCG Version table only shows the 6.7, 7.0 and 8.0
+  columns.
+- [#15](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/15):
+  a few VM settings that are absent (never set) are skipped instead of
+  being checked against the guide's default, which can flatter VM
+  scores.
 
-- `Host Compliance Score Degraded` (HostSystem, score below 95 / 80).
-- One compliance alert per scored SCG control, named
-  `<control_id>: <title>`, raised when that control's `Compliant` is 0,
-  with the SCG remediation as its recommendation. Severity follows the
-  SCG priority: P0 Critical, P1 Immediate, P2 Warning. Generated from the
-  profiles by `scripts/generate_compliance_alerts.py`; never hand-edit
-  the generated blocks in `describe.xml` or `resources.properties`.
+All open issues are on the
+[issue list](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues).
 
-- One "Compliance data not collected (<kind>)" alert per object kind
-  (ESX host, VM, vCenter, cluster, distributed switch, distributed
-  portgroup), severity Immediate, raised when `unreadable_count` > 0 (the
-  adapter could not read some settings, and they count as failing in the
-  score) OR `collection_failed` = 1 (nothing could be read at all,
-  including an object whose version could not be read). Its recommendation explains the causes
-  (connectivity, permissions, read method not supported on this version),
-  where to see which settings (`unreadable_count`, and the controls whose
-  `Compliant` is -1 with Actual "(unreadable)"), and what to check. Alert
-  ids `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`.
+## More detail
 
-All compliance alerts are type Compliance (subType 21).
+- [How it works](docs/overview.md): what it reads, how scores are
+  worked out, and where each result is stored.
+- [Scoring, data keys and alerts](docs/data-reference.md): how a guide is
+  picked, the full list of metrics and properties, and the alert
+  definitions.
+- [Installing and configuring](docs/installing.md)
+- [Generated reference](REFERENCE.md) and the
+  [inventory tree](docs/inventory-tree.md) (the pack's own object types
+  and settings, generated from `describe.xml`)
+- [Building from source](docs/building.md)
+- [Custom profile format](CANONICAL_SCHEMA.md)
+- [Changelog](CHANGELOG.md)
 
-## Limitations
-
-- No remediation actions.
-- Controls the adapter cannot read over vim25 / esxcli / VAMI are
-  informational; see `profiles/UNAUDITED_CONTROLS.md`.
-- Most SCG cluster (vSAN) controls need the vSAN Management SDK, which is
-  not on the adapter classpath.
-
-## Building from source
-
-You don't need this repo's CI or the VCF Content Factory checkout to
-build the `.pak` — the toolchain is a portable tarball. You need:
-
-- **JDK 11+** (`javac` + `jar` on PATH)
-- **python3** with `pyyaml` (`python3 -m pip install pyyaml`)
-- **The GitHub CLI** (`gh`) — used to download the build toolchain
-  below. The factory repo is public, so no `gh auth login` is needed
-  for the download (authenticate only if you hit anonymous API rate
-  limits). No `gh`? See the `curl` alternative under step 1.
-- **The Broadcom adapter SDK jar** (`vrops-adapters-sdk-2.2.jar`).
-  This is a Broadcom build artifact with no public redistribution
-  channel — it is **never** bundled in the toolchain or this repo.
-  Get it from your own VCF Operations appliance:
-
-  ```
-  scp root@<appliance>:/usr/lib/vmware-vcops/common-lib/vrops-adapters-sdk-2.2.jar .
-  ```
-
-  (Also present at
-  `/usr/lib/vmware-vcops/suite-api/WEB-INF/lib/vrops-adapters-sdk.jar`.
-  Partners can pull it from the Broadcom TAP / partner SDK portal
-  instead.)
-
-Then, from the root of this repo:
-
-```bash
-# 1. Fetch the build toolchain (pin a full sdk-buildkit-vX.Y.Z tag for
-#    reproducibility, or use the floating major sdk-buildkit-v1)
-gh release download sdk-buildkit-v1 \
-  --repo sentania-labs/vcf-content-factory \
-  --pattern 'sdk-buildkit-*.tgz'
-# No gh? The asset is public — fetch it with curl instead:
-#   curl -sL https://github.com/sentania-labs/vcf-content-factory/releases/download/sdk-buildkit-v1/sdk-buildkit-v1.tgz -o sdk-buildkit-v1.tgz
-tar xzf sdk-buildkit-*.tgz
-
-# 2. Point the kit at your SDK jar and build
-export VCFCF_SDK_JAR=/path/to/vrops-adapters-sdk-2.2.jar
-python3 -m sdk_buildkit validate-sdk .   # cheap loop: compile-check
-python3 -m sdk_buildkit build-sdk .      # emits the .pak
-```
-
-The kit carries everything else it needs (including the
-`vcfcf-adapter-base.jar` framework runtime that ends up in the pak's
-`lib/`). `validate-sdk` is the fast iteration loop; exhaust it before
-building paks.
-
-**Dev builds vs releases.** Anything you build this way is a *dev
-build*. The **official** artifact for this repo is the one its own CI
-builds and attaches to a GitHub Release when a `v*` tag is pushed —
-deterministic, no developer machine in the path.
-
-**If you fork this repo**, the CI workflow
-(`.github/workflows/build-pak-on-tag.yml`) needs one adjustment
-before your own `v*` tags will build (it already runs on GitHub-hosted
-`ubuntu-latest`, so no runner change is needed).
-
-**SDK jar sourcing**: the upstream workflow fetches the Broadcom
-   jar from a private repo via an `SDK_RUNTIME_SSH_KEY` deploy-key
-   secret you won't have. Replace that step with your own source —
-   e.g. store the appliance-extracted jar in your own private repo or
-   an Actions secret/artifact store. Then **also update the
-   `--sdk-jar` argument** on the `build-sdk` line of the workflow to
-   point at wherever your replacement step puts the jar. The explicit
-   `--sdk-jar` flag overrides `VCFCF_SDK_JAR`, so setting the env var
-   alone is not enough — if you leave `--sdk-jar _sdk_runtime/...` in
-   place the build will look for the upstream path and fail. Do **not**
-   commit the jar to a public repo (no redistribution).
+The bundled benchmarks come from VMware's
+[vcf-security-and-compliance-guidelines](https://github.com/vmware/vcf-security-and-compliance-guidelines).
+This pack is part of the
+[VCF Content Factory](https://github.com/sentania-labs/vcf-content-factory).
