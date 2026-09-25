@@ -31,8 +31,11 @@ Then, from the root of this repo:
 gh release download sdk-buildkit-v1 \
   --repo sentania-labs/vcf-content-factory \
   --pattern 'sdk-buildkit-*.tgz'
-# No gh? The asset is public: fetch it with curl instead:
-#   curl -sL https://github.com/sentania-labs/vcf-content-factory/releases/download/sdk-buildkit-v1/sdk-buildkit-v1.tgz -o sdk-buildkit-v1.tgz
+# No gh? The asset is public. Its file name carries the full version
+# (for example sdk-buildkit-1.0.10.tgz); look it up on the release page
+#   https://github.com/sentania-labs/vcf-content-factory/releases/tag/sdk-buildkit-v1
+# and fetch it with curl:
+#   curl -sLO https://github.com/sentania-labs/vcf-content-factory/releases/download/sdk-buildkit-v1/<asset-file-name>
 tar xzf sdk-buildkit-*.tgz
 
 # 2. Point the kit at your SDK jar and build
@@ -48,22 +51,26 @@ building paks.
 
 **Dev builds vs releases.** Anything you build this way is a *dev
 build*. The **official** artifact for this repo is the one its own CI
-builds and attaches to a GitHub Release when a `v*` tag is pushed -
-deterministic, no developer machine in the path.
+builds and attaches to a GitHub Release when a `v*` tag is pushed:
+deterministic, with no developer machine in the path.
+
+**Inside a VCF Content Factory checkout** you can skip the toolchain
+download and build with the factory's own CLI:
+`python3 -m vcfcf_managementpacks build-sdk content/sdk-adapters/compliance`.
 
 **If you fork this repo**, the CI workflow
 (`.github/workflows/build-pak-on-tag.yml`) needs one adjustment
 before your own `v*` tags will build (it already runs on GitHub-hosted
 `ubuntu-latest`, so no runner change is needed).
 
-**SDK jar sourcing**: the upstream workflow fetches the Broadcom
-   jar from a private repo via an `SDK_RUNTIME_SSH_KEY` deploy-key
-   secret you won't have. Replace that step with your own source -
-   e.g. store the appliance-extracted jar in your own private repo or
-   an Actions secret/artifact store. Then **also update the
-   `--sdk-jar` argument** on the `build-sdk` line of the workflow to
-   point at wherever your replacement step puts the jar. The explicit
-   `--sdk-jar` flag overrides `VCFCF_SDK_JAR`, so setting the env var
-   alone is not enough: if you leave `--sdk-jar _sdk_runtime/...` in
-   place the build will look for the upstream path and fail. Do **not**
-   commit the jar to a public repo (no redistribution).
+**SDK jar sourcing**: the upstream workflow fetches the Broadcom jar
+from a private repo via an `SDK_RUNTIME_SSH_KEY` deploy-key secret you
+won't have. Replace that step with your own source, for example the
+appliance-extracted jar in your own private repo or an Actions
+secret/artifact store. Then **also update the `--sdk-jar` argument** on
+the `build-sdk` line of the workflow to point at wherever your
+replacement step puts the jar. The explicit `--sdk-jar` flag overrides
+`VCFCF_SDK_JAR`, so setting the env var alone is not enough: if you
+leave `--sdk-jar _sdk_runtime/...` in place the build will look for the
+upstream path and fail. Do **not** commit the jar to a public repo (no
+redistribution).

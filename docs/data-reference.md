@@ -9,20 +9,18 @@ inside see [overview.md](overview.md).
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| vCenter Host | Yes | - | vCenter FQDN or IP |
+| vCenter Host / IP | Yes | - | vCenter FQDN or IP |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Benchmark Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
-| Custom Profile Path | No | - | Filesystem path to CSV if Custom |
+| Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
+| Custom Profile CSV Path | No | - | Filesystem path to CSV if Custom |
 | Allow Insecure SSL | No | false | Accept self-signed certificates |
 | Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 
 **Existing instances keep their stored profile on upgrade.** VCF Ops
 stores the configured value on each adapter instance, and a pak upgrade
-does not rewrite it (the new default applies to new instances only). The
-devel instances, for example, are stored as fixed `VMware_SCG_9.1` and keep
-scoring every object against SCG 9.1 until someone edits them to
-`Auto (by version)`. An instance with no stored value keeps the pre-v3
+does not rewrite it (the new default applies to new instances only). An instance stored as a fixed `VMware_SCG_9.1`, for example, keeps scoring
+every object against SCG 9.1 until someone edits it to `Auto (by version)`. An instance with no stored value keeps the pre-v3
 fallback, SCG 8.0.
 
 ## Benchmark selection
@@ -132,7 +130,7 @@ The pak installs four dashboards (plus their eight views):
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
@@ -144,8 +142,7 @@ policy active on vSphere World** (in the policy editor, Metrics and
 Properties, filter on "Compliance"; the exact menu path differs between
 Ops 9.0 and 9.1),
 or those tiles and the trend stay empty. Whether the pak import enables
-them automatically is **unconfirmed**; it will be checked at the devel
-install. The other widgets read adapter data directly and need no
+them automatically is **unconfirmed**; check and enable if needed. The other widgets read adapter data directly and need no
 enablement. Compliance Average Score shows no data until the first v3
 collection cycle has scored something.
 

@@ -8,7 +8,8 @@
   on **TCP 443** (vSphere SOAP / vim25 and the vCenter VAMI REST
   endpoints).
 - A **vCenter account** for the adapter to authenticate with (vCenter SSO
-  credentials). The account needs **read-only** access — the adapter only
+  credentials). With **Read vCenter appliance settings** off (the
+  default) it needs read access only; see Permissions Required. The adapter only
   reads configuration; it performs no writes or remediation.
 - One or more **compliance benchmark profiles**. The pack bundles the
   VMware Security Configuration Guide (SCG) 6.7, 7.0, 8.0, 9.0, and 9.1
@@ -34,7 +35,7 @@ What the vCenter account needs depends on that one setting:
 
 | Read vCenter appliance settings | vCenter account needs |
 |---|---|
-| Off (default) | The built-in **Read-only** role at the vCenter root, propagated to children. This covers the inventory and every host, VM, cluster and switch read. The appliance controls are reported for manual review. |
+| Off (default) | The built-in **Read-only** role at the vCenter root, propagated to children, for the inventory and the VM, cluster and switch reads. The host checks that run esxcli through vCenter (SSH, shell, secure boot, TPM, log settings) most likely also need **Host > CIM > CIM interaction** on the hosts (or a folder or cluster above them): this is the privilege VMware documents for esxcli over vCenter, but it has only been proven with a full administrator account so far. Without it those controls read as unreadable, never as passing. The appliance controls are reported for manual review. |
 | On | The above, **plus** membership of the vsphere.local SSO group `SystemConfiguration.Administrators`. vCenter has no read-only role for the appliance API, and this group can also change appliance settings. The pack itself only reads. |
 
 No remediation privileges are ever required: the pack writes nothing to
@@ -65,19 +66,25 @@ The collector log says which one is in use when the adapter starts.
 The Suite API push to VCF Operations is **ambient** (local, on the
 collector) and requires no additional outbound network configuration.
 
-## TLS to vCenter — certificate trust
+## TLS to vCenter: certificate trust
 
 Since build 50 the adapter **validates the vCenter certificate against the
-platform trust store by default** (strict TLS). You have two options:
+platform trust store by default** (strict TLS). Click **Validate
+Connection** with `allowInsecure` left at its default:
 
-1. **Recommended — import the vCenter certificate** into the VCF
-   Operations platform trust store so the default strict-TLS path
-   succeeds. Leave `allowInsecure` unset (or `false`).
-2. **Opt out — set `allowInsecure=true`** on the adapter instance to
-   disable certificate validation (trust-all). Only the literal string
-   `true` opts in; any other value, blank, or absent keeps strict
-   validation. The adapter logs a WARN at configure time when
-   `allowInsecure=true`.
+1. **If validation succeeds**, the certificate is already trusted.
+   Nothing more to do.
+2. **If it fails with a certificate error** (for example
+   `certificate_unknown` or "Unable to construct a valid chain"), set
+   `allowInsecure=true` for now. Importing the CA under Fleet Management >
+   Certificates has not been shown to help, and the Validate Connection
+   dialog does not yet offer to accept the certificate (framework work in
+   progress). `allowInsecure=true` disables certificate validation
+   (trust-all) for this adapter instance. Only the literal string `true`
+   opts in; any other value, blank, or absent keeps strict validation.
+   The adapter logs a WARN at configure time when it is set.
+
+Either way, enter vCenter by the name on its certificate, not its IP.
 
 > **Upgrade note:** an instance pointed at a vCenter whose certificate is
 > not in the platform trust store must either import the certificate or
@@ -97,18 +104,19 @@ for:
 | Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
 | Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
-| Username | `username` | Yes | — | vCenter account (SSO). Read-only access. |
+| Username | `username` | Yes | — | vCenter account (SSO). Privileges depend on Read vCenter appliance settings; see Permissions Required. |
 | Password | `password` | Yes | — | vCenter account password (masked). |
 
 ## Step-by-Step Installation
 
-1. Install the `.pak` file via **Administration > Solutions > Add**.
-2. After installation, navigate to **Data Sources > Integrations > Accounts**.
+1. Install the `.pak` file via **Administration > Integrations > Repository > Add**.
+2. After installation, open **Administration > Integrations > Accounts**.
 3. Click **Add Account** and select **VCF Content Factory Compliance**.
 4. Fill in the configuration fields above. Choose a bundled profile, or
    `Custom` with a CSV path staged on the collector.
-5. Resolve TLS: import the vCenter certificate (recommended) or set
-   `allowInsecure=true`.
+5. Resolve TLS: for a private-CA or self-signed vCenter, set
+   `allowInsecure=true` (see the TLS section). Enter vCenter by the name
+   on its certificate, not its IP.
 6. Click **Validate Connection**, then **Add**.
 7. On the first collection cycle the adapter discovers its Compliance
    World and begins pushing results onto the existing VMWARE hosts, VMs,
@@ -119,23 +127,23 @@ for:
    Compliance Objects Scored, Compliance Non-Compliant Objects, Compliance
    Objects Without Benchmark and Compliance Average Score. Without this
    the Environment Overview's score tiles and trend stay empty. Whether
-   the pak import already enables them is unconfirmed (to be checked at
-   the devel install); check and enable if needed.
+   the pak import already enables them is unconfirmed; check and enable
+   if needed.
 9. Open **[VCF Content Factory] Compliance Environment Overview**. The
    four bundled dashboards:
 
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
 ## Troubleshooting
 
 - **vCenter SOAP fails with a TLS validation error** — the vCenter
-  certificate is not trusted. Import it into the platform trust store, or
-  set `allowInsecure=true`. See the TLS section.
+  certificate is not trusted. Set `allowInsecure=true` for now. See the
+  TLS section.
 - **"Compliance data not collected" alert, or a host scoring 0** (build
   63): the adapter could not read some or all of the object's settings,
   and unreadable settings count as failing. A disconnected or
