@@ -13,8 +13,8 @@ list to find the data:
 | VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
 | The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 Host Compliance Score Degraded alert on HostSystem (score below 95 / 80). |
 
-The full key list, with when each key is pushed, is in the repo
-`README.md` under "Keys pushed onto VMWARE resources".
+The full key list, with when each key is pushed, is in
+[data-reference.md](data-reference.md) under "Keys pushed onto VMWARE resources".
 
 ## What's in the Pack
 
@@ -66,7 +66,7 @@ On every evaluated VMWARE object: the per-control
 per-vCenter rollup `VCF-CF Compliance|Rollup|<kind>|{scored,
 non_compliant, no_benchmark, score_sum, avg_score}` for All, Host, VM,
 vCenter, Cluster, vDS and Portgroup, plus objects per benchmark. The full
-key list is in the repo README.
+key list is in [data-reference.md](data-reference.md).
 
 ## Dashboards
 

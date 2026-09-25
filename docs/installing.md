@@ -27,11 +27,34 @@ inventory and read host/vCenter configuration:
   firewall, and account/security settings (esxcli over the vCenter
   session).
 - Read the vCenter appliance configuration via the VAMI REST endpoints
-  (for SSH / password-policy controls).
+  (SSH, NTP, syslog, TLS profile, root password expiry, FIPS), only
+  when **Read vCenter appliance settings** is turned on.
 
-A standard built-in **Read-only** role at the vCenter root, propagated to
-children, covers the inventory and host reads. No write, no
-administrative, and no remediation privileges are required.
+What the vCenter account needs depends on that one setting:
+
+| Read vCenter appliance settings | vCenter account needs |
+|---|---|
+| Off (default) | The built-in **Read-only** role at the vCenter root, propagated to children. This covers the inventory and every host, VM, cluster and switch read. The appliance controls are reported for manual review. |
+| On | The above, **plus** membership of the vsphere.local SSO group `SystemConfiguration.Administrators`. vCenter has no read-only role for the appliance API, and this group can also change appliance settings. The pack itself only reads. |
+
+No remediation privileges are ever required: the pack writes nothing to
+vCenter.
+
+### On the VCF Operations side
+
+The pack writes its results onto the existing vSphere objects through
+the local VCF Operations Suite API. It does not use the vCenter account
+for that, and you do not configure a credential for it. It uses, in
+order:
+
+1. The per-adapter-instance Suite API credential that VCF Operations
+   issues to each adapter instance, when the platform provides one.
+2. Otherwise the node's `automationAdmin` service account
+   (`automationuser.properties`).
+3. Otherwise the node's `maintenanceAdmin` account
+   (`maintenanceuser.properties`), which works on a primary node only.
+
+The collector log says which one is in use when the adapter starts.
 
 ## Network Requirements
 
