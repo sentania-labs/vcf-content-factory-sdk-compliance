@@ -24,7 +24,10 @@ vSAN, has nothing to score and shows none). Open
 any of them in VCF Operations, go to All Metrics, then VCF-CF Compliance,
 and you'll see each control with the value the SCG expects next to the
 value that's actually set. You don't have to learn a separate object tree
-or leave the pages you already use.
+or leave the pages you already use. The one relationship the pack adds:
+each vCenter object becomes a child of the pack's Compliance World, which
+is how the environment totals add up across vCenters (the link is added
+every cycle and never removed; see docs/overview.md).
 
 **Uses the right guide for each object.** Most environments are a mix of
 versions. By default the pack matches each object to its own guide: hosts
@@ -35,8 +38,9 @@ benchmark" rather than scored against the wrong one. You can also pin
 every object to one guide, or bring your own list of controls as a CSV.
 
 **Turns failures into a to-do list.** Each failing control raises its own
-alert, named after the control, with VMware's remediation text as the
-recommendation. Severity follows the SCG's priority (P0 is Critical, P1
+alert, named after the control and prefixed "VCF Content Factory
+Compliance Alert:" so the pack's alerts group together, with VMware's
+remediation text as the recommendation. Severity follows the SCG's priority (P0 is Critical, P1
 Immediate, P2 Warning), so your alert list sorts itself into what to fix
 first.
 
@@ -53,8 +57,9 @@ Four dashboards install with the pack. These screenshots come from a lab
 with three vCenters.
 
 **Environment Overview** is the landing page: the average score, how many
-objects are non-compliant, how many have no guide for their version, and
-how each vCenter is doing broken down by object type. Further down it
+objects are non-compliant, how many have no guide for their version, how
+many were scored (so a 0 non-compliant reading is never shown without its
+denominator), and how each vCenter is doing broken down by object type. Further down it
 shows how many objects are on each SCG version, the score trend and the
 open compliance alerts (both of those have open bugs; see Known issues).
 
@@ -90,11 +95,11 @@ one page: vCenter, clusters, distributed switches and portgroups.
    (common with a private CA or a self-signed vCenter certificate), set
    **Allow Insecure SSL** to `true` for now. A version that lets you
    accept the certificate from that dialog instead is in progress.
-5. Enable the four compliance super metrics in the policy that applies to
-   vSphere World. The overview's score tiles and trend use them.
-6. Wait. The pack collects once an hour, and the per-control alerts need
-   a second collection before they fire, so give it two hours before you
-   judge the results.
+5. Wait. The pack collects every 5 minutes, and the per-control alerts need
+   a second collection before they fire, so give it about 15 minutes before
+   you judge the results. Nothing needs enabling in a policy: the
+   overview's score tiles and trend read totals VCF Operations computes on
+   the pack's own Compliance World.
 
 The full walkthrough, with permissions, ports and troubleshooting, is in
 [docs/installing.md](docs/installing.md).
@@ -115,6 +120,21 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   controls need a vSAN SDK the pack doesn't have. These are reported for
   manual review and never scored. The list is in
   `profiles/UNAUDITED_CONTROLS.md`.
+- **Upgrading from an earlier build: set the collection interval by hand.**
+  The default collection interval is now 5 minutes, but an existing
+  account keeps the interval it already has (60 minutes on builds before
+  85). After upgrading, edit each compliance account and set its
+  collection interval to 5 minutes. If you set it through the Suite API
+  instead (`PUT /api/adapters` with the body from `GET`), remove
+  `collectorId` from the body when `collectorGroupId` is present, or the
+  call fails with a 422 whose message ends "Either 'collectorId' or
+  'collectorGroupId' should be specified but not both.". Builds before
+  86 also installed four compliance super metrics on
+  vSphere World; the upgrade removes them from the instance, so there is
+  nothing to clean up by hand, and the dashboard that read them is
+  re-imported by the same upgrade. Existing alerts are renamed in place
+  (alert ids and start times are kept) and existing symptom and alert
+  definitions take the new wait and cancel cycles. See [installing.md](docs/installing.md#upgrading).
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored

@@ -19,7 +19,7 @@
 
     <ResourceKind key="vcfcf_compliance" nameKey="5" type="7"
                   credentialKind="vcenter_credentials"
-                  monitoringInterval="60">
+                  monitoringInterval="5">
       <ResourceIdentifier key="vcenter_host" nameKey="6" type="string"
                           required="true" dispOrder="1"/>
       <ResourceIdentifier key="benchmark_profile" nameKey="7" type="string"
@@ -54,26 +54,67 @@
       <ResourceIdentifier key="world_id" nameKey="21" type="string"
                           required="true" dispOrder="1"/>
       <!-- v3 (build 57): ComplianceWorld is ONE resource shared by every
-           adapter instance, so per-vCenter numbers here were
+           adapter instance, so per-vCenter numbers pushed here were
            last-writer-wins. Fleet numbers moved to the per-vCenter
            rollup (VCF-CF Compliance|Rollup|*) on each VMWARE
-           "VMwareAdapter Instance"; the world keeps adapter liveness. -->
+           "VMwareAdapter Instance"; the world keeps adapter liveness.
+           Build 81: the world now also carries engine-computed
+           environment totals (Rollup|Environment|*), declared below as
+           ComputedMetrics the way VMWARE declares vSphere World's
+           summary counts. No adapter instance pushes these keys, so
+           instance count cannot make them last-writer-wins. They are meant to
+           sum the Rollup|All|* keys of this world's VMwareAdapter Instance
+           children. Since build 82 each adapter instance asserts its own
+           vCenter's VMwareAdapter Instance as a child of this world every
+           cycle (additive Suite API POST, SuiteApiStitcher.addChild; the
+           world id is looked up each cycle, never cached). The edge is
+           never removed. Whether the engine needs the relationship to
+           evaluate these keys is settled on devel. -->
       <ResourceGroup key="Summary" nameKey="22" instanced="false">
         <ResourceAttribute key="last_scan_timestamp" nameKey="27"
                            dataType="string" isProperty="true"/>
       </ResourceGroup>
+      <ResourceGroup key="Rollup" nameKey="30" instanced="false">
+        <ResourceGroup key="Environment" nameKey="31" instanced="false">
+          <ResourceAttribute key="scored" nameKey="32"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true"/>
+          <ResourceAttribute key="non_compliant" nameKey="33"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true"/>
+          <ResourceAttribute key="no_benchmark" nameKey="34"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true"/>
+          <ResourceAttribute key="avg_score" nameKey="35"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true" unit="%"/>
+        </ResourceGroup>
+      </ResourceGroup>
+      <!-- avg_score is weighted: summed score_sum over summed scored, never
+           an average of per-vCenter averages. With nothing scored anywhere
+           the division is 0/0; the expected result is no data (to be
+           confirmed on devel), never a substituted 100. -->
+      <ComputedMetrics>
+        <ComputedMetric key="Rollup|Environment|scored" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
+        <ComputedMetric key="Rollup|Environment|non_compliant" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|non_compliant})"/>
+        <ComputedMetric key="Rollup|Environment|no_benchmark" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|no_benchmark})"/>
+        <ComputedMetric key="Rollup|Environment|avg_score" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|score_sum}) / sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
+      </ComputedMetrics>
     </ResourceKind>
 
   </ResourceKinds>
 
   <SymptomDefinitions>
 
+    <!-- Hand-written score symptoms and alert. Build 86: cancelCycle 3 (owner
+         decision), matching the generated per-control ones, so a single
+         unreadable cycle at a 5 minute interval does not close the alert. -->
     <SymptomDefinition id="vcfcf_compliance_score_warning"
                        nameKey="100"
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|score"
                    operator="&lt;" value="95"
@@ -86,7 +127,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|score"
                    operator="&lt;" value="80"
@@ -100,7 +141,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-auto-unlock-time|Compliant"
                    operator="=" value="0"
@@ -112,7 +153,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-dcui|Compliant"
                    operator="=" value="0"
@@ -124,7 +165,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-lockout|Compliant"
                    operator="=" value="0"
@@ -136,7 +177,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-lockout-duration|Compliant"
                    operator="=" value="0"
@@ -148,7 +189,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-lockout-max-attempts|Compliant"
                    operator="=" value="0"
@@ -160,7 +201,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-password-history|Compliant"
                    operator="=" value="0"
@@ -172,7 +213,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-password-max-days|Compliant"
                    operator="=" value="0"
@@ -184,7 +225,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-password-policies|Compliant"
                    operator="=" value="0"
@@ -196,7 +237,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.account-vpxuser|Compliant"
                    operator="=" value="0"
@@ -208,7 +249,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ad-admin-group-autoadd|Compliant"
                    operator="=" value="0"
@@ -220,7 +261,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ad-admin-validate-interval|Compliant"
                    operator="=" value="0"
@@ -232,7 +273,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|esx.api-soap-timeout|Compliant"
                    operator="=" value="0"
@@ -244,7 +285,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|esx.ceip-disable|Compliant"
                    operator="=" value="0"
@@ -256,7 +297,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.cpu-hyperthread-warning|Compliant"
                    operator="=" value="0"
@@ -268,7 +309,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.dcui-timeout|Compliant"
                    operator="=" value="0"
@@ -280,7 +321,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-cim|Compliant"
                    operator="=" value="0"
@@ -292,7 +333,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-mob|Compliant"
                    operator="=" value="0"
@@ -304,7 +345,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-shell|Compliant"
                    operator="=" value="0"
@@ -316,7 +357,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-slp|Compliant"
                    operator="=" value="0"
@@ -328,7 +369,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-snmp|Compliant"
                    operator="=" value="0"
@@ -340,7 +381,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.deactivate-ssh|Compliant"
                    operator="=" value="0"
@@ -352,7 +393,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.disable-accounts-dcui|Compliant"
                    operator="=" value="0"
@@ -364,7 +405,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.firewall-incoming-default|Compliant"
                    operator="=" value="0"
@@ -376,7 +417,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.forensic-snapshots|Compliant"
                    operator="=" value="0"
@@ -388,7 +429,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.hardware-virtual-nic|Compliant"
                    operator="=" value="0"
@@ -400,7 +441,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.host-client-session-timeout|Compliant"
                    operator="=" value="0"
@@ -412,7 +453,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.hw-virtual-nic|Compliant"
                    operator="=" value="0"
@@ -424,7 +465,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.key-persistence|Compliant"
                    operator="=" value="0"
@@ -436,7 +477,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.lockdown-dcui-access|Compliant"
                    operator="=" value="0"
@@ -448,7 +489,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.lockdown-mode|Compliant"
                    operator="=" value="0"
@@ -460,7 +501,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-audit-forwarding|Compliant"
                    operator="=" value="0"
@@ -472,7 +513,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-audit-local|Compliant"
                    operator="=" value="0"
@@ -484,7 +525,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-audit-local-capacity|Compliant"
                    operator="=" value="0"
@@ -496,7 +537,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-audit-persistent|Compliant"
                    operator="=" value="0"
@@ -508,7 +549,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-filter|Compliant"
                    operator="=" value="0"
@@ -520,7 +561,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-forwarding-tls-ciphers|Compliant"
                    operator="=" value="0"
@@ -532,7 +573,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-forwarding-tls-x509|Compliant"
                    operator="=" value="0"
@@ -544,7 +585,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-level|Compliant"
                    operator="=" value="0"
@@ -556,7 +597,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-level-global|Compliant"
                    operator="=" value="0"
@@ -568,7 +609,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.log-persistent|Compliant"
                    operator="=" value="0"
@@ -580,7 +621,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-audit-local|Compliant"
                    operator="=" value="0"
@@ -592,7 +633,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-audit-local-capacity|Compliant"
                    operator="=" value="0"
@@ -604,7 +645,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-audit-persistent|Compliant"
                    operator="=" value="0"
@@ -616,7 +657,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-audit-remote|Compliant"
                    operator="=" value="0"
@@ -628,7 +669,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-filter|Compliant"
                    operator="=" value="0"
@@ -640,7 +681,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-level|Compliant"
                    operator="=" value="0"
@@ -652,7 +693,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-level-global|Compliant"
                    operator="=" value="0"
@@ -664,7 +705,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-persistent|Compliant"
                    operator="=" value="0"
@@ -676,7 +717,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-remote-tls|Compliant"
                    operator="=" value="0"
@@ -688,7 +729,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.logs-remote-tls-x509|Compliant"
                    operator="=" value="0"
@@ -700,7 +741,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.memeagerzero|Compliant"
                    operator="=" value="0"
@@ -712,7 +753,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.memory-tiering-encryption|Compliant"
                    operator="=" value="0"
@@ -724,7 +765,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.network-bpdu|Compliant"
                    operator="=" value="0"
@@ -736,7 +777,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.network-dvfilter|Compliant"
                    operator="=" value="0"
@@ -748,7 +789,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.network-rpf-promisc|Compliant"
                    operator="=" value="0"
@@ -760,7 +801,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.password-complexity|Compliant"
                    operator="=" value="0"
@@ -772,7 +813,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.password-max-age|Compliant"
                    operator="=" value="0"
@@ -784,7 +825,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.secureboot-enforcement|Compliant"
                    operator="=" value="0"
@@ -796,7 +837,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.session-timeout|Compliant"
                    operator="=" value="0"
@@ -808,7 +849,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.shell-interactive-timeout|Compliant"
                    operator="=" value="0"
@@ -820,7 +861,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.shell-timeout|Compliant"
                    operator="=" value="0"
@@ -832,7 +873,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.shell-warning|Compliant"
                    operator="=" value="0"
@@ -844,7 +885,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.snmp|Compliant"
                    operator="=" value="0"
@@ -856,7 +897,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh|Compliant"
                    operator="=" value="0"
@@ -868,7 +909,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-fips-ciphers|Compliant"
                    operator="=" value="0"
@@ -880,7 +921,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-gateway-ports|Compliant"
                    operator="=" value="0"
@@ -892,7 +933,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-host-based-auth|Compliant"
                    operator="=" value="0"
@@ -904,7 +945,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-idle-timeout-count|Compliant"
                    operator="=" value="0"
@@ -916,7 +957,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-idle-timeout-interval|Compliant"
                    operator="=" value="0"
@@ -928,7 +969,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-login-banner|Compliant"
                    operator="=" value="0"
@@ -940,7 +981,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-rhosts|Compliant"
                    operator="=" value="0"
@@ -952,7 +993,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-stream-local-forwarding|Compliant"
                    operator="=" value="0"
@@ -964,7 +1005,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-tcp-forwarding|Compliant"
                    operator="=" value="0"
@@ -976,7 +1017,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-tunnels|Compliant"
                    operator="=" value="0"
@@ -988,7 +1029,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.ssh-user-environment|Compliant"
                    operator="=" value="0"
@@ -1000,7 +1041,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.time|Compliant"
                    operator="=" value="0"
@@ -1012,7 +1053,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.timekeeping-services|Compliant"
                    operator="=" value="0"
@@ -1024,7 +1065,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.timekeeping-sources|Compliant"
                    operator="=" value="0"
@@ -1036,7 +1077,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.tls-ciphers|Compliant"
                    operator="=" value="0"
@@ -1048,7 +1089,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|esx.tls-profile|Compliant"
                    operator="=" value="0"
@@ -1060,7 +1101,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.tls-protocols|Compliant"
                    operator="=" value="0"
@@ -1072,7 +1113,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.tpm-configuration|Compliant"
                    operator="=" value="0"
@@ -1084,7 +1125,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.tpm-trusted-binaries|Compliant"
                    operator="=" value="0"
@@ -1096,7 +1137,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.transparent-page-sharing|Compliant"
                    operator="=" value="0"
@@ -1108,7 +1149,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.vib-trusted-binaries|Compliant"
                    operator="=" value="0"
@@ -1120,7 +1161,7 @@
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|esx.vmotion-encryption-offload|Compliant"
                    operator="=" value="0"
@@ -1132,7 +1173,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.deactivate-console-copy|Compliant"
                    operator="=" value="0"
@@ -1144,7 +1185,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.deactivate-console-paste|Compliant"
                    operator="=" value="0"
@@ -1156,7 +1197,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.deactivate-disk-shrinking-shrink|Compliant"
                    operator="=" value="0"
@@ -1168,7 +1209,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.deactivate-disk-shrinking-wiper|Compliant"
                    operator="=" value="0"
@@ -1180,7 +1221,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.deactivate-non-essential-3d-features|Compliant"
                    operator="=" value="0"
@@ -1192,7 +1233,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.dvfilter|Compliant"
                    operator="=" value="0"
@@ -1204,7 +1245,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vm.efi-boot-types|Compliant"
                    operator="=" value="0"
@@ -1216,7 +1257,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|vm.ft-encrypted|Compliant"
                    operator="=" value="0"
@@ -1228,7 +1269,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.isolation-device-connectable-deactivate|Compliant"
                    operator="=" value="0"
@@ -1240,7 +1281,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.isolation-tools-dnd-deactivate|Compliant"
                    operator="=" value="0"
@@ -1252,7 +1293,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vm.limit-console-connections|Compliant"
                    operator="=" value="0"
@@ -1264,7 +1305,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.limit-setinfo-size|Compliant"
                    operator="=" value="0"
@@ -1276,7 +1317,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.log-enable|Compliant"
                    operator="=" value="0"
@@ -1288,7 +1329,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.log-retention|Compliant"
                    operator="=" value="0"
@@ -1300,7 +1341,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.log-rotation-size|Compliant"
                    operator="=" value="0"
@@ -1312,7 +1353,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.minimize-console-vnc-use|Compliant"
                    operator="=" value="0"
@@ -1324,7 +1365,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.pci-passthrough|Compliant"
                    operator="=" value="0"
@@ -1336,7 +1377,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.restrict-host-info|Compliant"
                    operator="=" value="0"
@@ -1348,7 +1389,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vm.secure-boot|Compliant"
                    operator="=" value="0"
@@ -1360,7 +1401,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vm.transparentpagesharing-inter-vm-enabled|Compliant"
                    operator="=" value="0"
@@ -1372,7 +1413,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|vm.virtual-hardware|Compliant"
                    operator="=" value="0"
@@ -1384,7 +1425,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|vm.vmotion-encrypted|Compliant"
                    operator="=" value="0"
@@ -1396,7 +1437,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vm.vmrc-lock|Compliant"
                    operator="=" value="0"
@@ -1408,7 +1449,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.events-remote-logging|Compliant"
                    operator="=" value="0"
@@ -1420,7 +1461,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.fips-enable|Compliant"
                    operator="=" value="0"
@@ -1432,7 +1473,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.log-forwarding|Compliant"
                    operator="=" value="0"
@@ -1444,7 +1485,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.logs-level-global|Compliant"
                    operator="=" value="0"
@@ -1456,7 +1497,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.ssh|Compliant"
                    operator="=" value="0"
@@ -1468,7 +1509,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.time|Compliant"
                    operator="=" value="0"
@@ -1480,7 +1521,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.tls-ciphers|Compliant"
                    operator="=" value="0"
@@ -1492,7 +1533,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.tls-profile|Compliant"
                    operator="=" value="0"
@@ -1504,7 +1545,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.vami-access-ssh|Compliant"
                    operator="=" value="0"
@@ -1516,7 +1557,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.vami-administration-password-expiration|Compliant"
                    operator="=" value="0"
@@ -1528,7 +1569,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.vami-password-max-age|Compliant"
                    operator="=" value="0"
@@ -1540,7 +1581,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.vami-syslog|Compliant"
                    operator="=" value="0"
@@ -1552,7 +1593,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|vc.vami-time|Compliant"
                    operator="=" value="0"
@@ -1564,7 +1605,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.vpxuser-length|Compliant"
                    operator="=" value="0"
@@ -1576,7 +1617,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vc.vpxuser-rotation|Compliant"
                    operator="=" value="0"
@@ -1588,7 +1629,7 @@
                        adapterKind="VMWARE"
                        resourceKind="ClusterComputeResource"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Critical">
         <Condition type="metric" key="VCF-CF Compliance|cluster.managed-disk-claim|Compliant"
                    operator="=" value="0"
@@ -1600,7 +1641,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vds.network-nioc|Compliant"
                    operator="=" value="0"
@@ -1612,7 +1653,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|vds.network-restrict-discovery-protocol|Compliant"
                    operator="=" value="0"
@@ -1624,7 +1665,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vds.network-restrict-netflow-usage|Compliant"
                    operator="=" value="0"
@@ -1636,7 +1677,7 @@
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|vds.network-restrict-port-mirroring|Compliant"
                    operator="=" value="0"
@@ -1648,7 +1689,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-mac-learning|Compliant"
                    operator="=" value="0"
@@ -1660,7 +1701,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-reject-forged-transmit-dvportgroup|Compliant"
                    operator="=" value="0"
@@ -1672,7 +1713,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-reject-mac-changes-dvportgroup|Compliant"
                    operator="=" value="0"
@@ -1684,7 +1725,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-reject-promiscuous-mode-dvportgroup|Compliant"
                    operator="=" value="0"
@@ -1696,7 +1737,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-reset-port|Compliant"
                    operator="=" value="0"
@@ -1708,7 +1749,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-restrict-port-level-overrides|Compliant"
                    operator="=" value="0"
@@ -1720,7 +1761,7 @@
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
                        waitCycle="1"
-                       cancelCycle="1">
+                       cancelCycle="3">
       <State severity="Warning">
         <Condition type="metric" key="VCF-CF Compliance|dvpg.network-vgt|Compliant"
                    operator="=" value="0"
@@ -1894,7 +1935,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSets operator="or">
@@ -1917,7 +1958,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_auto_unlock_time_noncompliant" operator="and"
@@ -1932,7 +1973,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_dcui_noncompliant" operator="and"
@@ -1947,7 +1988,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_lockout_noncompliant" operator="and"
@@ -1962,7 +2003,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_lockout_duration_noncompliant" operator="and"
@@ -1977,7 +2018,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_lockout_max_attempts_noncompliant" operator="and"
@@ -1992,7 +2033,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_password_history_noncompliant" operator="and"
@@ -2007,7 +2048,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_password_max_days_noncompliant" operator="and"
@@ -2022,7 +2063,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_password_policies_noncompliant" operator="and"
@@ -2037,7 +2078,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_account_vpxuser_noncompliant" operator="and"
@@ -2052,7 +2093,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ad_admin_group_autoadd_noncompliant" operator="and"
@@ -2067,7 +2108,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ad_admin_validate_interval_noncompliant" operator="and"
@@ -2082,7 +2123,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_api_soap_timeout_noncompliant" operator="and"
@@ -2097,7 +2138,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ceip_disable_noncompliant" operator="and"
@@ -2112,7 +2153,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_cpu_hyperthread_warning_noncompliant" operator="and"
@@ -2127,7 +2168,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_dcui_timeout_noncompliant" operator="and"
@@ -2142,7 +2183,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_cim_noncompliant" operator="and"
@@ -2157,7 +2198,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_mob_noncompliant" operator="and"
@@ -2172,7 +2213,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_shell_noncompliant" operator="and"
@@ -2187,7 +2228,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_slp_noncompliant" operator="and"
@@ -2202,7 +2243,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_snmp_noncompliant" operator="and"
@@ -2217,7 +2258,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_deactivate_ssh_noncompliant" operator="and"
@@ -2232,7 +2273,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_disable_accounts_dcui_noncompliant" operator="and"
@@ -2247,7 +2288,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_firewall_incoming_default_noncompliant" operator="and"
@@ -2262,7 +2303,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_forensic_snapshots_noncompliant" operator="and"
@@ -2277,7 +2318,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_hardware_virtual_nic_noncompliant" operator="and"
@@ -2292,7 +2333,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_host_client_session_timeout_noncompliant" operator="and"
@@ -2307,7 +2348,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_hw_virtual_nic_noncompliant" operator="and"
@@ -2322,7 +2363,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_key_persistence_noncompliant" operator="and"
@@ -2337,7 +2378,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_lockdown_dcui_access_noncompliant" operator="and"
@@ -2352,7 +2393,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_lockdown_mode_noncompliant" operator="and"
@@ -2367,7 +2408,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_audit_forwarding_noncompliant" operator="and"
@@ -2382,7 +2423,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_audit_local_noncompliant" operator="and"
@@ -2397,7 +2438,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_audit_local_capacity_noncompliant" operator="and"
@@ -2412,7 +2453,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_audit_persistent_noncompliant" operator="and"
@@ -2427,7 +2468,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_filter_noncompliant" operator="and"
@@ -2442,7 +2483,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_forwarding_tls_ciphers_noncompliant" operator="and"
@@ -2457,7 +2498,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_forwarding_tls_x509_noncompliant" operator="and"
@@ -2472,7 +2513,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_level_noncompliant" operator="and"
@@ -2487,7 +2528,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_level_global_noncompliant" operator="and"
@@ -2502,7 +2543,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_log_persistent_noncompliant" operator="and"
@@ -2517,7 +2558,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_audit_local_noncompliant" operator="and"
@@ -2532,7 +2573,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_audit_local_capacity_noncompliant" operator="and"
@@ -2547,7 +2588,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_audit_persistent_noncompliant" operator="and"
@@ -2562,7 +2603,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_audit_remote_noncompliant" operator="and"
@@ -2577,7 +2618,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_filter_noncompliant" operator="and"
@@ -2592,7 +2633,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_level_noncompliant" operator="and"
@@ -2607,7 +2648,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_level_global_noncompliant" operator="and"
@@ -2622,7 +2663,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_persistent_noncompliant" operator="and"
@@ -2637,7 +2678,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_remote_tls_noncompliant" operator="and"
@@ -2652,7 +2693,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_logs_remote_tls_x509_noncompliant" operator="and"
@@ -2667,7 +2708,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_memeagerzero_noncompliant" operator="and"
@@ -2682,7 +2723,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_memory_tiering_encryption_noncompliant" operator="and"
@@ -2697,7 +2738,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_network_bpdu_noncompliant" operator="and"
@@ -2712,7 +2753,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_network_dvfilter_noncompliant" operator="and"
@@ -2727,7 +2768,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_network_rpf_promisc_noncompliant" operator="and"
@@ -2742,7 +2783,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_password_complexity_noncompliant" operator="and"
@@ -2757,7 +2798,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_password_max_age_noncompliant" operator="and"
@@ -2772,7 +2813,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_secureboot_enforcement_noncompliant" operator="and"
@@ -2787,7 +2828,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_session_timeout_noncompliant" operator="and"
@@ -2802,7 +2843,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_shell_interactive_timeout_noncompliant" operator="and"
@@ -2817,7 +2858,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_shell_timeout_noncompliant" operator="and"
@@ -2832,7 +2873,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_shell_warning_noncompliant" operator="and"
@@ -2847,7 +2888,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_snmp_noncompliant" operator="and"
@@ -2862,7 +2903,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_noncompliant" operator="and"
@@ -2877,7 +2918,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_fips_ciphers_noncompliant" operator="and"
@@ -2892,7 +2933,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_gateway_ports_noncompliant" operator="and"
@@ -2907,7 +2948,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_host_based_auth_noncompliant" operator="and"
@@ -2922,7 +2963,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_idle_timeout_count_noncompliant" operator="and"
@@ -2937,7 +2978,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_idle_timeout_interval_noncompliant" operator="and"
@@ -2952,7 +2993,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_login_banner_noncompliant" operator="and"
@@ -2967,7 +3008,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_rhosts_noncompliant" operator="and"
@@ -2982,7 +3023,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_stream_local_forwarding_noncompliant" operator="and"
@@ -2997,7 +3038,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_tcp_forwarding_noncompliant" operator="and"
@@ -3012,7 +3053,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_tunnels_noncompliant" operator="and"
@@ -3027,7 +3068,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_ssh_user_environment_noncompliant" operator="and"
@@ -3042,7 +3083,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_time_noncompliant" operator="and"
@@ -3057,7 +3098,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_timekeeping_services_noncompliant" operator="and"
@@ -3072,7 +3113,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_timekeeping_sources_noncompliant" operator="and"
@@ -3087,7 +3128,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_tls_ciphers_noncompliant" operator="and"
@@ -3102,7 +3143,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_tls_profile_noncompliant" operator="and"
@@ -3117,7 +3158,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_tls_protocols_noncompliant" operator="and"
@@ -3132,7 +3173,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_tpm_configuration_noncompliant" operator="and"
@@ -3147,7 +3188,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_tpm_trusted_binaries_noncompliant" operator="and"
@@ -3162,7 +3203,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_transparent_page_sharing_noncompliant" operator="and"
@@ -3177,7 +3218,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_vib_trusted_binaries_noncompliant" operator="and"
@@ -3192,7 +3233,7 @@
                      adapterKind="VMWARE"
                      resourceKind="HostSystem"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_esx_vmotion_encryption_offload_noncompliant" operator="and"
@@ -3207,7 +3248,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_deactivate_console_copy_noncompliant" operator="and"
@@ -3222,7 +3263,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_deactivate_console_paste_noncompliant" operator="and"
@@ -3237,7 +3278,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_shrink_noncompliant" operator="and"
@@ -3252,7 +3293,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_wiper_noncompliant" operator="and"
@@ -3267,7 +3308,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_deactivate_non_essential_3d_features_noncompliant" operator="and"
@@ -3282,7 +3323,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_dvfilter_noncompliant" operator="and"
@@ -3297,7 +3338,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_efi_boot_types_noncompliant" operator="and"
@@ -3312,7 +3353,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_ft_encrypted_noncompliant" operator="and"
@@ -3327,7 +3368,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_isolation_device_connectable_deactivate_noncompliant" operator="and"
@@ -3342,7 +3383,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_isolation_tools_dnd_deactivate_noncompliant" operator="and"
@@ -3357,7 +3398,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_limit_console_connections_noncompliant" operator="and"
@@ -3372,7 +3413,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_limit_setinfo_size_noncompliant" operator="and"
@@ -3387,7 +3428,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_log_enable_noncompliant" operator="and"
@@ -3402,7 +3443,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_log_retention_noncompliant" operator="and"
@@ -3417,7 +3458,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_log_rotation_size_noncompliant" operator="and"
@@ -3432,7 +3473,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_minimize_console_vnc_use_noncompliant" operator="and"
@@ -3447,7 +3488,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_pci_passthrough_noncompliant" operator="and"
@@ -3462,7 +3503,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_restrict_host_info_noncompliant" operator="and"
@@ -3477,7 +3518,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_secure_boot_noncompliant" operator="and"
@@ -3492,7 +3533,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_transparentpagesharing_inter_vm_enabled_noncompliant" operator="and"
@@ -3507,7 +3548,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_virtual_hardware_noncompliant" operator="and"
@@ -3522,7 +3563,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_vmotion_encrypted_noncompliant" operator="and"
@@ -3537,7 +3578,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VirtualMachine"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vm_vmrc_lock_noncompliant" operator="and"
@@ -3552,7 +3593,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_events_remote_logging_noncompliant" operator="and"
@@ -3567,7 +3608,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_fips_enable_noncompliant" operator="and"
@@ -3582,7 +3623,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_log_forwarding_noncompliant" operator="and"
@@ -3597,7 +3638,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_logs_level_global_noncompliant" operator="and"
@@ -3612,7 +3653,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_ssh_noncompliant" operator="and"
@@ -3627,7 +3668,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_time_noncompliant" operator="and"
@@ -3642,7 +3683,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_tls_ciphers_noncompliant" operator="and"
@@ -3657,7 +3698,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_tls_profile_noncompliant" operator="and"
@@ -3672,7 +3713,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vami_access_ssh_noncompliant" operator="and"
@@ -3687,7 +3728,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vami_administration_password_expiration_noncompliant" operator="and"
@@ -3702,7 +3743,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vami_password_max_age_noncompliant" operator="and"
@@ -3717,7 +3758,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vami_syslog_noncompliant" operator="and"
@@ -3732,7 +3773,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vami_time_noncompliant" operator="and"
@@ -3747,7 +3788,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vpxuser_length_noncompliant" operator="and"
@@ -3762,7 +3803,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VMwareAdapter Instance"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vc_vpxuser_rotation_noncompliant" operator="and"
@@ -3777,7 +3818,7 @@
                      adapterKind="VMWARE"
                      resourceKind="ClusterComputeResource"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_cluster_managed_disk_claim_noncompliant" operator="and"
@@ -3792,7 +3833,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vds_network_nioc_noncompliant" operator="and"
@@ -3807,7 +3848,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vds_network_restrict_discovery_protocol_noncompliant" operator="and"
@@ -3822,7 +3863,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vds_network_restrict_netflow_usage_noncompliant" operator="and"
@@ -3837,7 +3878,7 @@
                      adapterKind="VMWARE"
                      resourceKind="VmwareDistributedVirtualSwitch"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_vds_network_restrict_port_mirroring_noncompliant" operator="and"
@@ -3852,7 +3893,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_mac_learning_noncompliant" operator="and"
@@ -3867,7 +3908,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_reject_forged_transmit_dvportgroup_noncompliant" operator="and"
@@ -3882,7 +3923,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_reject_mac_changes_dvportgroup_noncompliant" operator="and"
@@ -3897,7 +3938,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_reject_promiscuous_mode_dvportgroup_noncompliant" operator="and"
@@ -3912,7 +3953,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_reset_port_noncompliant" operator="and"
@@ -3927,7 +3968,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_restrict_port_level_overrides_noncompliant" operator="and"
@@ -3942,7 +3983,7 @@
                      adapterKind="VMWARE"
                      resourceKind="DistributedVirtualPortgroup"
                      type="15" subType="21"
-                     waitCycle="1" cancelCycle="1">
+                     waitCycle="1" cancelCycle="3">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
         <SymptomSet ref="vcfcf_compliance_ctl_dvpg_network_vgt_noncompliant" operator="and"

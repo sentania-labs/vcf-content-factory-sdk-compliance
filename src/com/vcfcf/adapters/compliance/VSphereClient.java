@@ -92,9 +92,10 @@ public final class VSphereClient {
 			java.util.Collections.newSetFromMap(
 					new java.util.concurrent.ConcurrentHashMap<>());
 
-	// esxcli reader (build 36) — rides THIS vCenter session. Rebuilt on
-	// every (re)connect so it carries the live cookie and a fresh per-cycle
-	// command cache. Lazily used on first esxcli recipe read.
+	// esxcli reader (build 36), rides THIS vCenter session. Rebuilt on
+	// every (re)connect so it carries the live cookie; its command cache is
+	// emptied every cycle by beginCycle() (build 85), because the session,
+	// and so this object, can outlive any number of cycles.
 	private volatile EsxcliSoapClient esxcli;
 
 	private final boolean trustAll;       // true only on the explicit lab opt-out
@@ -194,7 +195,8 @@ public final class VSphereClient {
 					+ "returned");
 		}
 
-		// esxcli reader rides this session cookie; fresh per-cycle cache.
+		// esxcli reader rides this session cookie; its cache is emptied
+		// per cycle by beginCycle().
 		this.esxcli = new EsxcliSoapClient(vcenterUrl, sessionCookie,
 				sslFactory);
 	}
@@ -220,6 +222,29 @@ public final class VSphereClient {
 		aboutFullName = null;
 		aboutVersion = null;
 		esxcli = null;
+	}
+
+	/**
+	 * Build 85: call once at the start of every collection cycle, after
+	 * {@link #ensureConnected}. Empties the esxcli result cache so this
+	 * cycle reads every host's esxcli commands again (a stale cached pass
+	 * would be a false pass). No login, no vCenter call. A no-op when there
+	 * is no session. Build 86: the body is exactly the SDK-free helper, so
+	 * EsxcliCycleCacheTest covers the delegation (and pins this body).
+	 */
+	public void beginCycle() {
+		EsxcliSoapClient.beginCycleOn(esxcli);
+	}
+
+	/**
+	 * Build 87: the first cause when this host's esxcli reads were skipped
+	 * this cycle (esxcli-host-unreachable), returned once per host per
+	 * cycle so the adapter logs one WARN naming the host; null otherwise.
+	 */
+	public String takeEsxcliUnreachable(String hostMoid) {
+		EsxcliSoapClient c = esxcli;
+		return c == null || hostMoid == null ? null
+				: c.takeUnreachableToReport(hostMoid);
 	}
 
 	public void ensureConnected() throws Exception {
@@ -734,8 +759,13 @@ public final class VSphereClient {
 			value = esxcli.readField(hostMoid, namespaceCommand, fieldSpec);
 		}
 		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
-			readFailure = "esxcli-command-failed: " + namespaceCommand
-					+ (lastFault != null ? " (" + lastFault + ")" : "");
+			// Build 86: a host whose esxcli request (made through vCenter)
+			// timed out or could not connect once this cycle is skipped for
+			// its other commands; say why, with the first cause. Build 87:
+			// the label choice is the SDK-free helper, so it is tested.
+			readFailure = EsxcliSoapClient.commandFailedReason(
+					namespaceCommand, esxcli.unreachableReason(hostMoid),
+					lastFault);
 			return null;
 		}
 		if (value == null) {

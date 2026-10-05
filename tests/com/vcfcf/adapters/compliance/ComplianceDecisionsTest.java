@@ -263,6 +263,71 @@ public final class ComplianceDecisionsTest {
 		T.eq(null, ComplianceDecisions.matchVCenter(null, new HashMap<>(),
 				single, "mine.lab"), "no singleton fallback");
 
+		// ---- ComplianceWorld link (build 82; no cache since build 83)
+		java.util.List<String> calls = new java.util.ArrayList<>();
+		int[] lookups = {0};
+		java.util.function.Supplier<String> world = () -> {
+			lookups[0]++; return "w-1"; };
+		java.util.function.Supplier<String> noWorld = () -> {
+			lookups[0]++; return null; };
+		java.util.function.BiPredicate<String, String> ok = (p, c) -> {
+			calls.add(p + ">" + c); return true; };
+		java.util.function.BiPredicate<String, String> fail = (p, c) -> {
+			calls.add(p + ">" + c); return false; };
+
+		ComplianceDecisions.WorldLink wl = ComplianceDecisions.linkWorld(
+				"vc-a", world, ok);
+		T.eq(ComplianceDecisions.LinkOutcome.ACCEPTED, wl.outcome,
+				"add accepted");
+		T.eq("w-1", wl.worldId, "world id reported");
+		T.eq("w-1>vc-a", calls.get(0), "parent world, child own vCenter");
+		T.eq(1, lookups[0], "one lookup");
+
+		wl = ComplianceDecisions.linkWorld("vc-a", world, ok);
+		T.eq(ComplianceDecisions.LinkOutcome.ACCEPTED, wl.outcome,
+				"re-asserted next cycle");
+		T.eq(2, lookups[0], "world looked up again every cycle (no cache)");
+		T.eq(2, calls.size(), "add re-asserted every cycle");
+
+		wl = ComplianceDecisions.linkWorld(null, world, ok);
+		T.eq(ComplianceDecisions.LinkOutcome.NO_VCENTER, wl.outcome,
+				"no own vCenter -> skip");
+		T.eq(null, wl.worldId, "no world id on skip");
+		T.eq(2, calls.size(), "nothing linked without own vCenter");
+		T.eq(2, lookups[0], "no lookup without own vCenter");
+		wl = ComplianceDecisions.linkWorld("  ", world, ok);
+		T.eq(ComplianceDecisions.LinkOutcome.NO_VCENTER, wl.outcome,
+				"blank vCenter id -> skip");
+		T.eq(2, lookups[0], "no lookup for blank vCenter id");
+
+		wl = ComplianceDecisions.linkWorld("vc-a", noWorld, ok);
+		T.eq(ComplianceDecisions.LinkOutcome.NO_WORLD, wl.outcome,
+				"world not created yet -> skip");
+		T.eq(2, calls.size(), "no add without a world id");
+		wl = ComplianceDecisions.linkWorld("vc-a", () -> " ", ok);
+		T.eq(ComplianceDecisions.LinkOutcome.NO_WORLD, wl.outcome,
+				"blank world id -> skip");
+		T.eq(2, calls.size(), "no add with a blank world id");
+
+		wl = ComplianceDecisions.linkWorld("vc-a", world, fail);
+		T.eq(ComplianceDecisions.LinkOutcome.ADD_FAILED, wl.outcome,
+				"add failed");
+		T.eq("w-1", wl.worldId, "failed world id reported");
+		// A recreated world (new id) is picked up on the very next cycle
+		// because nothing is carried over, whatever the add returned.
+		wl = ComplianceDecisions.linkWorld("vc-a", () -> "w-2", ok);
+		T.eq(ComplianceDecisions.LinkOutcome.ACCEPTED, wl.outcome,
+				"next cycle uses the current world");
+		T.eq("w-2>vc-a", calls.get(calls.size() - 1), "linked to new world");
+
+		// ---- build 87 (review W1): a partly unreadable host is named at INFO
+		T.check(!ComplianceDecisions.hostScoreLineAtInfo(0),
+				"fully read host: score line at DEBUG");
+		T.check(ComplianceDecisions.hostScoreLineAtInfo(1),
+				"one unreadable control: score line at INFO");
+		T.check(ComplianceDecisions.hostScoreLineAtInfo(19),
+				"many unreadable controls: score line at INFO");
+
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
 	}
 

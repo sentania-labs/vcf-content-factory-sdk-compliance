@@ -382,14 +382,43 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * <p><b>v3 (build 57) world change.</b> ComplianceWorld is ONE resource
 	 * shared by every adapter instance (identifier
 	 * {@code world_id=compliance_world}), so any per-instance number pushed
-	 * there is last-writer-wins across vCenters. It now carries only
-	 * {@code Summary|last_scan_timestamp} (adapter liveness: the last scan by
-	 * any instance). Fleet numbers live in the per-vCenter rollup
-	 * ({@link ComplianceRollup}) on each {@code VMwareAdapter Instance}.
+	 * there is last-writer-wins across vCenters. The only key this adapter
+	 * pushes there is {@code Summary|last_scan_timestamp} (adapter liveness:
+	 * the last scan by any instance). Fleet numbers live in the per-vCenter
+	 * rollup ({@link ComplianceRollup}) on each {@code VMwareAdapter
+	 * Instance}; the environment totals ({@code Rollup|Environment|*}, build
+	 * 82) are ComputedMetrics the engine sums across those children.
+	 *
+	 * <p>Build 86: the cycle's duration is logged from a {@code finally}, so
+	 * a cycle that ends in an exception (where the time usually goes) still
+	 * reports it. Monotonic clock ({@code System.nanoTime}).
 	 */
 	private void collectWorld(ResourceConfig worldRc, List<MetricData> out)
 			throws Exception {
+		long cycleStartNs = System.nanoTime();
+		boolean completed = false;
+		try {
+			collectWorldCycle(worldRc, out);
+			completed = true;
+		} finally {
+			long ms = (System.nanoTime() - cycleStartNs) / 1_000_000L;
+			if (completed) {
+				logInfo("ComplianceAdapter cycle took " + ms + " ms");
+			} else {
+				logWarn("ComplianceAdapter cycle failed after " + ms + " ms "
+						+ "(the exception is logged by onCollect)");
+			}
+		}
+	}
+
+	/** The cycle body; {@link #collectWorld} times it. */
+	private void collectWorldCycle(ResourceConfig worldRc,
+			List<MetricData> out) throws Exception {
 		vsphere.ensureConnected();
+		// Build 85: fresh esxcli reads every cycle. The esxcli cache lived as
+		// long as the vCenter session, so a stale result (pass or failure)
+		// could be served cycle after cycle; a stale pass is a false pass.
+		vsphere.beginCycle();
 
 		Path confDir = getAdapterDescribeFile(ADAPTER_KIND, "describe.xml")
 				.getParent();   // <adaptersHome>/<kind>/conf
@@ -439,6 +468,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		pushRollup(vcEntry, rollup);
+		// Known limitation: this edge is added, never removed. A vCenter whose
+		// compliance instance is deleted stays a ComplianceWorld child. See
+		// knowledge/designs/sdk-adapters/compliance-environment-computed-metrics.md
+		linkVCenterToWorld(vcEntry);
 
 		if (cs.unreadable > 0) {
 			logWarn(cs.unreadable + " control instance(s) could not be read "
@@ -524,6 +557,74 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				System.currentTimeMillis());
 		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
 				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")");
+	}
+
+	/**
+	 * Build 82: assert ComplianceWorld (parent) to this instance's own
+	 * VMwareAdapter Instance (child), so the ComplianceWorld
+	 * {@code Rollup|Environment} ComputedMetrics have children to walk.
+	 * Additive Suite API POST through {@link SuiteApiStitcher#addChild},
+	 * re-asserted every cycle; never the RelationshipBuilder /
+	 * setRelationships route (a full set from one instance would replace
+	 * the links every other instance added). Never fails the cycle.
+	 *
+	 * <p>Known limitation: nothing removes this edge. A vCenter whose
+	 * compliance instance is deleted stays a ComplianceWorld child, and the
+	 * environment totals keep summing its last Rollup|All values. See
+	 * knowledge/designs/sdk-adapters/compliance-environment-computed-metrics.md
+	 * (Vision item 2) in the factory repo.
+	 */
+	private void linkVCenterToWorld(ComplianceStitcher.HostEntry vcEntry) {
+		SuiteApiStitcher sas = suiteStitcher;
+		if (sas == null) {
+			return;   // configureAdapter already logged the missing stitcher
+		}
+		// Build 83 (review of build 82, W2): the ComplianceWorld id is looked
+		// up every cycle (one local GET) and never cached, because an
+		// accepted add to a deleted world's id would never clear a cache.
+		ComplianceDecisions.WorldLink link = ComplianceDecisions.linkWorld(
+				vcEntry == null ? null : vcEntry.resourceId,
+				() -> sas.findSingletonResourceId(ADAPTER_KIND,
+						"ComplianceWorld"),
+				sas::addChild);
+		switch (link.outcome) {
+			case ACCEPTED:
+				// Asynchronous on the platform side: accepted, not proven.
+				logInfo("Link of vCenter " + vcEntry.hostName + " (resource="
+						+ vcEntry.resourceId + ") under ComplianceWorld "
+						+ "(resource=" + link.worldId + ") requested and "
+						+ "accepted by Suite API");
+				break;
+			case NO_VCENTER:
+				// DEBUG: the unresolved vCenter is already reported at WARN
+				// by the stitcher, collectVCenter and pushRollup this cycle.
+				logDebug("vCenter " + config.vcenterHost + " is NOT linked "
+						+ "under ComplianceWorld this cycle: its VMwareAdapter "
+						+ "Instance was not resolved, so the environment "
+						+ "totals do not include it");
+				break;
+			case NO_WORLD:
+				// Build 85 (review of build 84, N1): the lookup returns null
+				// for zero matches, several matches, a partial page and a
+				// failed query alike, so this line cannot say which. The
+				// framework logs the cause in the WARN just before it.
+				logWarn("vCenter " + vcEntry.hostName + " is NOT linked under "
+						+ "ComplianceWorld this cycle: no single "
+						+ "ComplianceWorld resource was found or the lookup "
+						+ "could not be queried (see the preceding "
+						+ "SuiteApiStitchClient findSingletonResourceId WARN "
+						+ "for the cause; zero matches is normal only on the "
+						+ "first cycle); retried next cycle");
+				break;
+			default:   // ADD_FAILED
+				// One line, no stack trace (the cause is in the stitcher's
+				// own WARN just before this one).
+				logWarn("vCenter " + vcEntry.hostName + " is NOT linked under "
+						+ "ComplianceWorld this cycle: the relationship add "
+						+ "to resource " + link.worldId + " was not accepted; "
+						+ "retried next cycle");
+				break;
+		}
 	}
 
 	/** Append a string world property (isProperty=true MetricKey). */
@@ -956,17 +1057,46 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
+			// Build 87: one WARN per host per cycle naming a host whose
+			// esxcli reads were skipped (esxcli-host-unreachable).
+			String esxcliUnreachable = vsphere.takeEsxcliUnreachable(hostId);
+			if (esxcliUnreachable != null) {
+				logWarn("Host " + hostName + ": esxcli request through vCenter "
+						+ "failed (" + esxcliUnreachable + "); its remaining "
+						+ "esxcli-backed controls are UNREADABLE "
+						+ "(esxcli-host-unreachable) for the rest of this cycle. "
+						+ "If every host shows this, check vCenter first.");
+			}
 			if (wholeHostUnreadable && cr.attempted() > 0) {
 				// Build 63: nothing collected -> score 0 (owner decision),
 				// counted in the host average like any other score.
 				logInfo("Host " + hostName + ": UNREADABLE (" + cr.unreadableCount
 						+ " controls), score 0");
 			} else if (cr.attempted() > 0) {
-				logInfo("Host " + hostName + " [" + d.profileName + "]: score="
-						+ String.format("%.1f", cr.score) + "% ("
+				// Build 86: DEBUG for a fully read host (one line per host
+				// per cycle is 12x the volume at 5 minutes); the per-cycle
+				// INFO summary follows the loop. Build 87: INFO when any
+				// control was unreadable, so a partly unreadable host is
+				// named at INFO.
+				String line = "Host " + hostName + " [" + d.profileName
+						+ "]: score=" + String.format("%.1f", cr.score) + "% ("
 						+ cr.passCount + " pass, " + cr.failCount + " fail, "
 						+ cr.unreadableCount + " unreadable, "
-						+ cr.totalCount + " total)");
+						+ cr.totalCount + " total)";
+				if (ComplianceDecisions.hostScoreLineAtInfo(
+						cr.unreadableCount)) {
+					logInfo(line);
+				} else {
+					logDebug(line);
+				}
+			}
+			if (cr.attempted() > 0) {
+				cs.hostsScored++;
+				if (ComplianceRollup.isNonCompliant(cr.failCount,
+						cr.unreadableCount)) {
+					cs.hostsNonCompliant++;
+				}
+				if (wholeHostUnreadable) cs.hostsWhollyUnreadable++;
 			}
 
 			if (resourceId != null) {
@@ -975,6 +1105,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
 					ComplianceDecisions.pushedIds(cr));
 		}
+		logInfo("Hosts scored this cycle: " + cs.hostsScored + " of "
+				+ cs.hosts + " (" + cs.hostsNonCompliant + " non-compliant, "
+				+ cs.hostsWhollyUnreadable + " wholly unreadable); per-host "
+				+ "scores at DEBUG, at INFO for hosts with unreadable "
+				+ "controls");
 		return hostVersions;
 	}
 
@@ -1346,7 +1481,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		try {
 			boolean enabled = vsphere.hasVsanConfig(moRef);
 			if (!enabled) {
-				logInfo("Cluster " + name + ": vSAN not enabled; vSAN "
+				// Build 86: DEBUG, every non-vSAN cluster every cycle.
+				logDebug("Cluster " + name + ": vSAN not enabled; vSAN "
 						+ "controls not applicable (profile_name only)");
 			}
 			return enabled;
@@ -1643,6 +1779,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	/** Per-cycle counters for the completion log line. */
 	private static final class CycleStats {
 		int hosts; int vms; int dvs; int dvpg; int clusters;
+		int hostsScored; int hostsNonCompliant; int hostsWhollyUnreadable;
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
 		int cleanupQueried; int cleanupRequests; int cleanupValues;

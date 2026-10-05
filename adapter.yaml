@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 80
+build_number: 87
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -18,17 +18,27 @@ description: >
   SCG remediation as the recommendation) per scored control.
 entry_class: "com.vcfcf.adapters.compliance.ComplianceAdapter"
 released: false
+# Build 87 (build 86 review W2): the one relationship the adapter makes
+# outside describe.xml, declared so the generated docs show it.
+cross_mp_edges:
+  - parent: "ComplianceWorld"
+    child: "VMwareAdapter Instance"
+    direction: child_foreign
+    foreign_adapter_kind: VMWARE
+    description: >
+      Each adapter instance makes its own vCenter object a child of the
+      Compliance World through the Suite API, every cycle (additive, so
+      instances never remove each other's links). The Rollup|Environment
+      totals on the Compliance World are computed by the analytics engine
+      over these children. The link is added each cycle and never removed.
 bundled_content:
-  # Build 61: the v3 content round (four dashboards, their views and the
-  # environment super metrics). views/compliance-host-overview.yaml is
-  # replaced by compliance-host-detail.yaml and
-  # dashboards/compliance-overview.yaml (Fleet Overview, retired world keys)
-  # stays unbundled; both files remain in the repo.
-  supermetrics:
-    - supermetrics/compliance-objects-scored.yaml
-    - supermetrics/compliance-non-compliant-objects.yaml
-    - supermetrics/compliance-objects-without-benchmark.yaml
-    - supermetrics/compliance-average-score.yaml
+  # Build 61: the v3 content round (four dashboards and their views).
+  # views/compliance-host-overview.yaml is replaced by
+  # compliance-host-detail.yaml and dashboards/compliance-overview.yaml
+  # (Fleet Overview, retired world keys) stays unbundled; both files remain
+  # in the repo. Build 86: the four environment super metrics on vSphere
+  # World are retired; the Environment Overview reads the engine-computed
+  # Rollup|Environment metrics on ComplianceWorld instead.
   views:
     - views/compliance-by-vcenter.yaml
     - views/compliance-scg-versions.yaml

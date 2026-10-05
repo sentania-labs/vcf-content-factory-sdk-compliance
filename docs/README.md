@@ -16,9 +16,18 @@
 
 ![Inventory Tree](inventory-tree.svg)
 
+## Cross-MP Relationships
+
+These edges are created at collection time via the Suite API and never appear in `describe.xml` — they are declared explicitly in `adapter.yaml` (`cross_mp_edges`) so this generated docset doesn't silently omit them. *Italic* endpoints belong to a foreign management pack; `code` endpoints are owned by this adapter.
+
+| Parent | Child | Description |
+|--------|-------|-------------|
+| `ComplianceWorld` | *VMwareAdapter Instance* (foreign, VMWARE) | Each adapter instance makes its own vCenter object a child of the Compliance World through the Suite API, every cycle (additive, so instances never remove each other's links). The Rollup\|Environment totals on the Compliance World are computed by the analytics engine over these children. The link is added each cycle and never removed. |
+
 ## Quick Reference
 
 - **Adapter kind:** `vcfcf_compliance`
-- **Version:** 1.0.0.80
+- **Version:** 0.0.0.87
 - **Traversal spec:** (none)
 - **Resource kinds:** 1
+- **Cross-MP relationships:** 1 (see [Cross-MP Relationships](#cross-mp-relationships) below)

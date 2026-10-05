@@ -8,7 +8,8 @@ description: >
   Summary metrics are last-writer-wins across the three adapter
   instances sharing one ComplianceWorld; this dashboard reads
   per-vCenter rollups stitched onto each VMWARE VMwareAdapter Instance
-  instead, plus environment-wide super metrics on vSphere World). The
+  instead, plus the engine-computed Rollup|Environment|* totals on the
+  pak's own ComplianceWorld singleton, which no instance pushes). The
   per-kind dashboards (ESX Hosts, VMs, vCenter & Networking) are where
   a user acts on a single object. See
   knowledge/designs/dashboards/compliance-environment-overview.md.
@@ -19,8 +20,14 @@ hidden: true
 
 widgets:
 
-  # ── W1: Environment Compliance scoreboard (self-provider, pinned
-  #     vSphere World) ─────────────────────────────────────────────────
+  # ── W1: Environment Compliance scoreboard (self-provider, pinned to
+  #     the pak's own ComplianceWorld singleton). Data source: the
+  #     engine-computed Rollup|Environment|* metrics declared as
+  #     ComputedMetrics in describe.xml (ResourceGroup Rollup >
+  #     Environment). They sum the per-vCenter Rollup|All|* keys, one
+  #     collection interval behind, and skip one point on a pak upgrade.
+  #     Replaces the four retired Compliance super metrics on vSphere
+  #     World. ─────────────────────────────────────────────────────────
 
   - id: env_compliance_scoreboard
     type: Scoreboard
@@ -28,8 +35,8 @@ widgets:
     coords: {x: 1, y: 1, w: 8, h: 4}
     self_provider: true
     pin:
-      adapter_kind: VMWARE
-      resource_kind: "vSphere World"
+      adapter_kind: vcfcf_compliance
+      resource_kind: ComplianceWorld
     box_columns: 4
     metrics:
       # Average Score: lower is worse. Scoreboard color thresholds are
@@ -38,10 +45,10 @@ widgets:
       # scoreboard-partial-bounds-render-unknown.md), so the wireframe's
       # "red < 80, orange < 90, yellow < 95" cannot be expressed here.
       # Left uncolored (color_method: 1). Reported as a TOOLSET GAP.
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_a3292c87-15b7-4fcd-beea-1b4510b3ca02"
-        metric_name: "[VCF Content Factory] Compliance Average Score"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|avg_score"
+        metric_name: "Average Score"
         label: "Average Score"
         unit: "%"
         color_method: 1
@@ -49,10 +56,10 @@ widgets:
       # native ascending semantics. Wireframe specifies only "yellow >=
       # 1"; orange/red steps below are authored judgment (not in the
       # wireframe), scaled for an environment-wide count.
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_349307c4-2af7-4d83-90d2-1ad4f60138bf"
-        metric_name: "[VCF Content Factory] Compliance Non-Compliant Objects"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|non_compliant"
+        metric_name: "Non-Compliant Objects"
         label: "Non-Compliant"
         color_method: 0
         yellow_bound: 1
@@ -62,19 +69,19 @@ widgets:
       # is set equal to orange so any count at all is at least orange
       # (an object with no matching SCG is a coverage gap, not a soft
       # warning). Red step is authored judgment.
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_8200eed9-6aa3-480d-bd7e-2b1fa81b8ee5"
-        metric_name: "[VCF Content Factory] Compliance Objects Without Benchmark"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|no_benchmark"
+        metric_name: "Without Benchmark"
         label: "Without Benchmark"
         color_method: 0
         yellow_bound: 1
         orange_bound: 1
         red_bound: 5
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_c72131ad-ee25-4e89-8190-1c93d78eeb5a"
-        metric_name: "[VCF Content Factory] Compliance Objects Scored"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|scored"
+        metric_name: "Objects Scored"
         label: "Objects Scored"
         color_method: 1
 
@@ -120,7 +127,8 @@ widgets:
       resource_kind: "vSphere World"
     view: "[VCF Content Factory] Compliance Objects by SCG Version"
 
-  # ── W5: Environment Score Trend (self-provider, pinned vSphere World)
+  # ── W5: Environment Score Trend (self-provider, pinned ComplianceWorld;
+  #     same Rollup|Environment|* source as W1)
 
   - id: env_score_trend
     type: MetricChart
@@ -128,18 +136,18 @@ widgets:
     coords: {x: 7, y: 13, w: 6, h: 7}
     self_provider: true
     pin:
-      adapter_kind: VMWARE
-      resource_kind: "vSphere World"
+      adapter_kind: vcfcf_compliance
+      resource_kind: ComplianceWorld
     metrics:
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_a3292c87-15b7-4fcd-beea-1b4510b3ca02"
-        metric_name: "[VCF Content Factory] Compliance Average Score"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|avg_score"
+        metric_name: "Average Score"
         color_method: 2
-      - adapter_kind: VMWARE
-        resource_kind: "vSphere World"
-        metric_key: "Super Metric|sm_349307c4-2af7-4d83-90d2-1ad4f60138bf"
-        metric_name: "[VCF Content Factory] Compliance Non-Compliant Objects"
+      - adapter_kind: vcfcf_compliance
+        resource_kind: ComplianceWorld
+        metric_key: "Rollup|Environment|non_compliant"
+        metric_name: "Non-Compliant Objects"
         color_method: 2
 
   # ── W6: Open Compliance Alerts (interaction-driven from W3; all 144
