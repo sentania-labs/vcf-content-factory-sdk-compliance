@@ -34,7 +34,20 @@ adapter never pushes):
   on the VMWARE resource kind (Compliant is pushed as a metric: 1
   compliant, 0 non-compliant, -1 not evaluated; -1 never fires).
 * Alert: type 15, subType 21 (COMPLIANCE), impact badge risk, severity
-  Automatic (taken from the symptom). Name "<control_id>: <title>".
+  Automatic (taken from the symptom). Name
+  "VCF Content Factory Compliance Alert: <control_id>: <title>" (build 86:
+  every alert the pak ships carries ALERT_NAME_PREFIX, so they group and
+  filter together in the alert list; symptom and recommendation names are
+  unprefixed). Alert ids are unchanged, so an upgrade renames in place.
+* Cycles (build 86, owner decision "let's set the alarm cycle cancel to
+  3"): the per-control symptoms and alerts wait 1 cycle and cancel after 3
+  (CONTROL_WAIT_CYCLE / CONTROL_CANCEL_CYCLE), so one unreadable cycle
+  (Compliant -1) does not close a real finding at a 5 minute interval. The
+  hand-written score symptoms and alert in describe.xml use the same 1 / 3
+  (pinned by tests/test_generate_compliance_alerts.py). The collection
+  alerts below keep 1 / 1 (COLLECTION_WAIT_CYCLE / COLLECTION_CANCEL_CYCLE):
+  they report the cycle that could not be read and should clear on the
+  first cycle that reads.
 * Symptom severity from the SCG priority: P0 Critical, P1 Immediate,
   P2 Warning.
 * Collection alerts (build 63, owner decision "If unreadable = not
@@ -98,6 +111,15 @@ KINDS = {
 KIND_ORDER = list(KINDS)
 
 SEVERITY = {"P0": "Critical", "P1": "Immediate", "P2": "Warning"}
+
+# Build 86: alert display-name prefix (alert names only).
+ALERT_NAME_PREFIX = "VCF Content Factory Compliance Alert: "
+# Build 86: per-control symptoms and alerts cancel after 3 cycles; the
+# collection-health ones keep 1 (see the module docstring).
+CONTROL_WAIT_CYCLE = 1
+CONTROL_CANCEL_CYCLE = 3
+COLLECTION_WAIT_CYCLE = 1
+COLLECTION_CANCEL_CYCLE = 1
 
 NAMEKEY_BASE = 1000   # generated nameKeys: 1000 + 3*i (+0 sym, +1 alert, +2 rec)
 COLLECTION_NAMEKEY_BASE = 2000   # 2000 + 2*i (+0 sym, +1 alert); rec 2100
@@ -313,8 +335,8 @@ def render(controls: list):
             f'                       nameKey="{nk}"\n'
             f'                       adapterKind="VMWARE"\n'
             f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-            f'                       waitCycle="1"\n'
-            f'                       cancelCycle="1">\n'
+            f'                       waitCycle="{CONTROL_WAIT_CYCLE}"\n'
+            f'                       cancelCycle="{CONTROL_CANCEL_CYCLE}">\n'
             f'      <State severity="{SEVERITY[c["priority"]]}">\n'
             f'        <Condition type="metric" key="{xml_attr(key)}"\n'
             f'                   operator="=" value="0"\n'
@@ -327,7 +349,8 @@ def render(controls: list):
             f'                     adapterKind="VMWARE"\n'
             f'                     resourceKind="{xml_attr(ops_kind)}"\n'
             f'                     type="15" subType="21"\n'
-            f'                     waitCycle="1" cancelCycle="1">\n'
+            f'                     waitCycle="{CONTROL_WAIT_CYCLE}" '
+            f'cancelCycle="{CONTROL_CANCEL_CYCLE}">\n'
             f'      <State severity="Automatic">\n'
             f'        <Impact type="badge" key="risk"/>\n'
             f'        <SymptomSet ref="{sid}" operator="and"\n'
@@ -342,7 +365,7 @@ def render(controls: list):
             f'    <Recommendation key="{rid}">\n'
             f'      <Description nameKey="{nk + 2}"/>\n'
             f'    </Recommendation>\n')
-        name = f"{c['control_id']}: {c['title']}"
+        name = f"{ALERT_NAME_PREFIX}{c['control_id']}: {c['title']}"
         props.append(f"{nk}={prop_value(c['control_id'] + ' is not compliant')}")
         props.append(f"{nk + 1}={prop_value(name)}")
         props.append(f"{nk + 2}={prop_value(recommendation_text(c))}")
@@ -353,8 +376,8 @@ def render(controls: list):
             f'                       nameKey="{nk}"\n'
             f'                       adapterKind="VMWARE"\n'
             f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-            f'                       waitCycle="1"\n'
-            f'                       cancelCycle="1">\n'
+            f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
+            f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
             f'      <State severity="Immediate">\n'
             f'        <Condition type="metric" '
             f'key="VCF-CF Compliance|unreadable_count"\n'
@@ -369,8 +392,8 @@ def render(controls: list):
             f'                       nameKey="{fnk}"\n'
             f'                       adapterKind="VMWARE"\n'
             f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-            f'                       waitCycle="1"\n'
-            f'                       cancelCycle="1">\n'
+            f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
+            f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
             f'      <State severity="Immediate">\n'
             f'        <Condition type="metric" '
             f'key="VCF-CF Compliance|collection_failed"\n'
@@ -386,8 +409,8 @@ def render(controls: list):
                 f'                       nameKey="{ROLLUP_INCOMPLETE_NAMEKEY}"\n'
                 f'                       adapterKind="VMWARE"\n'
                 f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-                f'                       waitCycle="1"\n'
-                f'                       cancelCycle="1">\n'
+                f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
+                f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
                 f'      <State severity="Immediate">\n'
                 f'        <Condition type="metric" '
                 f'key="VCF-CF Compliance|Rollup|incomplete"\n'
@@ -407,7 +430,8 @@ def render(controls: list):
             f'                     adapterKind="VMWARE"\n'
             f'                     resourceKind="{xml_attr(ops_kind)}"\n'
             f'                     type="15" subType="21"\n'
-            f'                     waitCycle="1" cancelCycle="1">\n'
+            f'                     waitCycle="{COLLECTION_WAIT_CYCLE}" '
+            f'cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
             f'      <State severity="Automatic">\n'
             f'        <Impact type="badge" key="risk"/>\n'
             f'        <SymptomSets operator="or">\n'
@@ -425,7 +449,7 @@ def render(controls: list):
             f'      </State>\n'
             f'    </AlertDefinition>\n')
         props.append(f"{nk}={prop_value('Compliance settings unreadable on ' + label)}")
-        props.append(f"{nk + 1}={prop_value('Compliance data not collected (' + label + ')')}")
+        props.append(f"{nk + 1}={prop_value(ALERT_NAME_PREFIX + 'Compliance data not collected (' + label + ')')}")
     rec.append(
         f'    <Recommendation key="{COLLECTION_REC_ID}">\n'
         f'      <Description nameKey="{COLLECTION_NAMEKEY_BASE + 100}"/>\n'

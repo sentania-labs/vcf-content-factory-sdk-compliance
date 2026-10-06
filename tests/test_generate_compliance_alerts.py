@@ -71,16 +71,63 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual((impact.get("type"), impact.get("key")),
                              ("badge", "risk"))
 
-    def test_alert_names_are_id_colon_title(self):
+    def test_alert_names_are_prefix_id_colon_title(self):
+        # Build 86: "VCF Content Factory Compliance Alert: <id>: <title>".
         by_id = {c["control_id"]: c for c in self.controls}
         for a in self.root.iter(NS + "AlertDefinition"):
             if not a.get("id").startswith("vcfcf_compliance_ctl_"):
                 continue
             name = self.props[a.get("nameKey")]
-            cid, sep, title = name.partition(": ")
+            self.assertTrue(name.startswith(gen.ALERT_NAME_PREFIX), name)
+            rest = name[len(gen.ALERT_NAME_PREFIX):]
+            cid, sep, title = rest.partition(": ")
             self.assertEqual(sep, ": ", name)
             self.assertIn(cid, by_id)
             self.assertEqual(title, by_id[cid]["title"])
+
+    def test_every_alert_name_carries_the_prefix(self):
+        # Build 86: every alert the pak ships, generated or hand-written.
+        self.assertEqual(gen.ALERT_NAME_PREFIX,
+                         "VCF Content Factory Compliance Alert: ")
+        alerts = list(self.root.iter(NS + "AlertDefinition"))
+        self.assertEqual(len(alerts), 143)
+        for a in alerts:
+            name = self.props[a.get("nameKey")]
+            self.assertTrue(name.startswith(gen.ALERT_NAME_PREFIX),
+                            f"{a.get('id')}: {name}")
+        self.assertEqual(
+            self.props["102"],
+            gen.ALERT_NAME_PREFIX + "Host Compliance Score Degraded")
+        # Symptom and recommendation names stay unprefixed.
+        for s in self.root.iter(NS + "SymptomDefinition"):
+            self.assertFalse(self.props[s.get("nameKey")].startswith(
+                gen.ALERT_NAME_PREFIX), s.get("id"))
+
+    def test_wait_and_cancel_cycles(self):
+        # Build 86 (owner decision "let's set the alarm cycle cancel to
+        # 3"): per-control and score symptoms/alerts wait 1, cancel 3;
+        # collection-health symptoms/alerts wait 1, cancel 1.
+        self.assertEqual((gen.CONTROL_WAIT_CYCLE, gen.CONTROL_CANCEL_CYCLE),
+                         (1, 3))
+        self.assertEqual((gen.COLLECTION_WAIT_CYCLE,
+                          gen.COLLECTION_CANCEL_CYCLE), (1, 1))
+        seen = {"control": 0, "score": 0, "collection": 0}
+        for tag in ("SymptomDefinition", "AlertDefinition"):
+            for el in self.root.iter(NS + tag):
+                i = el.get("id")
+                if i.startswith("vcfcf_compliance_ctl_"):
+                    group, want = "control", ("1", "3")
+                elif i.startswith("vcfcf_compliance_score_"):
+                    group, want = "score", ("1", "3")
+                elif i.startswith("vcfcf_compliance_collection_"):
+                    group, want = "collection", ("1", "1")
+                else:
+                    self.fail(f"unclassified {tag} {i}")
+                seen[group] += 1
+                self.assertEqual((el.get("waitCycle"), el.get("cancelCycle")),
+                                 want, i)
+        self.assertEqual(seen, {"control": 272, "score": 3,
+                                "collection": 19})
 
     def test_symptom_condition(self):
         for s in self.root.iter(NS + "SymptomDefinition"):
@@ -150,7 +197,8 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(a.get("resourceKind"), ops_kind)
             ops_kinds.add(ops_kind)
             self.assertEqual(self.props[a.get("nameKey")],
-                             f"Compliance data not collected ({label})")
+                             gen.ALERT_NAME_PREFIX
+                             + f"Compliance data not collected ({label})")
             rec = a.find(NS + "State/" + NS + "Recommendations/"
                          + NS + "Recommendation")
             self.assertEqual(rec.get("ref"), gen.COLLECTION_REC_ID)

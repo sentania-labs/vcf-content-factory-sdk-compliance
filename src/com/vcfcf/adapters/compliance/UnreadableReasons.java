@@ -9,6 +9,7 @@ import java.util.TreeMap;
  * <p>Each unreadable control instance is recorded with a reason category
  * (the part of the reason before the first {@code ":"}, e.g.
  * {@code soap-fault}, {@code missing-element}, {@code esxcli-command-failed},
+ * {@code esxcli-host-unreachable} (build 86),
  * {@code esxcli-field-missing}, {@code vami-http-403},
  * {@code vami-session}, {@code host-not-connected}). The adapter logs each
  * record at DEBUG and, once per cycle at INFO, the count by category

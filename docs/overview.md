@@ -11,10 +11,15 @@ list to find the data:
 |---|---|
 | HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`, `collection_failed` (1 when nothing could be read on the object). |
 | VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
-| The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `<control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 Host Compliance Score Degraded alert on HostSystem (score below 95 / 80). |
+| The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `VCF Content Factory Compliance Alert: <control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "VCF Content Factory Compliance Alert: Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 "VCF Content Factory Compliance Alert: Host Compliance Score Degraded" alert on HostSystem (score below 95 / 80). Every alert name starts with that prefix (build 86), so all of the pack's alerts sort and filter together. |
 
 The full key list, with when each key is pushed, is in
 [data-reference.md](data-reference.md) under "Keys pushed onto VMWARE resources".
+
+The pack's own `ComplianceWorld` carries the environment totals,
+`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score}`
+(no `VCF-CF Compliance` group on the world), which VCF Operations computes from the per-vCenter rollups
+(see "Resource kinds" below).
 
 ## What's in the Pack
 
@@ -47,13 +52,46 @@ The adapter owns a single synthetic resource kind:
 
 | Kind | Key | Purpose |
 |------|-----|---------|
-| Compliance World | `ComplianceWorld` | Adapter liveness anchor, one object shared by every adapter instance. |
+| Compliance World | `ComplianceWorld` | The environment-level object, one shared by every adapter instance: the environment compliance totals, and adapter liveness. |
 
-The Compliance World carries only `Summary|last_scan_timestamp` (the last
-scan by any instance). Because every adapter instance writes the same
-world object, fleet numbers on it would be last-writer-wins across
-vCenters, so since build 57 they live on each vCenter object instead (see
-below). All per-object and per-control detail lives on the foreign VMWARE
+The Compliance World carries two kinds of data:
+
+- **`Summary|last_scan_timestamp`**, the last scan by any instance. This
+  is the only key the adapter pushes onto the world.
+- **The environment totals**, `Rollup|Environment|scored`,
+  `non_compliant`, `no_benchmark` and `avg_score` (build 82; shown as
+  Rollup, Environment in the metric browser).
+  No adapter instance pushes these. They are declared as `ComputedMetrics`
+  in `describe.xml`, and VCF Operations computes them by summing each
+  vCenter's `VCF-CF Compliance|Rollup|All|*` keys across the Compliance
+  World's `VMwareAdapter Instance` children. `avg_score` is the summed
+  `score_sum` over the summed `scored`, a weighted average, never an
+  average of per-vCenter averages. This is how VMWARE fills vSphere
+  World's own summary counts.
+
+Because no instance writes a total, any number of adapter instances can
+share the world without overwriting each other (the reason per-instance
+fleet numbers were moved off the world in build 57), and the totals need
+**no policy enablement**. Two timing effects to expect: the totals trail
+the per-vCenter rollups by one collection interval, because the engine
+computes them from the values already stored; and one point is skipped on
+every pak upgrade. With nothing scored anywhere, `non_compliant` sums to 0
+and `avg_score` is expected to have no data (0 over 0, not yet observed on
+a live instance), so always read `non_compliant` next to `scored`.
+
+**The ComplianceWorld to vCenter link.** The engine sums the world's
+children, so each adapter instance makes its own vCenter object a child of
+the Compliance World. Every cycle, after the instance resolves its
+vCenter's `VMwareAdapter Instance`, it looks up the Compliance World and
+adds the parent/child relationship through the Suite API. The add is
+additive, so instances never remove each other's links. On a new install
+the first cycle logs that the Compliance World was not found yet, and the
+link is requested on the next cycle. The link is added each cycle and
+never removed: a vCenter whose compliance adapter instance is deleted
+stays a child of the Compliance World. Whether its last rollup values then
+keep counting in the environment totals has not been observed yet.
+
+All per-object and per-control detail lives on the foreign VMWARE
 resources the adapter stitches to.
 
 ### Metrics scope
@@ -65,8 +103,11 @@ On every evaluated VMWARE object: the per-control
 `profile_name` property. On each vCenter (`VMwareAdapter Instance`): the
 per-vCenter rollup `VCF-CF Compliance|Rollup|<kind>|{scored,
 non_compliant, no_benchmark, score_sum, avg_score}` for All, Host, VM,
-vCenter, Cluster, vDS and Portgroup, plus objects per benchmark. The full
-key list is in [data-reference.md](data-reference.md).
+vCenter, Cluster, vDS and Portgroup, plus objects per benchmark. On the
+Compliance World: the engine-computed environment totals
+`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score}` and
+`Summary|last_scan_timestamp`. The full key list is in
+[data-reference.md](data-reference.md).
 
 ## Dashboards
 
@@ -77,18 +118,24 @@ key list is in [data-reference.md](data-reference.md).
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
-The Environment Overview's score tiles and trend read four bundled super
-metrics, all assigned to `VMWARE / vSphere World`: Compliance Objects
-Scored, Compliance Non-Compliant Objects, Compliance Objects Without
-Benchmark, and Compliance Average Score. **They must be enabled in the
-policy active on vSphere World** (in the policy editor, Metrics and
-Properties, filter on "Compliance"; the exact menu path differs between
-Ops 9.0 and 9.1),
-or those tiles and the trend stay empty. Whether the pak import enables
-them automatically is **unconfirmed**; it will be checked at the devel
-install. The other widgets read adapter data directly and need no
-enablement. Compliance Average Score shows no data until the first v3
-collection cycle has scored something.
+The Environment Overview's four score tiles (Average Score, Non-Compliant
+Objects, Objects Without Benchmark, Objects Scored) and its score trend
+read the engine-computed `Rollup|Environment|*` metrics on the pack's own
+Compliance World (build 86). **Nothing needs enabling in a policy**, and
+no widget on any of the four dashboards needs policy changes. The Objects
+Scored tile stays beside the others on purpose: with nothing scored, the
+Non-Compliant Objects tile reads 0, and the Scored tile next to it shows
+that the 0 has no denominator rather than meaning all clear. The totals
+trail the per-vCenter views by one collection interval.
+
+**Upgrading from a build that shipped super metrics (builds 61 to 85).**
+Those builds bundled four super metrics on `VMWARE / vSphere World`
+("[VCF Content Factory] Compliance Average Score", "... Non-Compliant
+Objects", "... Objects Scored" and "... Objects Without Benchmark") that
+had to be enabled in the vSphere World policy. Build 86 no longer ships or
+uses them. The pak upgrade removes them from the instance, so there is
+nothing to clean up by hand, and the Environment Overview that read them
+is re-imported by the same upgrade and reads ComplianceWorld instead.
 
 ## Cross-Adapter Behavior
 
@@ -104,7 +151,10 @@ them via the Suite API:
 - **VMWARE vCenter (VMwareAdapter Instance)**: vCenter-appliance controls
   and the per-vCenter rollup. Resolved by `VCURL` (vCenter FQDN) and
   `VMEntityVCID` (vCenter Instance UUID), since that object is not
-  vim25-backed and has no MOID.
+  vim25-backed and has no MOID. Each cycle the instance also makes its
+  vCenter object a child of the pack's Compliance World (an additive
+  Suite API relationship add, never removed), so the engine can sum the
+  environment totals across vCenters.
 
 Transport is the **ambient Suite API** — the adapter pushes onto the local
 VCF Operations instance using the collector's ambient credentials; no Suite
@@ -139,6 +189,25 @@ collection continues; compliance is never failed over a stitch error.
   fall back on), `unreadable_count` is NOT pushed, because the adapter does
   not know which SCG's controls apply; its last value stays.
   `non_compliant` = 1 in that case.
+
+- **A finding survives one unreadable cycle (build 86).** The per-control
+  alerts and the Host Compliance Score Degraded alert (and their symptoms)
+  cancel only after 3 consecutive collection cycles without the condition
+  (wait stays 1 cycle). An unreadable control pushes `Compliant` = -1, not
+  0, so before build 86 a single cycle where a failing control could not
+  be read (a slow host, an esxcli timeout) cancelled its alert and the next
+  good cycle raised a new one. The cost: a control you have fixed clears
+  its alert after 3 cycles (15 minutes at the default 5 minute interval)
+  instead of 1. The "Compliance data not collected" alerts keep a 1 cycle
+  cancel: they describe the cycle that could not be read and clear on the
+  first one that is. For Host Compliance Score Degraded the same setting
+  works the other way: unreadable controls count as failing, so one
+  unreadable cycle (one esxcli timeout can make up to 19 SCG 8.0 host
+  controls unreadable) can lower a healthy host's score enough to raise it,
+  and cancel 3 then holds it open for up to three cycles (15 minutes at
+  the 5 minute interval). That is the safe direction; the "Compliance data
+  not collected" alert raised in the same cycle says the cause was a read
+  failure, not a setting change.
 
 - **Per-vCenter averages when nothing was scored.** `Rollup|<K>|avg_score`
   is pushed only when `Rollup|<K>|scored` > 0; `scored` itself is pushed

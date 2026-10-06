@@ -8,8 +8,10 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
@@ -59,10 +61,30 @@ import org.w3c.dom.NodeList;
  * <p><b>Per-cycle, per-host, per-command cache.</b> One esxcli command
  * returns many fields, and many controls may reference the same command
  * ({@code system.syslog.config.get}). {@link #readCommandResult} caches
- * the parsed field map per (hostMoid, namespace.command) for the
- * lifetime of this client instance (one collection cycle), so multiple
- * controls cost exactly one {@code ExecuteSoap} per host per cycle. The
- * executer MoRef (call 1) is cached per host the same way.
+ * the parsed field map per (hostMoid, namespace.command) until the next
+ * {@link #beginCycle}, so multiple controls cost exactly one
+ * {@code ExecuteSoap} per host per cycle. The executer MoRef (call 1) is
+ * cached per host the same way.
+ *
+ * <p>Build 86: a per-host negative entry for the cycle. The first
+ * transport failure on a request for a host (read or connect timeout,
+ * refused or reset connection, any I/O error; every request goes to
+ * vCenter's {@code /sdk}, which relays it to the host, so the failure may
+ * be vCenter's rather than the host's) or an executer lookup that returns
+ * no executer marks that host unreachable until the next
+ * {@link #beginCycle}; its remaining commands fail at once, without a
+ * network call, and keep the first failure as their reason. A command
+ * that the host answered with a fault (unknown command, esxcli fault,
+ * HTTP 500) fails that command only. Without this a connected host that
+ * stopped answering cost one 120 s read timeout per distinct command, up
+ * to 7 per host per cycle.
+ *
+ * <p>Build 85: this client lives as long as the vCenter SOAP session,
+ * which the per-cycle keepalive can hold open indefinitely, so the
+ * caches are emptied at the start of every cycle by {@link #beginCycle}
+ * (via {@code VSphereClient.beginCycle}). Before build 85 nothing emptied
+ * them while the session survived, so a cached result could be served
+ * for the life of the session.
  */
 final class EsxcliSoapClient {
 
@@ -79,14 +101,23 @@ final class EsxcliSoapClient {
 	private final String sessionCookie;
 	private final SSLSocketFactory sslFactory;
 
-	// Per-cycle caches (this client is constructed once per collection
-	// cycle in VSphereClient).
+	// Per-cycle caches, emptied by beginCycle() at the start of every
+	// collection cycle (this client itself lives as long as the session).
 	//   hostMoid -> executer MoRef value (call 1)
 	private final Map<String, String> executerByHost = new HashMap<>();
 	//   hostMoid + "|" + namespace.command -> parsed result (struct OR
 	//   rows). A FAILED ParsedResult is cached so a second control
 	//   referencing the same command does NOT re-issue the call.
 	private final Map<String, ParsedResult> resultCache = new HashMap<>();
+	//   hostMoid -> why the host is skipped for the rest of the cycle
+	//   (build 86: first transport failure, or no executer returned).
+	private final Map<String, String> unreachableHosts = new HashMap<>();
+	//   hosts whose unreachable entry has already been handed to the
+	//   adapter's WARN this cycle (build 87: one WARN per host per cycle).
+	private final Set<String> unreachableReported = new HashSet<>();
+
+	/** Longest exception message kept in a reason (log line hygiene). */
+	static final int REASON_MESSAGE_MAX = 160;
 
 	/**
 	 * Parsed esxcli command result. Exactly one of {@code struct}
@@ -96,7 +127,7 @@ final class EsxcliSoapClient {
 	 * command call itself failed (unknown command / fault / parse error).
 	 * Cached per (host, command) for the cycle.
 	 */
-	private static final class ParsedResult {
+	static final class ParsedResult {
 		final boolean failed;
 		final Map<String, String> struct;          // get -> field map
 		final List<Map<String, String>> rows;       // list -> row field maps
@@ -121,11 +152,119 @@ final class EsxcliSoapClient {
 		}
 	}
 
+	/**
+	 * The two uncached SOAP calls; a seam for the tests (build 86: split so
+	 * the executer cache and the per-host negative entry are observable).
+	 * An {@link java.io.IOException} from either call is a transport
+	 * failure and marks the host unreachable for the cycle.
+	 */
+	interface Transport {
+		/** Call 1. Null when vCenter returned no executer (a fault). */
+		String lookupExecuter(String hostMoid) throws Exception;
+
+		/** Call 2. A FAILED result when the host answered with a fault. */
+		ParsedResult execute(String executer, String namespaceCommand)
+				throws Exception;
+	}
+
+	private final Transport transport;
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
 		this.sdkUrl = sdkUrl;
 		this.sessionCookie = sessionCookie;
 		this.sslFactory = sslFactory;
+		this.transport = new Transport() {
+			@Override
+			public String lookupExecuter(String hostMoid) throws Exception {
+				return lookupExecuterLive(hostMoid);
+			}
+
+			@Override
+			public ParsedResult execute(String executer,
+					String namespaceCommand) throws Exception {
+				return executeCommand(executer, namespaceCommand);
+			}
+		};
+	}
+
+	/** Test-only: no network, every uncached call goes to {@code transport}. */
+	EsxcliSoapClient(Transport transport) {
+		this.sdkUrl = null;
+		this.sessionCookie = null;
+		this.sslFactory = null;
+		this.transport = transport;
+	}
+
+	/**
+	 * Build 86: the cycle start for a possibly absent client (no session
+	 * yet). {@code VSphereClient.beginCycle} is exactly this call, so the
+	 * delegation is testable without the VCF Ops SDK on the classpath.
+	 */
+	static void beginCycleOn(EsxcliSoapClient client) {
+		if (client != null) client.beginCycle();
+	}
+
+	/**
+	 * Build 85: start a new collection cycle. Empties the result cache and
+	 * the executer cache so every (host, command) is read again this cycle;
+	 * within the cycle the cache still dedupes. A cached FAILED result is
+	 * dropped too, so a host that was unreachable last cycle is retried.
+	 * Build 86: the per-host unreachable entries are dropped as well.
+	 *
+	 * <p>Why: unreadable-is-not-compliant cuts both ways. A stale pass is a
+	 * false pass: a host read compliant once and changed since would keep
+	 * reporting compliant, and a read that failed once would keep the host
+	 * unreadable, for as long as the vCenter session lived. No vCenter
+	 * login is involved; the session and its cookie are unchanged.
+	 */
+	synchronized void beginCycle() {
+		resultCache.clear();
+		executerByHost.clear();
+		unreachableHosts.clear();
+		unreachableReported.clear();
+	}
+
+	/**
+	 * Build 86: why this host's esxcli reads are being skipped for the rest
+	 * of the cycle, or null when they are not. Diagnostics only: the reads
+	 * themselves already return {@link #COMMAND_FAILED} (UNREADABLE).
+	 */
+	synchronized String unreachableReason(String hostMoid) {
+		return unreachableHosts.get(hostMoid);
+	}
+
+	/**
+	 * Build 87: the unreachable reason for this host the first time it is
+	 * asked for after the host was marked in this cycle, null on every
+	 * later call until the next {@link #beginCycle} (and null when the host
+	 * is not marked). The adapter logs one WARN per host per cycle from
+	 * this, naming the host.
+	 */
+	synchronized String takeUnreachableToReport(String hostMoid) {
+		String reason = unreachableHosts.get(hostMoid);
+		if (reason == null || !unreachableReported.add(hostMoid)) {
+			return null;
+		}
+		return reason;
+	}
+
+	/**
+	 * Build 87: the unreadable reason for a {@link #COMMAND_FAILED} read.
+	 * {@code unreachable} is {@link #unreachableReason} for the host (null
+	 * when the host is not marked); {@code lastFault} is the last fault text
+	 * seen, or null. A marked host gets {@code esxcli-host-unreachable}, any
+	 * other failure {@code esxcli-command-failed}.
+	 */
+	static String commandFailedReason(String namespaceCommand,
+			String unreachable, String lastFault) {
+		if (unreachable != null) {
+			return "esxcli-host-unreachable: " + namespaceCommand
+					+ " (host skipped for the rest of this cycle after: "
+					+ unreachable + ")";
+		}
+		return "esxcli-command-failed: " + namespaceCommand
+				+ (lastFault != null ? " (" + lastFault + ")" : "");
 	}
 
 	/**
@@ -233,7 +372,8 @@ final class EsxcliSoapClient {
 	/**
 	 * Execute (and cache) one esxcli command on one host. The first call
 	 * for a given (host, command) issues the two SOAP calls; subsequent
-	 * calls within the cycle hit the cache. Returns a FAILED
+	 * calls within the cycle hit the cache (until {@link #beginCycle}).
+	 * Returns a FAILED
 	 * {@link ParsedResult} (cached so it isn't retried this cycle) on any
 	 * failure, else a struct ({@code get}) or rows ({@code list}) result.
 	 */
@@ -245,18 +385,28 @@ final class EsxcliSoapClient {
 			return cached;
 		}
 
-		ParsedResult result;
-		try {
-			String executer = getExecuter(hostMoid);
-			if (executer == null) {
-				result = ParsedResult.ofFailure();
-			} else {
-				result = executeCommand(executer, namespaceCommand);
+		ParsedResult result = null;
+		if (!unreachableHosts.containsKey(hostMoid)) {
+			try {
+				String executer = getExecuter(hostMoid);
+				if (executer == null) {
+					// No executer, so no command can run on this host.
+					unreachableHosts.put(hostMoid, "no executer returned by "
+							+ "RetrieveManagedMethodExecuter");
+				} else {
+					result = transport.execute(executer, namespaceCommand);
+				}
+			} catch (java.io.IOException e) {
+				// Build 86: timeout / connect / I/O on the request to
+				// vCenter's /sdk for this host (vCenter or the host). The
+				// host's other commands would pay the same timeout; skip
+				// them this cycle.
+				unreachableHosts.put(hostMoid, describe(e));
+			} catch (Exception e) {
+				// Any other failure fails this command only, cached so a
+				// second control on the same command does not re-issue it.
+				result = null;
 			}
-		} catch (Exception e) {
-			// Any failure -> command-failed result, cached so a second
-			// control on the same command doesn't re-issue the call.
-			result = ParsedResult.ofFailure();
 		}
 		if (result == null) {
 			result = ParsedResult.ofFailure();
@@ -265,12 +415,33 @@ final class EsxcliSoapClient {
 		return result;
 	}
 
+	/** {@code Class: message}, message capped and on one line. */
+	static String describe(Exception e) {
+		String msg = e.getMessage();
+		String out = e.getClass().getSimpleName();
+		if (msg != null && !msg.trim().isEmpty()) {
+			String m = msg.replaceAll("\\s+", " ").trim();
+			if (m.length() > REASON_MESSAGE_MAX) {
+				m = m.substring(0, REASON_MESSAGE_MAX) + "...";
+			}
+			out += ": " + m;
+		}
+		return out;
+	}
+
 	// ----- Call 1: RetrieveManagedMethodExecuter --------------------------
 
+	/** Cached per host for the cycle; null when none was returned. */
 	private synchronized String getExecuter(String hostMoid) throws Exception {
 		String cached = executerByHost.get(hostMoid);
 		if (cached != null) return cached;
+		String executer = transport.lookupExecuter(hostMoid);
+		if (executer == null) return null;
+		executerByHost.put(hostMoid, executer);
+		return executer;
+	}
 
+	private String lookupExecuterLive(String hostMoid) throws Exception {
 		String body =
 				"<RetrieveManagedMethodExecuter xmlns=\"urn:vim25\">"
 				+ "<_this type=\"HostSystem\">" + xmlEscape(hostMoid) + "</_this>"
@@ -285,9 +456,7 @@ final class EsxcliSoapClient {
 		if (returnval == null) return null;
 		String executer = textOf(returnval);
 		if (executer == null || executer.trim().isEmpty()) return null;
-		executer = executer.trim();
-		executerByHost.put(hostMoid, executer);
-		return executer;
+		return executer.trim();
 	}
 
 	// ----- Call 2: ExecuteSoap (no-arg get OR list) -----------------------

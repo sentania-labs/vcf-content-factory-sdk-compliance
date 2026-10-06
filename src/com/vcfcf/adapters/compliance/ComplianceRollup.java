@@ -77,7 +77,8 @@ public final class ComplianceRollup {
 	 * {@link #toStats} then OMITS that kind's keys, and the cross-kind
 	 * {@code All} and {@code Benchmark|<B>|objects} keys, instead of pushing
 	 * counts that silently leave those objects out. Omitted keys keep their
-	 * previous values in VCF Ops, so the environment super metrics (sums of
+	 * previous values in VCF Ops, so the environment totals (the
+	 * ComplianceWorld {@code Rollup|Environment} ComputedMetrics, sums of
 	 * each vCenter's {@code Rollup|All|*}) stay close to the truth for the
 	 * cycle rather than dropping, e.g., every VM of one vCenter. The next
 	 * complete cycle pushes everything again.

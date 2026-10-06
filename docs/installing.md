@@ -121,16 +121,11 @@ for:
 7. On the first collection cycle the adapter discovers its Compliance
    World and begins pushing results onto the existing VMWARE hosts, VMs,
    vCenter, clusters, distributed switches and portgroups.
-8. **Enable the four compliance super metrics.** Edit the policy active on
-   `vSphere World` (in the policy editor, Metrics and Properties, filter
-   on "Compliance") and enable
-   Compliance Objects Scored, Compliance Non-Compliant Objects, Compliance
-   Objects Without Benchmark and Compliance Average Score. Without this
-   the Environment Overview's score tiles and trend stay empty. Whether
-   the pak import already enables them is unconfirmed; check and enable
-   if needed.
-9. Open **[VCF Content Factory] Compliance Environment Overview**. The
-   four bundled dashboards:
+8. Open **[VCF Content Factory] Compliance Environment Overview**. Nothing
+   needs enabling in a policy: its score tiles and trend read environment
+   totals that VCF Operations computes on the pack's Compliance World
+   (they appear one collection interval after the per-vCenter numbers).
+   The four bundled dashboards:
 
 | Dashboard | What it is for |
 |---|---|
@@ -139,7 +134,57 @@ for:
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
+## Upgrading
+
+- **Collection interval: edit each existing instance.** Since build 85 the
+  pack's default collection interval is 5 minutes (it was 60). The default
+  applies to new adapter instances only: an existing instance keeps the
+  interval stored on it when the pak is upgraded (seen on a lab upgrade,
+  where instances at 60 stayed at 60). After upgrading, edit each
+  compliance adapter instance under **Administration > Integrations >
+  Accounts** and set its collection interval to 5 minutes, or the value
+  you want.
+- **Setting the interval through the Suite API.** To script the edit, `GET
+  /api/adapters/{id}`, set `monitoringInterval` to 5 in that full body,
+  and `PUT /api/adapters` with it. Remove `collectorId` from the body
+  first when it also carries `collectorGroupId`: the API takes one or the
+  other, and a body with both is rejected with a 422 whose message
+  ends "Either 'collectorId' or 'collectorGroupId' should be specified
+  but not both.".
+- **Retired super metrics are removed by the upgrade.** Builds 61 to 85
+  shipped four super metrics on `vSphere World` for the Environment
+  Overview's tiles ("[VCF Content Factory] Compliance Average Score",
+  "... Non-Compliant Objects", "... Objects Scored", "... Objects Without
+  Benchmark"). Build 86 no longer ships or uses them, and the Overview no
+  longer needs any policy enablement. The pak upgrade removes the four
+  super metrics from the instance (seen on a lab upgrade from build 85),
+  so there is nothing to clean up by hand. The Environment Overview
+  dashboard that read them is re-imported by the same upgrade and reads
+  ComplianceWorld instead.
+- **Alerts are renamed in place.** Build 86 prefixes every compliance
+  alert name with `VCF Content Factory Compliance Alert: `. The alert
+  definition ids do not change, so the upgrade renames the existing
+  definitions rather than adding new ones. Alerts already open when you
+  upgrade stay open under the new name with their alert ids and start
+  times kept (seen on a lab upgrade: every active alert carried over).
+- **Definitions take the new cycles.** Existing symptom and alert
+  definitions pick up the build 86 wait and cancel cycles on the upgrade
+  (per-control and score ones wait 1 and cancel after 3; the collection
+  ones stay 1 and 1). Nothing to edit by hand.
+
 ## Troubleshooting
+
+- **All of one host's esxcli-backed controls are unreadable for a cycle**
+  (the INFO line "Unreadable controls this cycle by reason" shows
+  `esxcli-host-unreachable`): the first esxcli request of the cycle for
+  that host timed out, could not connect, or got no esxcli executer back,
+  so the adapter skipped the host's other esxcli commands for that cycle
+  instead of waiting up to 120 s on each (build 86). Every esxcli request
+  goes to vCenter's `/sdk`, which relays it to the host, so the failure
+  may be vCenter's rather than the host's: if every host shows it, check
+  vCenter first. A WARN line names the host and the first failure (build
+  87), and the host's score line is logged at INFO because it has
+  unreadable controls. The host is tried again on the next cycle.
 
 - **vCenter SOAP fails with a TLS validation error** — the vCenter
   certificate is not trusted. Set `allowInsecure=true` for now. See the

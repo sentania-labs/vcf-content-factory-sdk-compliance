@@ -23,6 +23,9 @@ import java.util.function.Function;
  *       the object's benchmark).</li>
  *   <li>{@link #matchVCenter}: which VMWARE vCenter object this instance
  *       may push onto.</li>
+ *   <li>{@link #linkWorld}: whether and where this instance links its own
+ *       vCenter object under ComplianceWorld (build 82; no cross-cycle
+ *       cache since build 83).</li>
  * </ul>
  */
 public final class ComplianceDecisions {
@@ -385,6 +388,15 @@ public final class ComplianceDecisions {
 		return out;
 	}
 
+	/**
+	 * Build 87: the per-host score line is INFO when the host has any
+	 * unreadable control (so a partly unreadable host is named at INFO),
+	 * DEBUG when every control was read.
+	 */
+	public static boolean hostScoreLineAtInfo(int unreadableCount) {
+		return unreadableCount > 0;
+	}
+
 	/** Control ids whose Compliant value a result pushes. */
 	public static Set<String> pushedIds(ControlEvaluator.ComplianceResult cr) {
 		Set<String> out = new TreeSet<>();
@@ -543,5 +555,74 @@ public final class ComplianceDecisions {
 			if (e.getKey().equalsIgnoreCase(host)) return e.getValue();
 		}
 		return null;
+	}
+
+	// ----- ComplianceWorld to vCenter relationship (build 82) -------------
+
+	/** Outcome of one cycle's ComplianceWorld to vCenter link attempt. */
+	public enum LinkOutcome {
+		/**
+		 * addChild returned true: the Suite API accepted the request. The
+		 * add is asynchronous, so this is "requested and accepted", not
+		 * "linked"; only a children readback proves the edge.
+		 */
+		ACCEPTED,
+		/** This instance's own vCenter object was not resolved: skipped. */
+		NO_VCENTER,
+		/** The ComplianceWorld id lookup found no single match: skipped. */
+		NO_WORLD,
+		/** addChild returned false: retried next cycle with a fresh lookup. */
+		ADD_FAILED
+	}
+
+	/** The link outcome plus the world id this cycle used. */
+	public static final class WorldLink {
+		public final LinkOutcome outcome;
+		/** World id that was used, or null when none was resolved. */
+		public final String worldId;
+
+		WorldLink(LinkOutcome outcome, String worldId) {
+			this.outcome = outcome;
+			this.worldId = worldId;
+		}
+	}
+
+	/**
+	 * Decide this cycle's ComplianceWorld (parent) to VMwareAdapter Instance
+	 * (child) link. Only this instance's own vCenter object is ever passed
+	 * in; nothing else is linked.
+	 *
+	 * <p>Build 83 (review of build 82, W2): nothing is cached between
+	 * cycles. The add is asynchronous, so a POST to a deleted world's id
+	 * can be accepted and then dropped, and a cache cleared only on a
+	 * failed add would keep the stale id forever. The world is looked up
+	 * every cycle instead (one local GET).
+	 *
+	 * <ul>
+	 *   <li>No vCenter object: skip, no lookup.</li>
+	 *   <li>{@code findWorld} null (zero or ambiguous matches, normal on
+	 *       the first cycle): skip.</li>
+	 *   <li>Otherwise {@code addChild(world, vCenter)}: ACCEPTED or
+	 *       ADD_FAILED.</li>
+	 * </ul>
+	 *
+	 * @param vcResourceId this instance's own VMwareAdapter Instance id
+	 * @param findWorld the singleton lookup (null on no single match)
+	 * @param addChild the additive relationship call (parent, child)
+	 */
+	public static WorldLink linkWorld(String vcResourceId,
+			java.util.function.Supplier<String> findWorld,
+			java.util.function.BiPredicate<String, String> addChild) {
+		if (vcResourceId == null || vcResourceId.trim().isEmpty()) {
+			return new WorldLink(LinkOutcome.NO_VCENTER, null);
+		}
+		String worldId = findWorld.get();
+		if (worldId == null || worldId.trim().isEmpty()) {
+			return new WorldLink(LinkOutcome.NO_WORLD, null);
+		}
+		if (addChild.test(worldId, vcResourceId)) {
+			return new WorldLink(LinkOutcome.ACCEPTED, worldId);
+		}
+		return new WorldLink(LinkOutcome.ADD_FAILED, worldId);
 	}
 }

@@ -119,11 +119,44 @@ object, a non-vSAN cluster); VCF Ops then keeps showing the last value it
 had, so read them with `total_count` / `unreadable_count` / `no_benchmark`
 (per object) and `scored` (per vCenter, pushed every cycle).
 
-The adapter's own Compliance World carries only
-`Summary|last_scan_timestamp`: it is one object shared by every adapter
-instance, so per-vCenter numbers on it would be last-writer-wins.
+## Keys on the pack's Compliance World
 
-## Dashboards and super metrics
+The Compliance World is one object shared by every adapter instance. The
+adapter pushes one key onto it; the environment totals are computed by
+VCF Operations, not pushed (build 82):
+```
+Summary|last_scan_timestamp          property, pushed: last scan by any instance
+Rollup|Environment|scored            sum of every vCenter's VCF-CF Compliance|Rollup|All|scored
+Rollup|Environment|non_compliant     sum of every vCenter's VCF-CF Compliance|Rollup|All|non_compliant
+Rollup|Environment|no_benchmark      sum of every vCenter's VCF-CF Compliance|Rollup|All|no_benchmark
+Rollup|Environment|avg_score         % : summed Rollup|All|score_sum / summed Rollup|All|scored
+```
+
+- **Engine-computed.** The four `Rollup|Environment` keys are
+  `ComputedMetrics` declared on the ComplianceWorld kind in
+  `describe.xml`. VCF Operations evaluates them over the Compliance
+  World's `VMWARE / VMwareAdapter Instance` children (the vCenters), the
+  same way it fills vSphere World's summary counts. No adapter instance
+  writes them, so instances cannot overwrite each other's totals, which is
+  why per-instance numbers were never pushed onto the world after build 57.
+- **No policy enablement** is needed for them.
+- **One collection interval behind.** The engine computes them from the
+  per-vCenter values already stored, so they trail `Rollup|All|*` by one
+  interval. One point is skipped on every pak upgrade.
+- **`avg_score` is weighted** (summed `score_sum` over summed `scored`),
+  not an average of per-vCenter averages. With nothing scored anywhere it
+  is expected to have no data (0 over 0; not yet observed on a live
+  instance) while `non_compliant` reads 0, so read `non_compliant` with
+  `scored`.
+- **The parent/child link.** Each adapter instance, every cycle, makes its
+  own vCenter's `VMwareAdapter Instance` a child of the Compliance World
+  through an additive Suite API relationship add (it never replaces the
+  links other instances made). The link is never removed: a vCenter whose
+  compliance adapter instance is deleted stays a child of the Compliance
+  World, and whether its last rollup values keep counting in the totals
+  has not been observed yet.
+
+## Dashboards
 
 The pak installs four dashboards (plus their eight views):
 
@@ -134,23 +167,31 @@ The pak installs four dashboards (plus their eight views):
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 
-The Environment Overview's score tiles and trend read four bundled super
-metrics, all assigned to `VMWARE / vSphere World`: Compliance Objects
-Scored, Compliance Non-Compliant Objects, Compliance Objects Without
-Benchmark, and Compliance Average Score. **They must be enabled in the
-policy active on vSphere World** (in the policy editor, Metrics and
-Properties, filter on "Compliance"; the exact menu path differs between
-Ops 9.0 and 9.1),
-or those tiles and the trend stay empty. Whether the pak import enables
-them automatically is **unconfirmed**; check and enable if needed. The other widgets read adapter data directly and need no
-enablement. Compliance Average Score shows no data until the first v3
-collection cycle has scored something.
+The Environment Overview's four score tiles and its score trend read the
+Compliance World's `Rollup|Environment|*` keys (above); no widget needs
+policy enablement. The Objects Scored tile sits beside Non-Compliant
+Objects so that a 0 non-compliant reading is always shown with its
+denominator: 0 non-compliant with 0 scored means nothing was evaluated,
+not all clear.
+
+Builds 61 to 85 bundled four super metrics on `vSphere World` for those
+tiles ("[VCF Content Factory] Compliance Average Score", "... Non-Compliant
+Objects", "... Objects Scored", "... Objects Without Benchmark"). Build 86
+retires them. The pak upgrade removes them from the instance, so there
+is nothing to clean up by hand; the dashboard that read them is
+re-imported by the same upgrade and reads ComplianceWorld instead.
 
 ## Alerts
 
-- `Host Compliance Score Degraded` (HostSystem, score below 95 / 80).
+Every alert name starts with `VCF Content Factory Compliance Alert: `
+(build 86; alert ids unchanged, so an upgrade renames in place). Symptom
+and recommendation names carry no prefix.
+
+- `VCF Content Factory Compliance Alert: Host Compliance Score Degraded`
+  (HostSystem, score below 95 / 80).
 - One compliance alert per scored SCG control, named
-  `<control_id>: <title>`, raised when that control's `Compliant` is 0,
+  `VCF Content Factory Compliance Alert: <control_id>: <title>`, raised
+  when that control's `Compliant` is 0,
   with the SCG remediation as its recommendation. Severity follows the
   SCG priority: P0 Critical, P1 Immediate, P2 Warning. Generated from the
   profiles by `scripts/generate_compliance_alerts.py`; never hand-edit
@@ -168,6 +209,13 @@ collection cycle has scored something.
   ids `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`.
 
 All compliance alerts are type Compliance (subType 21).
+
+Wait and cancel cycles (build 86): the per-control alerts and the score
+alert, and their symptoms, raise after 1 cycle and cancel after 3
+consecutive cycles without the condition, so one cycle in which a failing
+control could not be read (`Compliant` -1) does not close the finding. A
+fixed control therefore clears its alert after 3 cycles (15 minutes at the
+5 minute default). The collection alerts raise and cancel after 1 cycle.
 
 ## Limitations
 
