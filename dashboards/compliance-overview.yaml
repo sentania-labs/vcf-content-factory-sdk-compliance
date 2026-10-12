@@ -184,9 +184,9 @@ widgets:
       adapter_kind: VMWARE
       resource_kind: HostSystem
     mode: all
-    depth: 1
+    # depth 5: fleet_alerts is pinned to vSphere World; World > vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 5 levels (vDS and port group chains are shorter).
+    depth: 5
+    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
     criticality: [2, 3, 4]
-    alert_definitions:
-      - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_score_degraded"
 
 interactions: []
