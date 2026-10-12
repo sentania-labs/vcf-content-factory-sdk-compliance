@@ -19,8 +19,10 @@ Expected depth per dashboard (see the comment above each depth in the YAML):
   compliance-esxi-hosts.yaml            1  (HostSystem > VirtualMachine)
   compliance-vms.yaml                   1  (VirtualMachine)
   compliance-vcenter-networking.yaml    4  (vCenter, cluster, vDS, portgroup)
-  compliance-world-summary.yaml         5  (ComplianceWorld > vCenter > ...
-                                            > VirtualMachine)
+  compliance-world-summary.yaml         4  (input is the selected vCenter
+                                            row: vCenter > Datacenter >
+                                            Cluster > HostSystem >
+                                            VirtualMachine)
 
 The generator's collection counts are still asserted, since the alert
 set itself is what the type filter selects.
@@ -49,7 +51,7 @@ EXPECTED_DEPTH = {
     "compliance-esxi-hosts.yaml": 1,
     "compliance-vms.yaml": 1,
     "compliance-vcenter-networking.yaml": 4,
-    "compliance-world-summary.yaml": 5,
+    "compliance-world-summary.yaml": 4,
 }
 
 EXPECTED_KINDS = {
@@ -193,30 +195,30 @@ class DashboardAlertListTest(unittest.TestCase):
         real = (REPO / "dashboards" / "compliance-world-summary.yaml"
                 ).read_text(encoding="utf-8")
         good = alert_widgets(real)[0]
-        self.assertEqual(widget_problems(good, 5), [])
-        self.assertTrue(widget_problems(good, 4))            # wrong depth
+        self.assertEqual(widget_problems(good, 4), [])
+        self.assertTrue(widget_problems(good, 5))            # wrong depth
 
         def mutate(old, new):
             return alert_widgets(real.replace(old, new))[0]
 
         # type filter dropped
         self.assertTrue(any("alert_types" in p for p in widget_problems(
-            mutate('    alert_types: ["15_21"]', "    mode_x: 1"), 5)))
+            mutate('    alert_types: ["15_21"]', "    mode_x: 1"), 4)))
         # wrong subtype
         self.assertTrue(any("alert_types" in p for p in widget_problems(
-            mutate('["15_21"]', '["15_22"]'), 5)))
+            mutate('["15_21"]', '["15_22"]'), 4)))
         # a definition pin creeps back in
         self.assertTrue(any("alert_definitions" in p for p in widget_problems(
             mutate("    mode: all\n",
                    "    mode: all\n    alert_definitions:\n"
-                   "      - AlertDefinition-x\n"), 5)))
+                   "      - AlertDefinition-x\n"), 4)))
         # depth changed
         self.assertTrue(any("depth" in p for p in widget_problems(
-            mutate("    depth: 5", "    depth: 1"), 5)))
+            mutate("    depth: 4", "    depth: 1"), 4)))
         # a commented-out filter does not count
         self.assertTrue(any("alert_types" in p for p in widget_problems(
             mutate('    alert_types: ["15_21"]',
-                   '    # alert_types: ["15_21"]'), 5)))
+                   '    # alert_types: ["15_21"]'), 4)))
 
 
 if __name__ == "__main__":

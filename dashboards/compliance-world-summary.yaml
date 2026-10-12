@@ -135,8 +135,8 @@ widgets:
     coords: {x: 1, y: 21, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
-    # depth 5: ComplianceWorld > vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 5 levels (vDS and port group chains are shorter).
-    depth: 5
+    # depth 4: input is the selected vCenter row of the view above (select_first_row, so never the ComplianceWorld itself); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
+    depth: 4
     alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
 
 interactions:
