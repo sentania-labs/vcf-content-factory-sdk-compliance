@@ -60,7 +60,8 @@ adapter never pushes):
   Compliance|collection_failed = 1` (nothing could be read, including a
   version that could not be read). The vCenter alert has a third
   symptom (build 79), `VCF-CF Compliance|Rollup|incomplete = 1`: an
-  inventory listing failed and rollup keys were held back. Ids use the
+  inventory listing failed (or, since build 88, the VCF Ops resource list
+  for a kind could not be read) and rollup keys were held back. Ids use the
   `vcfcf_compliance_collection_` prefix, distinct from the per-control
   `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
 * Title, priority and remediation come from the NEWEST profile in which
@@ -168,6 +169,9 @@ COLLECTION_REC_TEXT = (
     "rollup counts were held back): which listing failed (VMs, distributed "
     "switches, portgroups or clusters) is in the adapter log; check the "
     "collection account's inventory read permissions on that vCenter. The "
+    "same flag is raised when the adapter could not read VCF Operations' "
+    "own list of hosts, VMs, switches, portgroups or clusters (the adapter "
+    "log names the kind and the Suite API error). The "
     "alert clears on the first collection cycle in which every setting is "
     "read and every listing succeeds.")
 

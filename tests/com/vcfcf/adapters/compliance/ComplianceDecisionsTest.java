@@ -328,7 +328,178 @@ public final class ComplianceDecisionsTest {
 		T.check(ComplianceDecisions.hostScoreLineAtInfo(19),
 				"many unreadable controls: score line at INFO");
 
+		build88PodGuestIds();
+		build88SourcePins();
+
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
+	}
+
+	/** Build 88: which guest ids are vSphere Pods; when a kind is pushable. */
+	private static void build88PodGuestIds() {
+		for (String id : new String[] {"crxPod1Guest", "crxSys1Guest",
+				"CRXPOD1GUEST", "CrxPod1Guest", "crxFuture2Guest", "crx",
+				" crxPod1Guest"}) {
+			T.check(ComplianceDecisions.isPodGuestId(id), "Pod: '" + id + "'");
+		}
+		for (String id : new String[] {null, "", "  ", "otherLinux64Guest",
+				"vmwarePhoton64Guest", "windows2022srvNext_64Guest",
+				"centos64Guest", "xcrxPod1Guest", "cr", "rhel9_64Guest"}) {
+			T.check(!ComplianceDecisions.isPodGuestId(id),
+					"not a Pod: '" + id + "'");
+		}
+		T.check(ComplianceDecisions.kindPushable(true, false),
+				"stitcher and resource list read: pushable");
+		T.check(!ComplianceDecisions.kindPushable(true, true),
+				"resource list failed: not pushable (held back)");
+		T.check(!ComplianceDecisions.kindPushable(false, false),
+				"no stitcher: not pushable");
+	}
+
+	/**
+	 * Build 88: the adapter wiring needs the SDK jar this runner leaves off
+	 * the classpath, so the order that makes the scope rule hold is pinned
+	 * in the source: Pods skipped before matching, unmatched objects
+	 * recorded and skipped before any read or decision, every kind gated on
+	 * a readable VCF Ops resource list, and the guest id read in the bulk VM
+	 * enumeration.
+	 */
+	private static void build88SourcePins() {
+		String ca = read("src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
+
+		String vms = body(ca, "private void collectVms(");
+		inOrder(vms, "collectVms",
+				"kindPushable(BenchmarkSelector.Kind.VM, \"VirtualMachine\", rollup)",
+				"if (ComplianceDecisions.isPodGuestId(vm.guestId)) { rollup.recordSkippedPod();",
+				"continue; } cs.vms++;",
+				"if (!pushable) continue;",
+				"stitcher.matchVm(vm.name, vm.moid); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.VM, vm.name, vm.moid); continue; }",
+				"vmHostVersion(vm, hostVersions)",
+				"decide(selector, BenchmarkSelector.Kind.VM",
+				"vsphere.getVmExtraConfig(vm.moRef)",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.VM");
+		noReadBefore(vms, "collectVms", "stitcher.matchVm(");
+
+		String hosts = body(ca, "private java.util.Map<String, String> collectHosts(");
+		inOrder(hosts, "collectHosts",
+				"kindPushable(BenchmarkSelector.Kind.HOST, \"HostSystem\", rollup)",
+				"if (!pushable) continue;",
+				"stitcher.matchHost(hostName, hostId); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.HOST, hostName, hostId); continue; }",
+				"vsphere.getHostProductVersion(hostInfo.moRef)",
+				"decide(selector, BenchmarkSelector.Kind.HOST",
+				"vsphere.getAdvancedSettings(hostInfo.moRef)",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.HOST");
+		noReadBefore(hosts, "collectHosts", "stitcher.matchHost(");
+
+		String vc = body(ca, "private ComplianceStitcher.HostEntry collectVCenter(");
+		inOrder(vc, "collectVCenter",
+				"rollup.recordUnmatched(BenchmarkSelector.Kind.VCENTER, resourceName, moid); return null; }",
+				"decide(selector, BenchmarkSelector.Kind.VCENTER",
+				"vsphere.getVCenterAdvancedSettings()",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER");
+
+		String vim = body(ca, "private void collectVimObject(");
+		inOrder(vim, "collectVimObject",
+				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return; }",
+				"decide(selector, kind, moid",
+				"rollup.recordEvaluated(kind");
+		noReadBefore(vim, "collectVimObject", "rollup.recordUnmatched(kind");
+
+		inOrder(body(ca, "private void collectDvs("), "collectDvs",
+				"vsphere.getDvSwitches()",
+				"if (!kindPushable(BenchmarkSelector.Kind.VDS, \"VmwareDistributedVirtualSwitch\", rollup)) { return; }",
+				"collectVimObject(");
+		inOrder(body(ca, "private void collectDvpg("), "collectDvpg",
+				"vsphere.getDvPortgroups()",
+				"if (!kindPushable(BenchmarkSelector.Kind.PORTGROUP, \"DistributedVirtualPortgroup\", rollup)) { return; }",
+				"collectVimObject(");
+		inOrder(body(ca, "private void collectClusters("), "collectClusters",
+				"vsphere.getClusters()",
+				"if (!kindPushable(BenchmarkSelector.Kind.CLUSTER, \"ClusterComputeResource\", rollup)) { return; }",
+				"collectVimObject(");
+
+		inOrder(body(ca, "private boolean kindPushable("), "kindPushable",
+				"boolean failed = present && stitcher.loadFailed(resourceKind);",
+				"if (ComplianceDecisions.kindPushable(present, failed)) { return true; }",
+				"rollup.markIncomplete(kind);",
+				"return false;");
+
+		inOrder(body(ca, "private void collectWorldCycle("), "collectWorldCycle",
+				"String line = rollup.unmatchedLogLine(k); if (line != null) { logInfo(line); }",
+				"pushRollup(vcEntry, rollup);");
+
+		String vs = read("src/com/vcfcf/adapters/compliance/VSphereClient.java");
+		inOrder(body(vs, "public List<VmInfo> getVms("), "getVms",
+				"\"name\", \"runtime.host\", \"config.guestId\");",
+				"if (rows == null) {",
+				"\"name\", \"runtime.host\");",
+				"row.values.get(\"runtime.host\"), true, row.values.get(\"config.guestId\"))");
+
+		String st = read("src/com/vcfcf/adapters/compliance/ComplianceStitcher.java");
+		inOrder(body(st, "private List<SimpleJson> fetchResources("),
+				"fetchResources",
+				"failedLoads.add(resourceKind);",
+				"stitcher.get(",
+				"if (parsed == null || parsed.isNull()) {",
+				"return out; } failedLoads.remove(resourceKind);");
+		T.check(body(st, "public boolean loadFailed(").equals(
+				"return failedLoads.contains(resourceKind);"), "loadFailed body");
+	}
+
+	/**
+	 * No vCenter read ({@code vsphere.}) occurs in {@code src} before
+	 * {@code marker}: an unmatched object costs no read. The one listing
+	 * call ({@code vsphere.getHosts()} / {@code getVms()}) precedes the loop
+	 * and is allowed.
+	 */
+	private static void noReadBefore(String src, String where, String marker) {
+		int at = src.indexOf(marker);
+		T.check(at >= 0, where + ": found " + marker);
+		String head = src.substring(0, at)
+				.replace("vsphere.getHosts()", "")
+				.replace("vsphere.getVms()", "");
+		T.check(!head.contains("vsphere."),
+				where + ": no vCenter read before " + marker);
+	}
+
+	/** Each fragment occurs in {@code src}, in this order. */
+	private static void inOrder(String src, String where, String... fragments) {
+		int from = 0;
+		for (String f : fragments) {
+			int at = src.indexOf(f, from);
+			T.check(at >= 0, where + ": expected, in order: " + f);
+			from = at + f.length();
+		}
+	}
+
+	private static String read(String path) {
+		try {
+			return new String(java.nio.file.Files.readAllBytes(
+					java.nio.file.Paths.get(path)),
+					java.nio.charset.StandardCharsets.UTF_8);
+		} catch (java.io.IOException e) {
+			throw new AssertionError("read " + path + ": " + e);
+		}
+	}
+
+	/**
+	 * The body of the first method whose declaration starts with
+	 * {@code signature}, comments removed and whitespace collapsed (as in
+	 * EsxcliCycleCacheTest).
+	 */
+	private static String body(String src, String signature) {
+		int at = src.indexOf(signature);
+		T.check(at >= 0, "found " + signature);
+		int open = src.indexOf('{', at);
+		int depth = 0;
+		int i = open;
+		for (; i < src.length(); i++) {
+			char ch = src.charAt(i);
+			if (ch == '{') depth++;
+			else if (ch == '}' && --depth == 0) break;
+		}
+		String b = src.substring(open + 1, i);
+		b = b.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
+		return b.replaceAll("\\s+", " ").trim();
 	}
 
 	/** Every path within budget; every (id, key) pair exactly once. */

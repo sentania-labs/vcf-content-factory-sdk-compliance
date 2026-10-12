@@ -101,12 +101,45 @@ VCF-CF Compliance|Rollup|<K>|non_compliant
 VCF-CF Compliance|Rollup|<K>|no_benchmark
 VCF-CF Compliance|Rollup|<K>|score_sum
 VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
+VCF-CF Compliance|Rollup|<K>|unmatched        not for All (build 88): objects vCenter listed
+                                               with no matching VCF Ops resource, so not
+                                               scored and in no other key; 0 when none
+VCF-CF Compliance|Rollup|VM|skipped_pods      vSphere Pod VMs skipped (build 88); 0 when none
 VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
-                                               failed and rollup keys were held back
+                                               (vCenter's, or VCF Ops' resource list for a
+                                               kind) failed and rollup keys were held back
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
                                                (+ Custom)
 ```
+
+**The rollup counts only objects with a VCF Ops resource (build 88).**
+An object counts in `scored`, `non_compliant`, `no_benchmark`,
+`score_sum`, `All` and the `Benchmark` buckets only when the adapter found
+its VMWARE resource, that is, only when it could push the result
+somewhere. An object vCenter lists with no match is not read or scored
+at all; it is counted in `Rollup|<K>|unmatched` (pushed with the kind's
+other keys, 0 when none), and the adapter log names the unmatched objects
+of each kind once per cycle at INFO (name and MOID, the first 20, then
+"(+N more)"), in a line that starts `<Kind>: N object(s) with no matching
+VCF Ops resource`. Typical causes: an object created since the VMWARE
+adapter's last collection, or one the VMWARE adapter does not collect.
+For the vCenter kind the count is always 0 when pushed: the rollup lives
+on the vCenter object, so an unmatched vCenter pushes no rollup at all.
+If VCF Ops' resource list for a kind cannot be read in a cycle, the kind
+is not scored and is held back like a failed vCenter listing
+(`Rollup|incomplete` = 1) rather than reported as all unmatched.
+
+**vSphere Pods are out of scope (build 88).** A VM whose guest id starts
+with `crx` (`crxPod1Guest`, guest "VMware CRX Pod 1 (64-bit)", and any
+other `crx...` id, in any case) is a vSphere Pod: VCF Ops models it as
+kind Pod, not VirtualMachine, and the SCG VM controls do not apply. It is
+skipped before scoring and counted only in `Rollup|VM|skipped_pods`,
+never as unmatched. The guest id comes from the bulk VM listing, so this
+costs no extra call. Each skipped Pod is named in the adapter log at
+DEBUG; the per-cycle count is at INFO ("vSphere Pod VM(s) skipped"). If
+the bulk listing cannot return the guest id in a cycle, Pods are not
+recognised that cycle and show up under `Rollup|VM|unmatched` instead.
 
 **Unreadable counts as failing (build 63, owner decision).** A setting the
 adapter could not read is counted against the score like a failure, so an

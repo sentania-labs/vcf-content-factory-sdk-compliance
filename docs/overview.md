@@ -10,7 +10,7 @@ list to find the data:
 | VMWARE object | What the pack pushes onto it |
 |---|---|
 | HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`, `collection_failed` (1 when nothing could be read on the object). |
-| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
+| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, `Rollup\|<kind>\|unmatched` per kind (build 88), `Rollup\|VM\|skipped_pods` (build 88), `Rollup\|incomplete`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
 | The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `VCF Content Factory Compliance Alert: <control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "VCF Content Factory Compliance Alert: Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 "VCF Content Factory Compliance Alert: Host Compliance Score Degraded" alert on HostSystem (score below 95 / 80). Every alert name starts with that prefix (build 86), so all of the pack's alerts sort and filter together. |
 
 The full key list, with when each key is pushed, is in
@@ -208,6 +208,30 @@ collection continues; compliance is never failed over a stitch error.
   the 5 minute interval). That is the safe direction; the "Compliance data
   not collected" alert raised in the same cycle says the cause was a read
   failure, not a setting change.
+
+- **Only objects with a VCF Ops resource are counted (build 88).** The
+  per-vCenter rollup, and so the environment totals, count only objects
+  the adapter found a VMWARE resource for. Before build 88 an object
+  vCenter listed but VCF Ops did not have was still scored and counted,
+  so the totals could include objects no dashboard could show (on the
+  devel lab, 18 Supervisor Pods made wld01 report 43 scored VMs against
+  25 VirtualMachine objects). Now such an object is not read or scored;
+  it is counted in `VCF-CF Compliance|Rollup|<kind>|unmatched` on the
+  vCenter object (pushed with the kind's other keys, 0 when none), and
+  the adapter log names them once per cycle per kind at INFO, in a line
+  that starts `<Kind>: N object(s) with no matching VCF Ops resource`
+  (first 20 by name and MOID). The per-object "no match" line moved from
+  WARN to DEBUG. If VCF Ops' own resource list for a kind cannot be read
+  in a cycle, that kind is not scored and its keys are held back with
+  `Rollup|incomplete` = 1, exactly like a failed vCenter listing, rather
+  than every object being reported as unmatched.
+- **vSphere Pods are skipped (build 88).** VMs whose guest id starts with
+  `crx` (vSphere Pods, which VCF Ops lists as kind Pod) are out of scope:
+  not scored, not unmatched, counted in
+  `VCF-CF Compliance|Rollup|VM|skipped_pods` and named at DEBUG. The guest
+  id is read in the same bulk call that lists the VMs. Only the `crx`
+  prefix is matched: no vendor list of every CRX guest id was found, and
+  devel Pods show guest "VMware CRX Pod 1 (64-bit)" (`crxPod1Guest`).
 
 - **Per-vCenter averages when nothing was scored.** `Rollup|<K>|avg_score`
   is pushed only when `Rollup|<K>|scored` > 0; `scored` itself is pushed

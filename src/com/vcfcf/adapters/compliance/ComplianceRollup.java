@@ -22,6 +22,10 @@ import java.util.Map;
  * VCF-CF Compliance|Rollup|&lt;K&gt;|no_benchmark    objects whose version has no SCG
  * VCF-CF Compliance|Rollup|&lt;K&gt;|score_sum       sum of those scores
  * VCF-CF Compliance|Rollup|&lt;K&gt;|avg_score       score_sum / scored (omitted when scored == 0)
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|unmatched       per kind, not All (build 88): objects with
+ *                                                no matching VCF Ops resource, not counted
+ *                                                anywhere else
+ * VCF-CF Compliance|Rollup|VM|skipped_pods        vSphere Pod VMs (guest id crx*), out of scope
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
  * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
@@ -41,6 +45,15 @@ import java.util.Map;
  * previous benchmark also scores 0 (build 65). No-benchmark objects are
  * counted, never scored.
  *
+ * <p>Scope rule (build 88, Scott 2026-10-12 "Option 1."): the rollup
+ * counts only objects the adapter can push to, i.e. objects with a
+ * matching VCF Ops resource. An object with no match is recorded with
+ * {@link #recordUnmatched} and nowhere else: not in scored, non_compliant,
+ * no_benchmark, score_sum, All or a Benchmark bucket. The gap stays
+ * visible as {@code Rollup|<K>|unmatched} (0 when none) and in
+ * {@link #unmatchedLogLine}. vSphere Pod VMs are out of scope and are
+ * recorded with {@link #recordSkippedPod} only ({@code Rollup|VM|skipped_pods}).
+ *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
 public final class ComplianceRollup {
@@ -49,6 +62,9 @@ public final class ComplianceRollup {
 
 	/** 0/1: some rollup keys were held back this cycle (build 79). */
 	public static final String INCOMPLETE_KEY = PREFIX + "incomplete";
+
+	/** Build 88: unmatched objects named per kind in the INFO line, at most. */
+	public static final int UNMATCHED_LOG_CAP = 20;
 
 	/** Benchmark buckets always pushed (0 when unused), in key order. */
 	public static final String[] FIXED_BUCKETS = {
@@ -61,11 +77,16 @@ public final class ComplianceRollup {
 		int nonCompliant;
 		int noBenchmark;
 		double scoreSum;
+		int unmatched;   // build 88: per kind only, never summed into All
 	}
 
 	private final Map<BenchmarkSelector.Kind, Tally> byKind =
 			new EnumMap<>(BenchmarkSelector.Kind.class);
 	private final Map<String, Integer> byBucket = new LinkedHashMap<>();
+	// Build 88: the first UNMATCHED_LOG_CAP unmatched objects per kind.
+	private final Map<BenchmarkSelector.Kind, java.util.List<String>>
+			unmatchedNames = new EnumMap<>(BenchmarkSelector.Kind.class);
+	private int skippedPods;
 
 	// Build 78: kinds whose inventory listing failed this cycle.
 	private final java.util.Set<BenchmarkSelector.Kind> incomplete =
@@ -98,6 +119,62 @@ public final class ComplianceRollup {
 		for (String b : FIXED_BUCKETS) {
 			byBucket.put(b, 0);
 		}
+	}
+
+	/**
+	 * Build 88: an object vCenter listed but with no matching VCF Ops
+	 * resource this cycle. Counted only in {@code Rollup|<K>|unmatched}:
+	 * nothing can be pushed to it, so it is in no other key. Not scored by
+	 * the adapter either (the caller skips its reads).
+	 */
+	public void recordUnmatched(BenchmarkSelector.Kind kind, String name,
+			String moid) {
+		byKind.get(kind).unmatched++;
+		java.util.List<String> names = unmatchedNames.computeIfAbsent(kind,
+				k -> new java.util.ArrayList<>());
+		if (names.size() < UNMATCHED_LOG_CAP) {
+			names.add((name == null ? "(no name)" : name) + " ("
+					+ (moid == null ? "no MOID" : moid) + ")");
+		}
+	}
+
+	/**
+	 * Build 88: a vSphere Pod VM (guest id {@code crx*}, see
+	 * {@link ComplianceDecisions#isPodGuestId}). Out of scope: counted in
+	 * {@code Rollup|VM|skipped_pods} only, never scored, never unmatched.
+	 */
+	public void recordSkippedPod() {
+		skippedPods++;
+	}
+
+	public int unmatched(BenchmarkSelector.Kind kind) {
+		return byKind.get(kind).unmatched;
+	}
+
+	public int skippedPods() {
+		return skippedPods;
+	}
+
+	/**
+	 * Build 88: the one INFO line per cycle for {@code kind}'s unmatched
+	 * objects, naming the first {@link #UNMATCHED_LOG_CAP} by name and
+	 * MOID; null when there are none.
+	 */
+	public String unmatchedLogLine(BenchmarkSelector.Kind kind) {
+		int n = byKind.get(kind).unmatched;
+		if (n == 0) return null;
+		java.util.List<String> names = unmatchedNames.get(kind);
+		StringBuilder b = new StringBuilder();
+		b.append(kind.rollupName).append(": ").append(n)
+				.append(" object(s) with no matching VCF Ops resource, not "
+						+ "scored and not counted in the rollup this cycle "
+						+ "(Rollup|").append(kind.rollupName)
+				.append("|unmatched): ");
+		b.append(String.join(", ", names));
+		if (n > names.size()) {
+			b.append(" (+").append(n - names.size()).append(" more)");
+		}
+		return b.toString();
 	}
 
 	/** Non-compliant rule shared with the per-object push. */
@@ -168,11 +245,18 @@ public final class ComplianceRollup {
 		// 0 once a complete cycle pushes everything again.
 		out.put(INCOMPLETE_KEY, complete ? 0.0 : 1.0);
 		if (complete) {
-			put(out, "All", all);
+			put(out, "All", all, false);
 		}
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			if (!incomplete.contains(k)) {
-				put(out, k.rollupName, byKind.get(k));
+				// Build 88: unmatched (and skipped_pods for VM) travel with
+				// the kind's other keys: every complete cycle, 0 when none,
+				// held back with them when the kind is incomplete (a count
+				// the adapter could not take is not a 0).
+				put(out, k.rollupName, byKind.get(k), true);
+				if (k == BenchmarkSelector.Kind.VM) {
+					out.put(PREFIX + "VM|skipped_pods", (double) skippedPods);
+				}
 			}
 		}
 		if (!complete) {
@@ -185,12 +269,16 @@ public final class ComplianceRollup {
 		return out;
 	}
 
-	private static void put(Map<String, Double> out, String name, Tally t) {
+	private static void put(Map<String, Double> out, String name, Tally t,
+			boolean perKind) {
 		String p = PREFIX + name + "|";
 		out.put(p + "scored", (double) t.scored);
 		out.put(p + "non_compliant", (double) t.nonCompliant);
 		out.put(p + "no_benchmark", (double) t.noBenchmark);
 		out.put(p + "score_sum", t.scoreSum);
+		if (perKind) {
+			out.put(p + "unmatched", (double) t.unmatched);
+		}
 		// No-sentinel contract: no average without at least one real score.
 		if (t.scored > 0) {
 			out.put(p + "avg_score", t.scoreSum / t.scored);

@@ -85,6 +85,13 @@ public final class ComplianceStitcher {
 	// unscoped matcher — single-vCenter safe).
 	private volatile String owningVcUuid;
 
+	// Build 88: resource kinds whose /api/resources read failed on the last
+	// load (exception or unparseable body). Distinct from "0 results": the
+	// adapter holds that kind's rollup back instead of reporting every
+	// object as unmatched.
+	private final java.util.Set<String> failedLoads =
+			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
 	public ComplianceStitcher(SuiteApiStitcher stitcher, Logger logger) {
 		this.stitcher = stitcher;
 		this.logger = logger;
@@ -263,13 +270,20 @@ public final class ComplianceStitcher {
 	 */
 	private List<SimpleJson> fetchResources(String resourceKind) {
 		java.util.List<SimpleJson> out = new java.util.ArrayList<>();
+		// Build 88: failed until the read and parse succeed.
+		failedLoads.add(resourceKind);
 		try {
 			String enc = java.net.URLEncoder.encode(resourceKind, "UTF-8");
 			String body = stitcher.get(
 					"/api/resources?adapterKind=VMWARE&resourceKind=" + enc
 					+ "&pageSize=10000");
 			SimpleJson parsed = SimpleJson.parse(body);
-			if (parsed == null || parsed.isNull()) return out;
+			if (parsed == null || parsed.isNull()) {
+				logger.warn("ComplianceStitcher: fetchResources("
+						+ resourceKind + ") returned an unparseable body");
+				return out;
+			}
+			failedLoads.remove(resourceKind);
 			SimpleJson list = parsed.get("resourceList");
 			if (list == null || !list.isList()) return out;
 			for (SimpleJson r : list.asList()) {
@@ -281,6 +295,14 @@ public final class ComplianceStitcher {
 					+ ": " + e.getMessage());
 		}
 		return out;
+	}
+
+	/**
+	 * Build 88: true when the last read of the VCF Ops resource list for
+	 * {@code resourceKind} failed (not merely returned 0 resources).
+	 */
+	public boolean loadFailed(String resourceKind) {
+		return failedLoads.contains(resourceKind);
 	}
 
 	public HostEntry matchHost(String hostname, String moid) {
@@ -361,8 +383,13 @@ public final class ComplianceStitcher {
 			}
 		}
 
-		logger.warn("ComplianceStitcher: no " + resourceKind
-				+ " match for " + name + " (moid=" + moid + ")");
+		// Build 88: DEBUG. The adapter names a kind's unmatched objects in
+		// one INFO line per cycle (Rollup|<K>|unmatched), so a WARN per
+		// object per cycle is no longer needed.
+		if (logger.isDebugEnabled()) {
+			logger.debug("ComplianceStitcher: no " + resourceKind
+					+ " match for " + name + " (moid=" + moid + ")");
+		}
 		return null;
 	}
 

@@ -389,6 +389,34 @@ public final class ComplianceDecisions {
 	}
 
 	/**
+	 * Build 88: a vSphere Pod VM, by its configured guest id
+	 * ({@code config.guestId}, read in the bulk VM enumeration). vSphere
+	 * Pods run in a CRX (Container Runtime Executive) VM whose guest id
+	 * starts with {@code crx}: {@code crxPod1Guest} (guest full name "VMware
+	 * CRX Pod 1 (64-bit)", seen on devel Pods) and {@code crxSys1Guest} (named
+	 * in the build 88 design). No vendor list of every CRX guest id was
+	 * found, so any id starting with {@code crx}, in any case, is a Pod. A
+	 * null or unread guest id is not a Pod (the VM is handled as a VM).
+	 */
+	public static boolean isPodGuestId(String guestId) {
+		return guestId != null
+				&& guestId.trim().toLowerCase(java.util.Locale.ROOT)
+						.startsWith("crx");
+	}
+
+	/**
+	 * Build 88: whether objects of one kind can be pushed to this cycle.
+	 * False with no Suite API stitcher, or when the VCF Ops resource list
+	 * for the kind could not be read; the caller then skips the kind and
+	 * marks it incomplete (keys held back) rather than reporting every
+	 * object as unmatched.
+	 */
+	public static boolean kindPushable(boolean stitcherPresent,
+			boolean resourceListFailed) {
+		return stitcherPresent && !resourceListFailed;
+	}
+
+	/**
 	 * Build 87: the per-host score line is INFO when the host has any
 	 * unreadable control (so a partly unreadable host is named at INFO),
 	 * DEBUG when every control was read.

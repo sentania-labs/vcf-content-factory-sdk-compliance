@@ -135,6 +135,16 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   re-imported by the same upgrade. Existing alerts are renamed in place
   (alert ids and start times are kept) and existing symptom and alert
   definitions take the new wait and cancel cycles. See [installing.md](docs/installing.md#upgrading).
+- **The counts cover only objects VCF Operations knows about.** (Build
+  88.) A host, VM, cluster, switch or portgroup that vCenter lists but that
+  has no matching object in VCF Operations is not scored and not counted
+  in the totals, because there is nowhere to put its result. Each vCenter
+  object shows how many there were in
+  `VCF-CF Compliance|Rollup|<kind>|unmatched` (0 when none), and the
+  adapter log names them once per cycle. vSphere Pods (the VMs that run
+  Supervisor Pods, which VCF Operations lists as Pods, not VMs) are out of
+  scope: they are skipped and counted in
+  `VCF-CF Compliance|Rollup|VM|skipped_pods`.
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored
