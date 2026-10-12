@@ -8,8 +8,9 @@ vCenter, vSAN clusters, and distributed switches and portgroups. It checks
 each one against the VMware Security Configuration Guide (SCG) written for
 that object's version. The results show up on objects you already monitor:
 every one gets a compliance score, every failing control raises its own
-alert with VMware's fix attached, and four dashboards give you the big
-picture and let you drill down.
+alert with VMware's fix attached, and four dashboards (plus a Summary tab
+on the pack's Compliance World object) give you the big picture and let
+you drill down.
 
 The pack only reads. It never changes a setting.
 
@@ -53,8 +54,11 @@ absent is currently skipped rather than failed; see Known issues.)
 
 ## The dashboards
 
-Four dashboards install with the pack. These screenshots come from a lab
-with three vCenters.
+Four dashboards install with the pack, plus a Summary tab on the pack's
+Compliance World object: open Compliance World from the inventory and its
+Summary tab shows the environment tiles, the per-vCenter table, the score
+trend, the SCG version spread and the open compliance alerts on one page.
+These screenshots come from a lab with three vCenters.
 
 **Environment Overview** is the landing page: the average score, how many
 objects are non-compliant, how many have no guide for their version, how

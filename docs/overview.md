@@ -117,12 +117,14 @@ Compliance World: the engine-computed environment totals
 | [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
+| [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
 
 The Environment Overview's four score tiles (Average Score, Non-Compliant
 Objects, Objects Without Benchmark, Objects Scored) and its score trend
 read the engine-computed `Rollup|Environment|*` metrics on the pack's own
 Compliance World (build 86). **Nothing needs enabling in a policy**, and
-no widget on any of the four dashboards needs policy changes. The Objects
+no widget on any of the four dashboards or the Compliance World Summary
+tab needs policy changes. The Objects
 Scored tile stays beside the others on purpose: with nothing scored, the
 Non-Compliant Objects tile reads 0, and the Scored tile next to it shows
 that the 0 has no denominator rather than meaning all clear. The totals

@@ -329,9 +329,53 @@ public final class ComplianceDecisionsTest {
 				"many unreadable controls: score line at INFO");
 
 		build88PodGuestIds();
+		build88ResourcePages();
 		build88SourcePins();
 
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
+	}
+
+	/**
+	 * Build 88 review W2: a resource list that parsed but is short holds
+	 * the kind back; a missing resourceList is not "0 resources".
+	 */
+	private static void build88ResourcePages() {
+		ComplianceDecisions.ResourcePage C =
+				ComplianceDecisions.ResourcePage.COMPLETE;
+		ComplianceDecisions.ResourcePage N =
+				ComplianceDecisions.ResourcePage.NEXT_PAGE;
+		ComplianceDecisions.ResourcePage I =
+				ComplianceDecisions.ResourcePage.INCOMPLETE;
+		// Missing resourceList.
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, null, 0, 0, 0),
+				"no resourceList, no pageInfo: incomplete");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, 25L, 0, 0, 0),
+				"no resourceList with a total: incomplete");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(false, 0L, 0, 0, 0),
+				"no resourceList, total 0: genuinely empty");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, 0L, 5, 0, 1),
+				"no resourceList on a later page: incomplete");
+		// totalCount exceeds the rows returned.
+		T.eq(N, ComplianceDecisions.resourcePageOutcome(true, 12500L, 10000,
+				10000, 0), "first of two pages: read the next");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 12500L, 12500,
+				2500, 1), "second page completes the list");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(true, 12500L, 10000,
+				0, 1), "empty page before the total: incomplete");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(true, 10001L, 1000,
+				1000, ComplianceDecisions.MAX_RESOURCE_PAGES - 1),
+				"page cap reached short of the total: incomplete");
+		T.eq(N, ComplianceDecisions.resourcePageOutcome(true, 1001L, 1000,
+				1000, 0),
+				"server capped the page below pageSize: keep paging");
+		// Complete lists.
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 25L, 25, 25, 0),
+				"one page, all rows");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 0L, 0, 0, 0),
+				"empty list, total 0");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, null, 25, 25, 0),
+				"no pageInfo: one unpaged list as returned");
+		T.eq(10000, ComplianceDecisions.RESOURCE_PAGE_SIZE, "page size");
 	}
 
 	/** Build 88: which guest ids are vSphere Pods; when a kind is pushable. */
@@ -435,12 +479,24 @@ public final class ComplianceDecisionsTest {
 				"row.values.get(\"runtime.host\"), true, row.values.get(\"config.guestId\"))");
 
 		String st = read("src/com/vcfcf/adapters/compliance/ComplianceStitcher.java");
-		inOrder(body(st, "private List<SimpleJson> fetchResources("),
-				"fetchResources",
+		String fr = body(st, "private List<SimpleJson> fetchResources(");
+		inOrder(fr, "fetchResources",
 				"failedLoads.add(resourceKind);",
-				"stitcher.get(",
+				"for (int page = 0; ; page++) {",
+				"\"&pageSize=\" + ComplianceDecisions.RESOURCE_PAGE_SIZE + \"&page=\" + page);",
 				"if (parsed == null || parsed.isNull()) {",
-				"return out; } failedLoads.remove(resourceKind);");
+				"return out; }",
+				"boolean hasList = list != null && list.isList();",
+				"int rows = hasList ? list.size() : 0;",
+				"collected += rows;",
+				"SimpleJson total = parsed.path(\"pageInfo.totalCount\"); Long totalCount = total.isNull() ? null : total.asLong();",
+				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page);",
+				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); return out; }",
+				"if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {",
+				"return out; }");
+		// The failed mark is cleared in exactly one place: a complete list.
+		T.eq(1, count(fr, "failedLoads.remove("),
+				"fetchResources clears the failed mark only on COMPLETE");
 		T.check(body(st, "public boolean loadFailed(").equals(
 				"return failedLoads.contains(resourceKind);"), "loadFailed body");
 	}

@@ -125,7 +125,8 @@ for:
    needs enabling in a policy: its score tiles and trend read environment
    totals that VCF Operations computes on the pack's Compliance World
    (they appear one collection interval after the per-vCenter numbers).
-   The four bundled dashboards:
+   The four bundled dashboards, and the Summary tab on the Compliance
+   World object:
 
 | Dashboard | What it is for |
 |---|---|
@@ -133,6 +134,7 @@ for:
 | [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
+| [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
 
 ## Upgrading
 

@@ -260,34 +260,65 @@ public final class ComplianceStitcher {
 	/**
 	 * Fetch all VMWARE resources of {@code resourceKind} via the Suite API,
 	 * returning the {@code resourceList} entries as a list of
-	 * {@link SimpleJson} objects. Returns an empty list on any failure (a
-	 * stitching read failure must not abort the collect cycle).
+	 * {@link SimpleJson} objects. Never throws (a stitching read failure
+	 * must not abort the collect cycle).
 	 *
-	 * <p>{@code pageSize=10000} is requested so a single page covers the
-	 * inventory (the v1 client returned the full set; the Suite API default
-	 * page size is 1000). If the inventory ever exceeds one page the missing
-	 * resources simply do not stitch this cycle — never a wrong match.
+	 * <p>Build 88 (review W2): the list is paged ({@code pageSize=10000},
+	 * {@code page=0, 1, ...}) until {@code pageInfo.totalCount} rows are
+	 * read ({@link ComplianceDecisions#resourcePageOutcome}). The kind stays
+	 * marked failed ({@link #loadFailed}) on an exception, an unparseable
+	 * body, a page with no {@code resourceList} (unless it reports a total
+	 * of 0), or a list still short of its total (an empty page, or
+	 * {@link ComplianceDecisions#MAX_RESOURCE_PAGES} reached). Since build 88
+	 * an object missing from this list leaves the rollup, so a short list
+	 * must hold the kind back rather than pass as complete.
 	 */
 	private List<SimpleJson> fetchResources(String resourceKind) {
 		java.util.List<SimpleJson> out = new java.util.ArrayList<>();
-		// Build 88: failed until the read and parse succeed.
+		// Build 88: failed until the whole list is read.
 		failedLoads.add(resourceKind);
 		try {
 			String enc = java.net.URLEncoder.encode(resourceKind, "UTF-8");
-			String body = stitcher.get(
-					"/api/resources?adapterKind=VMWARE&resourceKind=" + enc
-					+ "&pageSize=10000");
-			SimpleJson parsed = SimpleJson.parse(body);
-			if (parsed == null || parsed.isNull()) {
-				logger.warn("ComplianceStitcher: fetchResources("
-						+ resourceKind + ") returned an unparseable body");
-				return out;
-			}
-			failedLoads.remove(resourceKind);
-			SimpleJson list = parsed.get("resourceList");
-			if (list == null || !list.isList()) return out;
-			for (SimpleJson r : list.asList()) {
-				if (r != null && !r.isNull()) out.add(r);
+			int collected = 0;
+			for (int page = 0; ; page++) {
+				String body = stitcher.get(
+						"/api/resources?adapterKind=VMWARE&resourceKind=" + enc
+						+ "&pageSize=" + ComplianceDecisions.RESOURCE_PAGE_SIZE
+						+ "&page=" + page);
+				SimpleJson parsed = SimpleJson.parse(body);
+				if (parsed == null || parsed.isNull()) {
+					logger.warn("ComplianceStitcher: fetchResources("
+							+ resourceKind + ") page " + page
+							+ " returned an unparseable body");
+					return out;
+				}
+				SimpleJson list = parsed.get("resourceList");
+				boolean hasList = list != null && list.isList();
+				int rows = hasList ? list.size() : 0;
+				if (hasList) {
+					for (SimpleJson r : list.asList()) {
+						if (r != null && !r.isNull()) out.add(r);
+					}
+				}
+				collected += rows;
+				SimpleJson total = parsed.path("pageInfo.totalCount");
+				Long totalCount = total.isNull() ? null : total.asLong();
+				ComplianceDecisions.ResourcePage next =
+						ComplianceDecisions.resourcePageOutcome(hasList,
+								totalCount, collected, rows, page);
+				if (next == ComplianceDecisions.ResourcePage.COMPLETE) {
+					failedLoads.remove(resourceKind);
+					return out;
+				}
+				if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {
+					logger.warn("ComplianceStitcher: fetchResources("
+							+ resourceKind + ") incomplete: "
+							+ (hasList ? "" : "no resourceList, ")
+							+ collected + " row(s) read of pageInfo.totalCount "
+							+ totalCount + " after page " + page
+							+ "; this kind is held back this cycle");
+					return out;
+				}
 			}
 		} catch (Exception e) {
 			logger.warn("ComplianceStitcher: fetchResources(" + resourceKind

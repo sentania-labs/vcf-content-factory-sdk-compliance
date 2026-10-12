@@ -388,6 +388,45 @@ public final class ComplianceDecisions {
 		return out;
 	}
 
+	/** Build 88 (review W2): what to do after one /api/resources page. */
+	public enum ResourcePage { COMPLETE, NEXT_PAGE, INCOMPLETE }
+
+	/** Build 88 (review W2): page size requested from /api/resources. */
+	public static final int RESOURCE_PAGE_SIZE = 10000;
+
+	/** Build 88 (review W2): pages read at most per kind per cycle. */
+	public static final int MAX_RESOURCE_PAGES = 20;
+
+	/**
+	 * Build 88 (review W2): whether a VCF Ops resource list read so far is
+	 * the whole list. Since build 88 an object missing from the list is
+	 * unmatched and leaves the totals, so a list that parsed but is short
+	 * must hold the kind back (INCOMPLETE), never pass as complete.
+	 *
+	 * @param hasList      the page carried a {@code resourceList} array
+	 * @param totalCount   {@code pageInfo.totalCount}, null when absent
+	 * @param collected    rows read so far, this page included
+	 * @param rowsThisPage rows on this page
+	 * @param pageIndex    0-based index of the page just read
+	 */
+	public static ResourcePage resourcePageOutcome(boolean hasList,
+			Long totalCount, int collected, int rowsThisPage, int pageIndex) {
+		if (!hasList) {
+			// No resourceList: complete only when the page says the list is
+			// genuinely empty and nothing came before it.
+			return totalCount != null && totalCount == 0 && collected == 0
+					? ResourcePage.COMPLETE : ResourcePage.INCOMPLETE;
+		}
+		if (totalCount == null || collected >= totalCount) {
+			// No pageInfo: one unpaged list, taken as returned.
+			return ResourcePage.COMPLETE;
+		}
+		if (rowsThisPage == 0 || pageIndex + 1 >= MAX_RESOURCE_PAGES) {
+			return ResourcePage.INCOMPLETE;   // short, and no way to finish
+		}
+		return ResourcePage.NEXT_PAGE;
+	}
+
 	/**
 	 * Build 88: a vSphere Pod VM, by its configured guest id
 	 * ({@code config.guestId}, read in the bulk VM enumeration). vSphere

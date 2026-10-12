@@ -102,6 +102,23 @@ def widget_problems(widget: dict, depth: int) -> list:
     return problems
 
 
+def coverage_problems(name: str, text: str, covered: set) -> list:
+    """Why a dashboard file escapes this test, if it does: an AlertList
+    with no expected depth here, or (build 88 review N6) the word AlertList
+    in the file while the line parser found no AlertList widget, e.g. a
+    widget indented differently from `  - id:` / `    type: AlertList`."""
+    problems = []
+    widgets = alert_widgets(text)
+    if widgets and name not in covered:
+        problems.append(f"{name} has an AlertList but no expected depth "
+                        f"in this test")
+    if not widgets and re.search(r"\bAlertList\b", text):
+        problems.append(f"{name} mentions AlertList but the line parser "
+                        f"found no AlertList widget; fix the parser or "
+                        f"the indentation")
+    return problems
+
+
 def expected_ids(kinds) -> list:
     out = []
     for c in gen.collect():
@@ -133,10 +150,27 @@ class DashboardAlertListTest(unittest.TestCase):
         covered = set(EXPECTED_DEPTH) | {"compliance-overview.yaml"}
         for path in sorted((REPO / "dashboards").glob("*.yaml")):
             text = path.read_text(encoding="utf-8")
-            if alert_widgets(text):
-                self.assertIn(path.name, covered,
-                              f"{path.name} has an AlertList but no "
-                              f"expected depth in this test")
+            problems = coverage_problems(path.name, text, covered)
+            self.assertEqual(problems, [], "; ".join(problems))
+
+    def test_coverage_check_catches_unparsed_alert_list(self):
+        # Build 88 review N6: an AlertList the line parser cannot see must
+        # fail the coverage check, not pass it silently.
+        real = (REPO / "dashboards" / "compliance-world-summary.yaml"
+                ).read_text(encoding="utf-8")
+        name = "compliance-world-summary.yaml"
+        self.assertEqual(coverage_problems(name, real, {name}), [])
+        # uncovered dashboard with a parsed AlertList
+        self.assertTrue(coverage_problems(name, real, set()))
+        # the same widget indented differently: parser misses it
+        shifted = "\n".join("  " + l if l.strip() else l
+                            for l in real.splitlines())
+        self.assertEqual(alert_widgets(shifted), [])
+        self.assertTrue(any("line parser" in p for p in
+                            coverage_problems(name, shifted, {name})))
+        # no AlertList anywhere: nothing to report
+        self.assertEqual(coverage_problems(
+            "x.yaml", "widgets:\n  - id: a\n    type: View\n", set()), [])
 
     def test_retired_fleet_overview_alert_list(self):
         text = (REPO / "dashboards" / "compliance-overview.yaml").read_text(
