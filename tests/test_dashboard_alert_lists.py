@@ -1,27 +1,32 @@
-#!/usr/bin/env python3
-"""Drift check: dashboard AlertList widgets vs the generated alerts.
+"""Drift check: dashboard AlertList widgets vs the alert contract.
 
-Build 62 (review W1 on build 61). The per-control alert definitions are
-generated from the canonical profiles by scripts/generate_compliance_alerts.py;
-the dashboards' AlertList widgets name them explicitly. Content authors own
-the dashboard YAML, so the generator never rewrites it. This test fails
-instead when the two drift apart: a missing, extra or duplicate id in any
-dashboard's alert_definitions list.
+Build 62 pinned each AlertList to an explicit alert_definitions list and
+this test compared the lists to the generated alerts. Commit 370f69f
+replaced those pins with a type filter: every pak alert is Application /
+Compliance (type 15, subType 21), so an AlertList carries
+`alert_types: ["15_21"]` and no definition pins, and the per-widget
+`depth` says how many descendant levels below the input object carry
+compliance alerts. Nothing needs regenerating when an alert is added, so
+the drift this test guards is now in the widget config:
+  - the type filter is present and exactly ["15_21"]
+  - no alert_definitions pin has crept back in
+  - depth matches the documented per-dashboard value
+  - every dashboard has exactly the expected AlertList count
 
-Expected per dashboard (Ops resource kinds of the generated alerts), each
-set being the per-control alerts of those kinds PLUS the build-63
-"Compliance data not collected" alert of each of those kinds:
-  compliance-environment-overview.yaml  all kinds: 136 + 6 = 142
-  compliance-esxi-hosts.yaml            HostSystem: 86 + 1 = 87
-  compliance-vms.yaml                   VirtualMachine: 23 + 1 = 24
-  compliance-vcenter-networking.yaml    vCenter, cluster, vDS, portgroup:
-                                        27 + 4 = 31
-(build 70: the 6 standard-switch vDS controls are no longer alerted;
-build 72: vds.network-reset-port folded into dvpg.network-reset-port;
-build 74: cluster.object-checksum demoted to manual review)
+Expected depth per dashboard (see the comment above each depth in the YAML):
+  compliance-environment-overview.yaml  4  (vCenter > Datacenter > Cluster
+                                            > HostSystem > VirtualMachine)
+  compliance-esxi-hosts.yaml            1  (HostSystem > VirtualMachine)
+  compliance-vms.yaml                   1  (VirtualMachine)
+  compliance-vcenter-networking.yaml    4  (vCenter, cluster, vDS, portgroup)
+  compliance-world-summary.yaml         5  (ComplianceWorld > vCenter > ...
+                                            > VirtualMachine)
+
+The generator's collection counts are still asserted, since the alert
+set itself is what the type filter selects.
 
 Standard library only (the hosted PR workflow installs nothing), so the
-alert_definitions lists are read with a small line parser, not PyYAML.
+AlertList widgets are read with a small line parser, not PyYAML.
 
 Run from the repo root:  python3 tests/test_dashboard_alert_lists.py
 """
@@ -29,7 +34,6 @@ Run from the repo root:  python3 tests/test_dashboard_alert_lists.py
 import re
 import sys
 import unittest
-from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -39,45 +43,63 @@ import generate_compliance_alerts as gen  # noqa: E402
 
 PREFIX = "AlertDefinition-vcfcf_compliance-"
 
+# dashboard file -> (expected AlertList depth, resource kinds of its alerts)
+EXPECTED_DEPTH = {
+    "compliance-environment-overview.yaml": 4,
+    "compliance-esxi-hosts.yaml": 1,
+    "compliance-vms.yaml": 1,
+    "compliance-vcenter-networking.yaml": 4,
+    "compliance-world-summary.yaml": 5,
+}
+
 EXPECTED_KINDS = {
-    "compliance-environment-overview.yaml": None,   # all kinds
-    "compliance-esxi-hosts.yaml": {"HostSystem"},
-    "compliance-vms.yaml": {"VirtualMachine"},
     "compliance-vcenter-networking.yaml": {
         "VCenterAdapterInstance", "ClusterComputeResource",
         "DistributedVirtualSwitch", "DistributedVirtualPortgroup"},
 }
 
-_ITEM = re.compile(r"""^\s*-\s*["']?([^"'#\s]+)["']?\s*(#.*)?$""")
+_WIDGET_START = re.compile(r"^  - id:\s*(\S+)")
+_TOP_LEVEL = re.compile(r"^\S")
 
 
-def alert_lists(path: Path) -> list:
-    """Every alert_definitions list in a dashboard YAML, in file order."""
-    lists = []
-    current = None
-    indent = None
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip()
-        if current is None:
-            if re.match(r"^\s*alert_definitions:\s*$", line):
-                current = []
-                indent = len(line) - len(line.lstrip())
+def alert_widgets(text: str) -> list:
+    """Every AlertList widget in a dashboard YAML, in file order, as a
+    dict: id, lines (the widget's raw lines)."""
+    widgets = []
+    cur = None
+    for raw in text.splitlines():
+        m = _WIDGET_START.match(raw)
+        if m or _TOP_LEVEL.match(raw):
+            if cur is not None:
+                widgets.append(cur)
+            cur = {"id": m.group(1), "lines": []} if m else None
             continue
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        m = _ITEM.match(line)
-        if m and (len(line) - len(line.lstrip())) >= indent:
-            current.append(m.group(1))
-            continue
-        lists.append(current)
-        current = None
-        if re.match(r"^\s*alert_definitions:\s*$", line):
-            current = []
-            indent = len(line) - len(line.lstrip())
-    if current is not None:
-        lists.append(current)
-    return lists
+        if cur is not None:
+            cur["lines"].append(raw)
+    if cur is not None:
+        widgets.append(cur)
+    return [w for w in widgets
+            if any(re.match(r"^    type:\s*AlertList\s*$", l)
+                   for l in w["lines"])]
+
+
+def widget_problems(widget: dict, depth: int) -> list:
+    """Human-readable contract violations for one AlertList widget."""
+    problems = []
+    code = [l.split("#", 1)[0].rstrip() for l in widget["lines"]]
+    code = [l for l in code if l.strip()]
+    types = [l for l in code if re.match(r"^    alert_types:", l)]
+    if len(types) != 1 or re.sub(r"\s+", "", types[0].split(":", 1)[1]) \
+            != '["15_21"]':
+        problems.append(f"{widget['id']}: alert_types must be exactly "
+                        f'["15_21"], found {types}')
+    if any(re.match(r"^\s*alert_definitions:", l) for l in code):
+        problems.append(f"{widget['id']}: alert_definitions pin present")
+    depths = [l for l in code if re.match(r"^    depth:", l)]
+    if len(depths) != 1 or depths[0].split(":", 1)[1].strip() != str(depth):
+        problems.append(f"{widget['id']}: depth must be {depth}, "
+                        f"found {depths}")
+    return problems
 
 
 def expected_ids(kinds) -> list:
@@ -91,32 +113,37 @@ def expected_ids(kinds) -> list:
     return sorted(out)
 
 
-def diff(actual: list, expected: list) -> list:
-    """Human-readable problems: duplicates, missing, extra."""
-    problems = []
-    dup = sorted(i for i, n in Counter(actual).items() if n > 1)
-    if dup:
-        problems.append(f"duplicate: {dup}")
-    missing = sorted(set(expected) - set(actual))
-    if missing:
-        problems.append(f"missing: {missing}")
-    extra = sorted(set(actual) - set(expected))
-    if extra:
-        problems.append(f"extra: {extra}")
-    return problems
-
-
 class DashboardAlertListTest(unittest.TestCase):
 
-    def test_dashboards_match_generated_alerts(self):
-        for name, kinds in EXPECTED_KINDS.items():
+    def test_alert_lists_use_type_filter_and_depth(self):
+        for name, depth in EXPECTED_DEPTH.items():
             with self.subTest(dashboard=name):
-                lists = alert_lists(REPO / "dashboards" / name)
-                self.assertEqual(len(lists), 1,
-                                 f"{name}: expected one alert_definitions "
-                                 f"list, found {len(lists)}")
-                problems = diff(lists[0], expected_ids(kinds))
+                text = (REPO / "dashboards" / name).read_text(encoding="utf-8")
+                widgets = alert_widgets(text)
+                self.assertEqual(len(widgets), 1,
+                                 f"{name}: expected one AlertList, "
+                                 f"found {len(widgets)}")
+                problems = widget_problems(widgets[0], depth)
                 self.assertEqual(problems, [], f"{name}: " + "; ".join(problems))
+
+    def test_every_dashboard_is_covered(self):
+        # A new dashboard with an AlertList must be added to EXPECTED_DEPTH.
+        # compliance-overview.yaml (retired Fleet Overview, unbundled)
+        # keeps its own depth 5 and is checked here too.
+        covered = set(EXPECTED_DEPTH) | {"compliance-overview.yaml"}
+        for path in sorted((REPO / "dashboards").glob("*.yaml")):
+            text = path.read_text(encoding="utf-8")
+            if alert_widgets(text):
+                self.assertIn(path.name, covered,
+                              f"{path.name} has an AlertList but no "
+                              f"expected depth in this test")
+
+    def test_retired_fleet_overview_alert_list(self):
+        text = (REPO / "dashboards" / "compliance-overview.yaml").read_text(
+            encoding="utf-8")
+        widgets = alert_widgets(text)
+        self.assertEqual(len(widgets), 1)
+        self.assertEqual(widget_problems(widgets[0], 5), [])
 
     def test_expected_counts(self):
         # Build 70: 138 per-control (6 standard-switch vDS controls
@@ -127,40 +154,35 @@ class DashboardAlertListTest(unittest.TestCase):
         self.assertEqual(len(expected_ids(
             EXPECTED_KINDS["compliance-vcenter-networking.yaml"])), 31)
 
-    def test_parser_and_diff_catch_drift(self):
+    def test_checker_catches_drift(self):
         # The checker itself must fail on each kind of drift.
-        exp = ["A-1", "A-2", "A-3"]
-        self.assertEqual(diff(["A-1", "A-2", "A-3"], exp), [])
-        self.assertIn("missing: ['A-3']", diff(["A-1", "A-2"], exp))
-        self.assertIn("extra: ['A-9']", diff(["A-1", "A-2", "A-3", "A-9"], exp))
-        self.assertIn("duplicate: ['A-2']",
-                      diff(["A-1", "A-2", "A-2", "A-3"], exp))
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmp:
-            sample = Path(tmp) / "dashboard.yaml"
-            sample.write_text(
-                "widgets:\n"
-                "  - type: AlertList\n"
-                "    alert_definitions:\n"
-                "        - \"A-1\"\n"
-                "        - 'A-2'   # comment\n"
-                "\n"
-                "        - A-3\n"
-                "    title: x\n", encoding="utf-8")
-            self.assertEqual(alert_lists(sample), [["A-1", "A-2", "A-3"]])
+        real = (REPO / "dashboards" / "compliance-world-summary.yaml"
+                ).read_text(encoding="utf-8")
+        good = alert_widgets(real)[0]
+        self.assertEqual(widget_problems(good, 5), [])
+        self.assertTrue(widget_problems(good, 4))            # wrong depth
 
-            # A real dashboard with one id dropped and one duplicated fails.
-            real = (REPO / "dashboards" / "compliance-vms.yaml").read_text(
-                encoding="utf-8").splitlines(keepends=True)
-            items = [i for i, l in enumerate(real) if PREFIX in l]
-            mutated = list(real)
-            mutated[items[1]] = real[items[0]]        # drop #2, duplicate #1
-            bad = Path(tmp) / "vms.yaml"
-            bad.write_text("".join(mutated), encoding="utf-8")
-            problems = diff(alert_lists(bad)[0],
-                            expected_ids({"VirtualMachine"}))
-            self.assertTrue(any(x.startswith("missing") for x in problems))
-            self.assertTrue(any(x.startswith("duplicate") for x in problems))
+        def mutate(old, new):
+            return alert_widgets(real.replace(old, new))[0]
+
+        # type filter dropped
+        self.assertTrue(any("alert_types" in p for p in widget_problems(
+            mutate('    alert_types: ["15_21"]', "    mode_x: 1"), 5)))
+        # wrong subtype
+        self.assertTrue(any("alert_types" in p for p in widget_problems(
+            mutate('["15_21"]', '["15_22"]'), 5)))
+        # a definition pin creeps back in
+        self.assertTrue(any("alert_definitions" in p for p in widget_problems(
+            mutate("    mode: all\n",
+                   "    mode: all\n    alert_definitions:\n"
+                   "      - AlertDefinition-x\n"), 5)))
+        # depth changed
+        self.assertTrue(any("depth" in p for p in widget_problems(
+            mutate("    depth: 5", "    depth: 1"), 5)))
+        # a commented-out filter does not count
+        self.assertTrue(any("alert_types" in p for p in widget_problems(
+            mutate('    alert_types: ["15_21"]',
+                   '    # alert_types: ["15_21"]'), 5)))
 
 
 if __name__ == "__main__":

@@ -53,3 +53,4 @@ bundled_content:
     - dashboards/compliance-esxi-hosts.yaml
     - dashboards/compliance-vms.yaml
     - dashboards/compliance-vcenter-networking.yaml
+    - dashboards/compliance-world-summary.yaml
