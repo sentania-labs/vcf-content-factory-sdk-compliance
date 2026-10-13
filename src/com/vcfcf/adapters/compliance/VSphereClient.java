@@ -101,11 +101,14 @@ public final class VSphereClient {
 	/**
 	 * The {@link SSLSocketFactory} is chosen by the adapter
 	 * ({@code ComplianceAdapter.sslSocketFactoryFor}): the platform trust
-	 * path, always (build 93 removed the Allow Insecure SSL opt-out, its
-	 * trust-all factory and its hostname-verification bypass). The same
-	 * factory is threaded into the per-cycle {@link EsxcliSoapClient} so the
-	 * esxcli slice validates identically, and the JDK's default hostname
-	 * verifier stays in place.
+	 * path with the certificate name enforced
+	 * ({@link VCenterCertificates#nameChecking}), always (build 93 removed
+	 * the Allow Insecure SSL opt-out, its trust-all factory and its
+	 * hostname-verification bypass). The same factory is threaded into the
+	 * per-cycle {@link EsxcliSoapClient} so the esxcli slice validates
+	 * identically, and every connection also sets
+	 * {@link VCenterCertificates#strictHostnameVerifier} (through
+	 * {@link VCenterCertificates#secure}).
 	 *
 	 * @param sslFactory the socket factory to use for the HTTPS SOAP
 	 *                    connection. Must not be null on the production path.
@@ -1405,10 +1408,10 @@ public final class VSphereClient {
 
 		URL url = new URL(vcenterUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-		if (conn instanceof HttpsURLConnection && sslFactory != null) {
-			((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
-			// The JDK default hostname verifier stays in place: the
-			// certificate must carry the name vCenter is entered by.
+		if (conn instanceof HttpsURLConnection) {
+			// The factory checks the chain and the name; the strict
+			// verifier makes the JDK check the name again (build 93, B1).
+			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
 		conn.setRequestMethod("POST");
 		conn.setDoOutput(true);

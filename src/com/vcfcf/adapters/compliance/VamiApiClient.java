@@ -73,8 +73,10 @@ final class VamiApiClient {
 	 * @param sslContext the TLS context to use: the platform context
 	 *        (build 74; was the JDK default, which does not trust a lab or
 	 *        enterprise CA, so every VAMI read failed on such vCenters).
-	 *        Build 93: always the platform context, never trust-all. Null
-	 *        falls back to the JDK default.
+	 *        Build 93: always the platform context with the certificate name
+	 *        enforced ({@link VCenterCertificates#nameChecking}), never
+	 *        trust-all. Null falls back to the JDK default (which checks the
+	 *        name itself).
 	 * @param warn  receives one line per distinct failure (may be null)
 	 */
 	VamiApiClient(String baseUrl, String username, String password,

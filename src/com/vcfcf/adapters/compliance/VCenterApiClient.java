@@ -22,8 +22,9 @@ public final class VCenterApiClient {
 	/**
 	 * @param sslContext the platform TLS context (build 74; was the JDK
 	 *        default, which does not trust a lab or enterprise CA). Build 93:
-	 *        always the platform context, never trust-all. Null falls back to
-	 *        the JDK default.
+	 *        always the platform context with the certificate name enforced
+	 *        ({@link VCenterCertificates#nameChecking}), never trust-all. Null
+	 *        falls back to the JDK default (which checks the name itself).
 	 */
 	public VCenterApiClient(String baseUrl, String username, String password,
 			SSLContext sslContext) {

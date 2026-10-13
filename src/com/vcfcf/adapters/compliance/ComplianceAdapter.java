@@ -212,19 +212,24 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * The TLS context for the REST clients (session, inventory, VAMI
-	 * appliance API, Test Connection): always the PLATFORM context, which
-	 * trusts the VCF Operations trust store plus the certificates accepted on
-	 * this instance through Validate Connection. Build 93: the Allow Insecure
-	 * SSL trust-all branch is removed. Null (JDK default trust) only when no
-	 * platform context is available, never trust-all.
+	 * The TLS context for every vCenter client (REST session and
+	 * inventory, VAMI appliance API, Test Connection, and through
+	 * {@link #sslSocketFactoryFor} the vim25 SOAP walk and esxcli): the
+	 * PLATFORM trust manager, which trusts the VCF Operations trust store
+	 * plus the certificates accepted on this instance through Validate
+	 * Connection, wrapped by {@link VCenterCertificates#nameChecking} so the
+	 * certificate must also carry the name vCenter is entered by (build 93,
+	 * review B1: the platform trust manager checks the chain only). Null
+	 * (JDK default trust, which checks the name itself) only when no
+	 * platform trust manager is available, never trust-all.
 	 */
 	private javax.net.ssl.SSLContext sslContextFor() {
 		try {
-			return getPlatformSslContext();
+			return VCenterCertificates.nameChecking(getAdapterTrustManager(),
+					getKeyManagers());
 		} catch (RuntimeException e) {
-			logWarn("Platform SSL context unavailable for the vCenter REST "
-					+ "client; using the JDK default trust store: "
+			logWarn("Platform trust manager unavailable for the vCenter "
+					+ "clients; using the JDK default trust store: "
 					+ e.getMessage());
 			return null;
 		}
@@ -232,25 +237,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * The SSL socket factory for the raw-SOAP {@link VSphereClient}
-	 * connection (and its per-cycle {@link EsxcliSoapClient}): the platform
-	 * context's factory, so the vim25 walk validates the vCenter certificate
-	 * exactly as the REST clients do. The JDK's default hostname verifier
-	 * stays in place on that path. Build 93: the Allow Insecure SSL trust-all
-	 * branch is removed. If no platform context can be obtained the JDK
-	 * default factory is used, never trust-all.
+	 * connection (and its per-cycle {@link EsxcliSoapClient}): the factory
+	 * of {@link #sslContextFor}, so the vim25 walk validates the vCenter
+	 * certificate, chain and name, exactly as the REST clients do. Both
+	 * SOAP clients also set {@link VCenterCertificates#strictHostnameVerifier}
+	 * through {@link VCenterCertificates#secure}. If no platform trust
+	 * manager can be obtained the JDK default factory is used, never
+	 * trust-all.
 	 */
 	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor() {
-		javax.net.ssl.SSLContext platform = null;
-		try {
-			platform = getPlatformSslContext();
-		} catch (RuntimeException e) {
-			logWarn("Platform SSL context unavailable for the vCenter SOAP "
-					+ "client: " + e.getMessage());
+		javax.net.ssl.SSLContext ctx = sslContextFor();
+		if (ctx != null) {
+			return ctx.getSocketFactory();
 		}
-		if (platform != null) {
-			return platform.getSocketFactory();
-		}
-		logWarn("Platform SSL context unavailable: using the JDK default "
+		logWarn("Platform trust manager unavailable: using the JDK default "
 				+ "trust store for the vCenter SOAP connection.");
 		return (javax.net.ssl.SSLSocketFactory)
 				javax.net.ssl.SSLSocketFactory.getDefault();
@@ -272,9 +272,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	@Override
 	protected List<String> certificateCheckUrls(ResourceConfig rc) {
 		return VCenterCertificates.checkUrls(
-				getIdentifier(rc, "vcenter_host"),
-				ComplianceConfig.parseReadAppliance(getIdentifier(rc,
-						ComplianceConfig.READ_APPLIANCE_KEY)));
+				getIdentifier(rc, "vcenter_host"));
 	}
 
 	// -----------------------------------------------------------------------
