@@ -96,6 +96,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// profile; zero its retired rollup bucket on the next complete rollup.
 	private volatile boolean zeroCustomBucket;
 	private volatile int cycleOverriddenInForce;
+	// Build 93 (review W1): this instance's vCenter object as resolved by
+	// the last cycle that reached vCenter, for marking a later cycle that
+	// cannot reach it. Cleared on configure (the host may have changed).
+	private volatile String lastVcResourceId;
 
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
@@ -147,6 +151,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
 				readAppliance, overridesFile);
+		this.lastVcResourceId = null;
 		boolean storedAsCustom = ComplianceConfig.isCustomName(storedProfile);
 		this.zeroCustomBucket = storedAsCustom;
 		String profileNotice =
@@ -484,10 +489,65 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
+	/**
+	 * Build 93 (review W1): the cycle could not reach vCenter (connect,
+	 * login or certificate failure), so nothing was read. Push
+	 * {@code Rollup|incomplete} = 1 on this instance's vCenter object, which
+	 * raises "Compliance data not collected (vCenter)", instead of leaving
+	 * the last scores showing as current with no signal. Best effort: any
+	 * failure here is logged and the cycle's own exception is what the
+	 * caller rethrows.
+	 */
+	private void markCycleNotCollected(Exception cause) {
+		ComplianceStitcher st = stitcher;
+		if (st == null) {
+			logWarn("vCenter " + config.vcenterHost + " not reached this "
+					+ "cycle and no Suite API stitcher: Rollup|incomplete "
+					+ "cannot be pushed; the last scores stay in place");
+			return;
+		}
+		try {
+			String id = ComplianceDecisions.markNotCollected(lastVcResourceId,
+					() -> {
+						st.loadVCenterAdapterInstance();
+						ComplianceStitcher.HostEntry he =
+								st.matchVCenterAdapterInstance(
+										config.vcenterHost, null);
+						return he == null ? null : he.resourceId;
+					},
+					(rid, stats) -> st.pushStats(rid, stats,
+							System.currentTimeMillis()));
+			if (id == null) {
+				logWarn("vCenter " + config.vcenterHost + " not reached this "
+						+ "cycle (" + cause.getClass().getSimpleName() + "), "
+						+ "and its VMwareAdapter Instance could not be "
+						+ "resolved without vCenter (no VCURL equal to the "
+						+ "entered host): Rollup|incomplete is NOT pushed; "
+						+ "the last scores stay in place");
+			} else {
+				logWarn("vCenter " + config.vcenterHost + " not reached this "
+						+ "cycle (" + cause.getClass().getSimpleName() + "): "
+						+ ComplianceRollup.INCOMPLETE_KEY + " = 1 pushed to "
+						+ "resource " + id + "; the compliance values shown "
+						+ "are from the last completed cycle");
+			}
+		} catch (RuntimeException e) {
+			logWarn("vCenter " + config.vcenterHost + " not reached this "
+					+ "cycle, and pushing Rollup|incomplete failed: " + e);
+		}
+	}
+
 	/** The cycle body; {@link #collectWorld} times it. */
 	private void collectWorldCycle(ResourceConfig worldRc,
 			List<MetricData> out) throws Exception {
-		ensureVCenterConnected();
+		try {
+			ensureVCenterConnected();
+		} catch (InterruptedException e) {
+			throw e;   // cancelled: no more network calls this cycle
+		} catch (Exception e) {
+			markCycleNotCollected(e);
+			throw e;
+		}
 		// Build 85: fresh esxcli reads every cycle. The esxcli cache lived as
 		// long as the vCenter session, so a stale result (pass or failure)
 		// could be served cycle after cycle; a stale pass is a false pass.
@@ -559,6 +619,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 		}
 
+		if (vcEntry != null) {
+			lastVcResourceId = vcEntry.resourceId;
+		}
 		pushRollup(vcEntry, rollup);
 		pushOverridesStatus(vcEntry, out);
 		// Known limitation: this edge is added, never removed. A vCenter whose

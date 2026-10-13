@@ -43,7 +43,8 @@ import com.sun.net.httpserver.HttpsServer;
  * stored allowInsecure=true, the certificate name enforcement (review B1:
  * the matcher, and real TLS handshakes against a local HTTPS server with a
  * wrong-name certificate, through a chain-only trust manager standing in
- * for the platform's). Plain JDK, no SDK. The certificates are made
+ * for the platform's), and the not-collected marker for a cycle that cannot
+ * reach vCenter (review W1). Plain JDK, no SDK. The certificates are made
  * with the JDK's keytool.
  */
 public final class CertificateTest {
@@ -60,6 +61,7 @@ public final class CertificateTest {
 		} finally {
 			deleteTree(dir.toFile());
 		}
+		notCollected();
 		sourceContract();
 		System.out.println("CertificateTest: all assertions passed");
 	}
@@ -284,6 +286,29 @@ public final class CertificateTest {
 						c.getKey() + ": no own trust path (" + banned + ")");
 			}
 		}
+
+		// W1: a cycle that cannot reach vCenter marks the rollup.
+		OverridesTest.inOrder(ca, "cycle start marks not-collected",
+				"private void collectWorldCycle(",
+				"ensureVCenterConnected();",
+				"} catch (InterruptedException e) {",
+				"throw e;",
+				"} catch (Exception e) {",
+				"markCycleNotCollected(e);",
+				"throw e;",
+				"vsphere.beginCycle();");
+		OverridesTest.inOrder(ca, "the marker",
+				"private void markCycleNotCollected(Exception cause) {",
+				"ComplianceDecisions.markNotCollected(lastVcResourceId,",
+				"st.loadVCenterAdapterInstance();",
+				"st.matchVCenterAdapterInstance(",
+				"config.vcenterHost, null);",
+				"st.pushStats(rid, stats,",
+				"} catch (RuntimeException e) {");
+		OverridesTest.inOrder(ca, "last resolved id kept per configure",
+				"this.lastVcResourceId = null;",
+				"lastVcResourceId = vcEntry.resourceId;",
+				"pushRollup(vcEntry, rollup);");
 	}
 
 	private static Map<String, String> clients(String a, String b) {
@@ -293,6 +318,53 @@ public final class CertificateTest {
 		m.put(b.contains("class EsxcliSoapClient") ? "EsxcliSoapClient"
 				: "VamiApiClient", b);
 		return m;
+	}
+
+	// ----- W1 ---------------------------------------------------------------
+
+	static void notCollected() {
+		Map<String, Double> stats = ComplianceDecisions.notCollectedStats();
+		T.eq(Collections.singletonMap("VCF-CF Compliance|Rollup|incomplete",
+				1.0), stats, "only Rollup|incomplete = 1, nothing else");
+		T.eq(ComplianceRollup.INCOMPLETE_KEY,
+				stats.keySet().iterator().next(),
+				"the key the vCenter collection alert reads");
+
+		List<String> pushed = new ArrayList<>();
+		int[] resolves = {0};
+		java.util.function.Supplier<String> byHost = () -> {
+			resolves[0]++;
+			return "vc-by-host";
+		};
+		java.util.function.BiConsumer<String, Map<String, Double>> push =
+				(id, s) -> pushed.add(id + "=" + s);
+
+		T.eq("vc-last", ComplianceDecisions.markNotCollected("vc-last",
+				byHost, push), "the last resolved id wins");
+		T.eq(0, resolves[0], "no lookup when an id is known");
+		T.eq(Collections.singletonList(
+				"vc-last={VCF-CF Compliance|Rollup|incomplete=1.0}"), pushed,
+				"pushed once to the known id");
+
+		pushed.clear();
+		T.eq("vc-by-host", ComplianceDecisions.markNotCollected(null, byHost,
+				push), "no id yet: resolved by the entered host");
+		T.eq(1, resolves[0], "one lookup");
+		T.eq(Collections.singletonList(
+				"vc-by-host={VCF-CF Compliance|Rollup|incomplete=1.0}"),
+				pushed, "pushed to the resolved id");
+
+		pushed.clear();
+		T.eq("vc-by-host", ComplianceDecisions.markNotCollected("  ", byHost,
+				push), "a blank id is no id");
+
+		pushed.clear();
+		for (String none : new String[] {null, "", " "}) {
+			T.eq(null, ComplianceDecisions.markNotCollected(null, () -> none,
+					push), "unresolved '" + none + "': nothing pushed");
+		}
+		T.eq(Collections.<String>emptyList(), pushed,
+				"never pushed without a vCenter object");
 	}
 
 	// ----- B1: the matcher --------------------------------------------------

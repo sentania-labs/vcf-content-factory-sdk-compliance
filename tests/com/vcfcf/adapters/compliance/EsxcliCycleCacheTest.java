@@ -283,19 +283,26 @@ public final class EsxcliCycleCacheTest {
 				"VSphereClient.beginCycle delegates to beginCycleOn");
 
 		// The adapter's cycle body starts with ensureConnected, beginCycle.
+		// Build 93 (review W1): the connect is wrapped so a failure marks
+		// the rollup not collected before it is rethrown; nothing else
+		// runs before beginCycle.
 		String ca = read("src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
 		String cycle = body(ca, "private void collectWorldCycle(");
-		String[] stmts = cycle.split(";");
-		T.check(stmts.length > 2, "cycle body has statements");
-		T.eq("ensureVCenterConnected()", stmts[0].trim(),
-				"cycle body statement 1");
+		String guard = "try { ensureVCenterConnected(); } "
+				+ "catch (InterruptedException e) { throw e; } "
+				+ "catch (Exception e) { markCycleNotCollected(e); throw e; } ";
+		T.check(cycle.startsWith(guard), "cycle body opens with the "
+				+ "guarded connect: " + cycle.substring(0,
+						Math.min(200, cycle.length())));
+		String[] stmts = cycle.substring(guard.length()).split(";");
+		T.check(stmts.length > 1, "cycle body has statements");
 		// Build 93: that helper is ensureConnected plus the certificate
 		// message.
 		T.check(body(ca, "private void ensureVCenterConnected()")
 				.startsWith("try { vsphere.ensureConnected();"),
 				"the helper connects first");
-		T.eq("vsphere.beginCycle()", stmts[1].trim(),
-				"cycle body statement 2 (before any read)");
+		T.eq("vsphere.beginCycle()", stmts[0].trim(),
+				"first statement after the connect (before any read)");
 		T.check(body(ca, "private void collectWorld(")
 				.contains("collectWorldCycle(worldRc, out);"),
 				"collectWorld runs the cycle body");
