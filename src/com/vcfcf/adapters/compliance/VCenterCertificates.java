@@ -148,7 +148,7 @@ public final class VCenterCertificates {
 				}
 				if (m.contains("No subject alternative")
 						|| m.contains("No name matching")
-						|| m.contains("HTTPS hostname wrong")) {
+						|| isHostnameWrong(m)) {
 					nameHit = true;
 				}
 			}
@@ -158,6 +158,21 @@ public final class VCenterCertificates {
 			}
 		}
 		return nameHit ? Failure.NAME_MISMATCH : null;
+	}
+
+	/**
+	 * {@code HttpsURLConnection}'s post-handshake hostname rejection. The
+	 * wording moved between JDKs: 17 says {@code HTTPS hostname wrong:
+	 * should be <host>}, 25 says {@code Wrong HTTPS hostname: should be
+	 * <host>}. Matched loosely (case-insensitive "hostname" plus "should
+	 * be") so a further rewording keeps the name-mismatch guidance.
+	 */
+	static boolean isHostnameWrong(String m) {
+		if (m == null) return false;
+		String l = m.toLowerCase(java.util.Locale.ROOT);
+		return l.contains("https hostname wrong")
+				|| l.contains("wrong https hostname")
+				|| (l.contains("hostname") && l.contains("should be"));
 	}
 
 	/**
@@ -238,7 +253,8 @@ public final class VCenterCertificates {
 	 * {@code HttpsURLConnection} runs its own RFC 2818 check after the
 	 * handshake whenever the verifier is not the JDK default, and asks the
 	 * verifier only when that check fails, so answering no makes the JDK's
-	 * check final ("HTTPS hostname wrong", read as
+	 * check final ("HTTPS hostname wrong" on JDK 17, "Wrong HTTPS hostname"
+	 * on JDK 25, both read as
 	 * {@link Failure#NAME_MISMATCH}). The JDK default verifier cannot be
 	 * used for this: with it the JDK skips its own check and leaves the
 	 * name to the trust manager, and the platform's checks the chain only.

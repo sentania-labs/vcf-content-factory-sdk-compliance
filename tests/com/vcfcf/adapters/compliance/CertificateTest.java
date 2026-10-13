@@ -122,6 +122,21 @@ public final class CertificateTest {
 						"HTTPS hostname wrong:  should be <10.0.0.5>")),
 				"HttpsURLConnection hostname check");
 		T.eq(VCenterCertificates.Failure.NAME_MISMATCH,
+				VCenterCertificates.classify(new java.io.IOException(
+						"Wrong HTTPS hostname: should be <localhost>")),
+				"HttpsURLConnection hostname check, JDK 25 wording");
+		T.eq(VCenterCertificates.Failure.NAME_MISMATCH,
+				VCenterCertificates.classify(new RuntimeException("wrap",
+						new java.io.IOException(
+								"hostname mismatch, should be <vc01>"))),
+				"a further rewording: hostname plus should be, in a cause");
+		T.eq(null, VCenterCertificates.classify(new java.io.IOException(
+				"unknown hostname vc01")),
+				"hostname alone is not a name mismatch");
+		T.eq(null, VCenterCertificates.classify(new java.io.IOException(
+				"value should be positive")),
+				"should be alone is not a name mismatch");
+		T.eq(VCenterCertificates.Failure.NAME_MISMATCH,
 				VCenterCertificates.classify(new RuntimeException("x",
 						new java.security.cert.CertificateException(
 								"No subject alternative DNS name matching "
