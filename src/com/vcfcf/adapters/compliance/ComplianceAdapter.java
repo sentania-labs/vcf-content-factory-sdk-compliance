@@ -82,6 +82,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile OverridesStore.Snapshot cycleOverridesSnap;
 	private volatile ComplianceOverrides.Resolved cycleOverrides =
 			ComplianceOverrides.Resolved.EMPTY;
+	// Build 92: this cycle's profiles by name BEFORE the overrides file is
+	// applied (empty when the file has nothing), so a skipped control in
+	// force on an object can be found and pushed every cycle.
+	private volatile java.util.Map<String, BenchmarkProfile> cycleUnadjusted =
+			java.util.Collections.emptyMap();
 	// Build 90 (review N1): Skip and Override entries in force for this
 	// instance's own profile set this cycle (Summary|overrides_skipped and
 	// overrides_overridden), not every entry accepted against any bundled
@@ -493,6 +498,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		// Forget applied-profile history for objects no longer in inventory.
 		memory.retain(seen);
+		if (cs.skipPushedKeys > 0) {
+			// Build 92: the skipped controls are pushed every cycle, so the
+			// symptom on each key sees its cancel cycles.
+			logInfo("Overrides file '" + config.overridesFile + "': "
+					+ cs.skipPushedKeys + " skipped control key(s) set to -1 "
+					+ "(not evaluated) on " + cs.skipPushedObjects
+					+ " object(s) this cycle");
+		}
 		cleanStaleControls(cs);
 		if (cycleReasons.total() > 0) {
 			// Build 74: why controls were unreadable, once per cycle (the
@@ -596,6 +609,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			base = BenchmarkSelector.fixed(profile);
 		}
 		if (parsed == null || parsed.isEmpty()) {
+			cycleUnadjusted = java.util.Collections.emptyMap();
 			cycleOverrides = ComplianceOverrides.Resolved.EMPTY;
 			cycleSkippedInForce = 0;
 			cycleOverriddenInForce = 0;
@@ -613,6 +627,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		ComplianceOverrides.Resolved r =
 				ComplianceOverrides.resolve(parsed, known.values());
 		cycleOverrides = r;
+		cycleUnadjusted = java.util.Collections.unmodifiableMap(known);
 		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> rawPins =
 				r.pins(bundled);
 		cycleSkippedInForce =
@@ -998,9 +1013,45 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ prev + "' -> '" + d.profileName + "'");
 		}
 		if (resourceId != null && stitcher != null) {
+			java.util.Set<String> skippedNow =
+					pushSkippedInForce(kind, d, resourceId, cs);
+			java.util.Set<String> live = pushed;
+			if (!skippedNow.isEmpty()) {
+				live = new java.util.TreeSet<>(pushed);
+				live.addAll(skippedNow);
+			}
 			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
-					d.profileName, pushed));
+					d.profileName, live));
 		}
+	}
+
+	/**
+	 * Build 92 (adapter issue #41): push Compliant = -1 and the skip Actual
+	 * text for every skipped control in force on this object, EVERY cycle
+	 * while the Skip is in the file ({@link ComplianceDecisions#skipPush}).
+	 * One -1 sample was not enough: the per-control symptom needs its cancel
+	 * cycles of fresh non-triggering samples before the alert cancels.
+	 * Removing the Skip stops this push and the control is scored again on
+	 * the same cycle. Returns the ids pushed, so the end-of-cycle cleanup
+	 * treats them as live.
+	 */
+	private java.util.Set<String> pushSkippedInForce(
+			BenchmarkSelector.Kind kind, ComplianceDecisions.Decision d,
+			String resourceId, CycleStats cs) {
+		ComplianceOverrides.Resolved r = cycleOverrides;
+		if (d.profile == null || r.skipped.isEmpty()) {
+			return java.util.Collections.emptySet();
+		}
+		ComplianceDecisions.SkipPush sp = ComplianceDecisions.skipPush(kind,
+				cycleUnadjusted.get(d.profileName), r.skipped,
+				config.overridesFile);
+		if (sp.isEmpty()) return sp.ids;
+		long ts = System.currentTimeMillis();
+		stitcher.pushProperties(resourceId, sp.props, ts);
+		stitcher.pushStats(resourceId, sp.stats, ts);
+		cs.skipPushedObjects++;
+		cs.skipPushedKeys += sp.ids.size();
+		return sp.ids;
 	}
 
 	/** One object queued for end-of-cycle cleanup. */
@@ -2092,6 +2143,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
 		int cleanupQueried; int cleanupRequests; int cleanupValues;
+		int skipPushedObjects; int skipPushedKeys;
 	}
 
 	// -----------------------------------------------------------------------

@@ -41,9 +41,11 @@ import org.w3c.dom.NodeList;
  * </pre>
  *
  * <ul>
- *   <li>{@code Skip}: the control is not evaluated and not pushed; its key
- *       goes through the stale-key cleanup (0 or 1 set to -1, actual
- *       "(skipped by override file &lt;name&gt;)").</li>
+ *   <li>{@code Skip}: the control is not evaluated. Build 92: while the
+ *       Skip is in force its key is pushed every cycle as -1 with actual
+ *       "(skipped by override file &lt;name&gt;)"
+ *       ({@link ComplianceDecisions#skipPush}), so an open alert sees its
+ *       cancel cycles.</li>
  *   <li>{@code Override}: the control's expected value in every loaded
  *       profile, checked against the control's value_type and comparison
  *       mode ({@link #checkValue}). A value that fails the check in any

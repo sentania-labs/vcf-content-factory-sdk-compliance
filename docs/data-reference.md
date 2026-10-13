@@ -87,8 +87,8 @@ VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-complian
 Build 90: for a control whose expected value comes from the overrides
 file, Expected reads `<value> (site override)` and a read Actual reads
 `<actual>, expected <value> (site override)`. A skipped control's
-Actual reads `(skipped by override file <name>)` once its 0 or 1 has
-been set to -1.
+Actual reads `(skipped by override file <name>)` and its Compliant reads
+-1, pushed every cycle while the Skip is in force (build 92).
 
 Actual values you can see:
 

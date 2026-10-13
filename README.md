@@ -177,6 +177,10 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   an older agentless security appliance) fails this control and its score
   drops; if that is intended, add `<Skip control="vm.dvfilter"/>` to your
   [overrides file](docs/overrides.md#skip-turn-a-control-off).
+- **A Skip now clears the control's open alert.** (Build 92.) A skipped
+  control's metric is set to -1 on every collection while the Skip is in
+  the file, so its alert cancels after three collections. In build 90
+  and 91 it was set once and the alert stayed open.
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored

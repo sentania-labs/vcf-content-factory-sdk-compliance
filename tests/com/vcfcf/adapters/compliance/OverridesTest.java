@@ -39,6 +39,7 @@ public final class OverridesTest {
 		inForceCounts(all);
 		siteOverrideProps();
 		skipRoutesToStaleKeyPath(all);
+		skipPushedEveryCycle(all);
 		pinPrecedence(all);
 		store();
 		fetchFailureAlert();
@@ -532,6 +533,97 @@ public final class OverridesTest {
 				"Compliant -1 (not evaluated)");
 	}
 
+	/**
+	 * Build 92 (adapter issue #41): a Skip in force is pushed -1 with the
+	 * skip Actual text on EVERY cycle, not once, so the symptom on the key
+	 * sees its cancel cycles and the open alert cancels. Build 91 routed it
+	 * through the read-back cleanup only, which pushed -1 on the first cycle
+	 * and nothing after (the key already read -1). Removing the Skip resumes
+	 * scoring on the next cycle.
+	 */
+	static void skipPushedEveryCycle(Map<String, BenchmarkProfile> all)
+			throws Exception {
+		BenchmarkSelector.Kind HOST = BenchmarkSelector.Kind.HOST;
+		String skipId = "esx.account-lockout-duration";
+		String file = "compliance_overrides_wld01";
+		String key = ComplianceDecisions.compliantKey(skipId);
+		BenchmarkProfile guide = all.get("VMware_SCG_9.0");
+		ComplianceOverrides.Resolved r = ComplianceOverrides.resolve(parse(
+				"<Skip control=\"" + skipId + "\"/>"), all.values());
+		BenchmarkProfile current = r.adjust(guide);
+		Set<String> scored = new TreeSet<>();
+		for (BenchmarkProfile.Control c : current.hostControls()) {
+			if (BenchmarkSelector.evaluatedFor(HOST, c)) scored.add(c.controlId);
+		}
+		T.check(!scored.contains(skipId), "fixture: skipped control not scored");
+
+		// What VCF Ops holds on the key before each cycle: the open alert's
+		// 0 before the first, then whatever the pack pushed last.
+		Double held = 0.0;
+		for (int cycle = 1; cycle <= 3; cycle++) {
+			ComplianceDecisions.SkipPush sp = ComplianceDecisions.skipPush(
+					HOST, guide, r.skipped, file);
+			T.eq(new TreeSet<>(Arrays.asList(skipId)), sp.ids,
+					"cycle " + cycle + ": the skipped control is pushed");
+			T.eq(-1.0, sp.stats.get(key), "cycle " + cycle + ": Compliant -1");
+			T.eq("(skipped by override file " + file + ")",
+					sp.props.get(ComplianceDecisions.K + skipId + "|Actual"),
+					"cycle " + cycle + ": skip Actual text");
+			// The cleanup sees the pushed key as live: no read-back, no
+			// second push of the same key.
+			Set<String> live = new TreeSet<>(scored);
+			live.addAll(sp.ids);
+			T.check(!ComplianceDecisions.cleanupPlan(HOST, current, live,
+					all.values(), r.skipped).queryIds().contains(skipId),
+					"cycle " + cycle + ": cleanup leaves the pushed key alone");
+			// The build 91 path, for contrast: the read-back cleanup pushed
+			// only while the key still read 0 or 1, so cycles 2 and 3 sent
+			// nothing and the alert never saw its cancel cycles.
+			ComplianceDecisions.CleanupPlan old = ComplianceDecisions
+					.cleanupPlan(HOST, current, scored, all.values(), r.skipped);
+			Map<String, Double> latest = new HashMap<>();
+			latest.put(skipId, held);
+			T.eq(cycle == 1, ComplianceDecisions.staleControls(old, latest)
+					.contains(skipId), "cycle " + cycle
+							+ ": build 91 pushed on the first cycle only");
+			held = sp.stats.get(key);
+		}
+
+		// Not in force on this object: nothing pushed.
+		String old67 = "esx.account-lockout";   // 6.7 / 7.0 / 8.0, not 9.0
+		ComplianceOverrides.Resolved r67 = ComplianceOverrides.resolve(parse(
+				"<Skip control=\"" + old67 + "\"/>"), all.values());
+		T.check(ComplianceDecisions.skipPush(HOST, guide, r67.skipped, file)
+				.isEmpty(), "a skip only another SCG version carries");
+		T.eq(new TreeSet<>(Arrays.asList(old67)), ComplianceDecisions.skipPush(
+				HOST, all.get("VMware_SCG_8.0"), r67.skipped, file).ids,
+				"and it is in force on an 8.0 host");
+		T.check(ComplianceDecisions.skipPush(BenchmarkSelector.Kind.VM, guide,
+				r.skipped, file).isEmpty(), "a host control on a VM");
+		T.check(ComplianceDecisions.skipPush(HOST, null, r.skipped, file)
+				.isEmpty(), "no benchmark");
+
+		// Cycle 4: the Skip is removed. Nothing is pushed as skipped, the
+		// control is back in the benchmark, and a real read scores it.
+		ComplianceOverrides.Resolved none = ComplianceOverrides.resolve(
+				parse(""), all.values());
+		T.check(ComplianceDecisions.skipPush(HOST, guide, none.skipped, file)
+				.isEmpty(), "Skip removed: no -1 push");
+		BenchmarkProfile back = none.adjust(guide);
+		BenchmarkProfile.Control c = find(back, skipId);
+		T.check(c != null && BenchmarkSelector.evaluatedFor(HOST, c),
+				"Skip removed: the control is scored again");
+		List<BenchmarkProfile.Control> one = Collections.singletonList(c);
+		T.eq(1.0, ComplianceDecisions.complianceStats(ControlEvaluator
+				.evaluateControls(one, Collections.singletonMap(c.parameter,
+						c.expectedValue), "h")).get(key),
+				"Skip removed: a compliant host pushes 1");
+		T.eq(0.0, ComplianceDecisions.complianceStats(ControlEvaluator
+				.evaluateControls(one, Collections.singletonMap(c.parameter,
+						"1"), "h")).get(key),
+				"Skip removed: a non-compliant host pushes 0");
+	}
+
 	/** A per-kind pin beats Auto (by version) and the fixed choice. */
 	static void pinPrecedence(Map<String, BenchmarkProfile> all)
 			throws Exception {
@@ -845,6 +937,29 @@ public final class OverridesTest {
 						+ "bundled, cycleOverrides.skipped);",
 				"ComplianceDecisions.orphanProps(stale, p.profileName, "
 						+ "cycleOverrides.skipped, config.overridesFile)");
+
+		// Build 92 (issue #41): every object with a benchmark pushes its
+		// skipped controls in force, every cycle, before it is queued for
+		// cleanup, and the cleanup treats them as live.
+		inOrder(body(ca, "private void afterPush("), "afterPush",
+				"pushSkippedInForce(kind, d, resourceId, cs);",
+				"live.addAll(skippedNow);",
+				"new PendingCleanup(kind, resourceId, d.profile, "
+						+ "d.profileName, live)");
+		String skipPush = body(ca, "private java.util.Set<String> "
+				+ "pushSkippedInForce(");
+		inOrder(skipPush, "pushSkippedInForce",
+				"ComplianceDecisions.skipPush(kind, "
+						+ "cycleUnadjusted.get(d.profileName), r.skipped, "
+						+ "config.overridesFile);",
+				"stitcher.pushProperties(resourceId, sp.props, ts);",
+				"stitcher.pushStats(resourceId, sp.stats, ts);");
+		T.check(!skipPush.contains("latest"),
+				"the skip push never depends on a read-back");
+		inOrder(body(ca, "private BenchmarkSelector buildSelector("),
+				"buildSelector unadjusted",
+				"cycleUnadjusted = java.util.Collections.emptyMap();",
+				"cycleUnadjusted = java.util.Collections.unmodifiableMap(known);");
 
 		// The push marks site-overridden controls.
 		inOrder(body(ca, "private void pushComplianceViaClient("),

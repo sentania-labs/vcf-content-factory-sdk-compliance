@@ -36,9 +36,9 @@
 
   <!--
   SKIP: turn a control off.
-  No metric, no alert, not in the score. Its existing metric is set to
-  not evaluated (-1), so an open alert clears, and its Actual property
-  reads "(skipped by override file <your file name>)".
+  No alert, not in the score. Every collection sets its metric to not
+  evaluated (-1), so an open alert clears within three collections, and
+  its Actual property reads "(skipped by override file <your file name>)".
 
   <Skip control="esx.account-lockout-max-attempts"/>
   -->

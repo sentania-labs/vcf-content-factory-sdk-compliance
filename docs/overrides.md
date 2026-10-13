@@ -12,8 +12,8 @@ working underneath. The file only adjusts them.
 
 You can:
 
-- **Turn a control off (Skip).** It gets no metric, raises no alert, and
-  no longer counts in the score.
+- **Turn a control off (Skip).** It is not checked, raises no alert, and
+  no longer counts in the score. Its metric reads -1 (not evaluated).
 - **Use your own expected value (Override).** For example, allow 5
   failed logon attempts instead of the guide's value.
 - **Pin the guide version for one object kind (Profile).** For example,
@@ -286,22 +286,22 @@ group of vCenters and point each account at its group's copy.
 
 ## What happens to a skipped control
 
-On the next collection:
+On every collection while the Skip is in the file, on each object whose
+guide version checks the control:
 
 - Its metric `VCF-CF Compliance|<control id>|Compliant` is set to -1
-  (not evaluated) if it was 0 or 1.
+  (not evaluated).
 - Its Actual property reads `(skipped by override file <your file>)`.
-- An open alert for it stops matching. It clears after three
-  collections (about 15 minutes at the default interval), the usual
-  cancel time for a control alert.
 - It no longer counts in the object's score.
 
-A control that already read -1 is left as it is. The pack never creates
-a metric the object did not have. The alert definition stays installed.
+Because the -1 is sent every collection (since build 92), an open alert
+for the control sees the samples it needs to cancel and clears after
+three collections (about 15 minutes at the default interval), the usual
+cancel time for a control alert. The alert definition stays installed.
 It belongs to the pack, not to your file. It has nothing to fire on.
 
 Remove the Skip entry to turn the control back on. It is checked again
-on the next collection.
+on the next collection, and its metric reads 1 or 0 again.
 
 ## Alert-only changes: use the policy
 

@@ -645,6 +645,60 @@ public final class ComplianceDecisions {
 		return props;
 	}
 
+	// ----- Skip in force, pushed every cycle (build 92) --------------------
+
+	/**
+	 * Build 92 (adapter issue #41): what to push for one object's skipped
+	 * controls this cycle. Build 90/91 sent a skipped control through the
+	 * stale-key cleanup, which reads the latest value back and pushes -1
+	 * only over a 0 or a 1: the first cycle pushed -1 once, every later
+	 * cycle read -1 and pushed nothing, and a symptom on the key never saw
+	 * its cancel cycles, so the open alert stayed active. A Skip in force is
+	 * now pushed every cycle, -1 and the skip Actual text, with no read-back,
+	 * exactly like a scored control.
+	 *
+	 * <p>The ids are the skipped controls the object's benchmark evaluates
+	 * for its kind, taken from the benchmark BEFORE the overrides file was
+	 * applied (the Skip removes the control from the adjusted one). A Skip
+	 * of a control only another SCG version carries is not in force on this
+	 * object and pushes nothing here.
+	 */
+	public static final class SkipPush {
+		public final Set<String> ids;
+		public final Map<String, Double> stats;
+		public final Map<String, String> props;
+
+		SkipPush(Set<String> ids, String overridesFile) {
+			this.ids = java.util.Collections.unmodifiableSet(ids);
+			this.stats = java.util.Collections.unmodifiableMap(
+					orphanStats(ids));
+			this.props = java.util.Collections.unmodifiableMap(
+					orphanProps(ids, null, ids, overridesFile));
+		}
+
+		public boolean isEmpty() {
+			return ids.isEmpty();
+		}
+	}
+
+	/**
+	 * @param kind          the object's kind
+	 * @param unadjusted    the object's benchmark before the overrides file
+	 *                      (null: no benchmark, nothing to push)
+	 * @param skipped       the resolved Skip ids for this cycle
+	 * @param overridesFile the instance's Overrides file name, for the text
+	 */
+	public static SkipPush skipPush(BenchmarkSelector.Kind kind,
+			BenchmarkProfile unadjusted, Set<String> skipped,
+			String overridesFile) {
+		Set<String> ids = new TreeSet<>();
+		if (unadjusted != null && skipped != null && !skipped.isEmpty()) {
+			addEvaluated(ids, kind, unadjusted);
+			ids.retainAll(skipped);
+		}
+		return new SkipPush(ids, overridesFile);
+	}
+
 	// ----- overrides file status (build 90) --------------------------------
 
 	/** Build 90: the overrides keys, under {@code Summary|}. */
