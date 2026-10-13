@@ -16,16 +16,20 @@ inside see [overview.md](overview.md).
 | Read vCenter appliance settings | No | false | Advanced Settings; a true/false choice. Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 
 **No profile setting (build 93).** The Compliance Profile setting is
-removed and every instance runs Auto (by version). An instance that
-stored a fixed SCG (for example `VMware_SCG_9.1`) or `Custom` logs one
-INFO line each time it is configured, naming the stored value, and runs
-Auto. To score every object of an instance against one SCG, use the
-overrides file's instance-wide pin, `<Profile version="SCG 9.1"/>`.
+removed and every instance runs Auto (by version), including one that
+stored a fixed SCG (for example `VMware_SCG_9.1`), `Custom`, or nothing
+(the pre-version-aware SCG 8.0 default). If the platform still hands
+the adapter the stored value, it logs one INFO line each time it is
+configured, naming that value; VCF Operations may drop it on upgrade,
+so record it first (installing.md, Upgrading). To score every object of
+an instance against one SCG, use the overrides file's instance-wide
+pin, `<Profile version="SCG 9.1"/>`.
 
 **No Allow Insecure SSL (build 93).** The vCenter certificate is always
-validated; an untrusted one is accepted in the Validate Connection
-dialog. An instance that stored `allowInsecure=true` logs one WARN each
-time it is configured. See installing.md, TLS section.
+validated, chain and name; an untrusted one is accepted in the Validate
+Connection dialog. If the platform still hands the adapter a stored
+`allowInsecure=true`, it logs one WARN each time it is configured. See
+installing.md, TLS section and Upgrading.
 
 ## Benchmark selection
 
@@ -139,7 +143,9 @@ VCF-CF Compliance|Rollup|<K>|unmatched        not for All (build 88): objects vC
 VCF-CF Compliance|Rollup|VM|skipped_pods      vSphere Pod VMs skipped (build 88); 0 when none
 VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
                                                (vCenter's, or VCF Ops' resource list for a
-                                               kind) failed and rollup keys were held back
+                                               kind) failed and rollup keys were held back,
+                                               or (build 93) the cycle could not reach
+                                               vCenter at all (the only key pushed then)
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
 ```

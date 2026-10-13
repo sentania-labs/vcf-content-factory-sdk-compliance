@@ -168,8 +168,13 @@ Auto (by version).
 To keep an account that used a fixed Compliance Profile before build 93
 on that guide, add the instance-wide pin, for example
 `<Profile version="SCG 9.0"/>` for an account that was set to
-`VMware_SCG_9.0`. The upgrade log line for the account names the entry
-to add.
+`VMware_SCG_9.0`, and `<Profile version="SCG 8.0"/>` for an account
+whose profile was blank (it was scored against SCG 8.0). Take the value
+from the record you made before upgrading
+([installing.md, Upgrading](installing.md#upgrading)): VCF Operations
+may drop the removed setting's stored value on upgrade. If the platform
+still hands the adapter the value, the upgrade log line for the account
+names the entry to add.
 
 Versions: `SCG 6.7`, `SCG 7.0`, `SCG 8.0`, `SCG 9.0`, `SCG 9.1`.
 

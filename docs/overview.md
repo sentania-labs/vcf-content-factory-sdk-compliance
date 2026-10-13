@@ -263,7 +263,13 @@ collection continues; compliance is never failed over a stitch error.
   alert fires. To see which listing failed, look in the adapter log for
   "Inventory listing failed this cycle for" and the "Failed to enumerate"
   warning just before it; then check the collection account's inventory
-  read permissions on that vCenter.
+  read permissions on that vCenter. Since build 93 a cycle that cannot
+  reach vCenter at all (connection, login or certificate failure) also
+  pushes `Rollup|incomplete` = 1 on the vCenter object, and nothing
+  else, before the cycle fails; the adapter log says "not reached this
+  cycle". The vCenter object is found without vCenter only by the id an
+  earlier cycle since the last account edit resolved, or by a VCURL
+  equal to the entered host.
 
 - **Version unreadable is not "no benchmark".** If the adapter cannot read
   the version that governs an object's SCG, it scores the object against
@@ -312,8 +318,11 @@ collection continues; compliance is never failed over a stitch error.
   (the framework's `certificateCheckUrls` hook), so Validate Connection
   shows the Review and Accept Certificate dialog for an untrusted
   certificate, and the accepted certificate is stored on the instance
-  and trusted on every cycle. The name must still match: vCenter is
-  entered by the name on its certificate (see `installing.md`).
+  and trusted on every cycle. The platform trust manager checks the
+  chain only, so the adapter also checks the certificate name itself on
+  every connection to vCenter (REST, appliance API, SOAP and esxcli,
+  Test Connection included): vCenter must be entered by the name on its
+  certificate (see `installing.md`).
 
 - **Fresh-instance discovery works on VCF Ops 9.0.2.** The adapter
   enumerates its synthetic world on the collect path

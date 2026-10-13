@@ -180,11 +180,15 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   SCG for its own version. To pin a version for the whole account or one
   object kind, use the [overrides file](docs/overrides.md#profile-pin-the-guide-version).
   Allow Insecure SSL is gone too: the vCenter certificate is always
-  validated, and an untrusted one is accepted in the Validate Connection
-  dialog. An account upgraded with a fixed profile or with Allow
-  Insecure SSL on logs one line saying what changed; one that relied on
-  Allow Insecure SSL may need its certificate accepted (see
-  [installing.md](docs/installing.md#tls-to-vcenter-certificate-trust)).
+  validated, chain and name, and an untrusted one is accepted in the
+  Validate Connection dialog. **Before upgrading, record each account's
+  Compliance Profile and Allow Insecure SSL values**: VCF Operations may
+  drop them on upgrade, and you need them to pin the old SCG in the
+  overrides file and to know which accounts need their certificate
+  accepted right after the upgrade. An account that names vCenter by an
+  IP or a name not on its certificate stops collecting until you enter
+  the certificate's name. Steps:
+  [installing.md, Upgrading](docs/installing.md#upgrading).
 - **VMs that use a dvfilter on purpose now fail `vm.dvfilter`.** (Build
   90.) The pack now finds `ethernet*.filter*.name` settings, so a VM with a
   dvfilter attached (for example an NSX for vSphere distributed firewall or
