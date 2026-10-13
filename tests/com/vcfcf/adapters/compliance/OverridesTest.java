@@ -1079,6 +1079,28 @@ public final class OverridesTest {
 			T.check(!b.contains("stitcher.push"), sig
 					+ ": only the merged push");
 		}
+		// Review R-W1: no second pair of calls can come back elsewhere.
+		// afterPush makes no Suite API call, nothing outside pushObject
+		// reads the skip maps, and the direct push counts are pinned at
+		// today's sites (properties: overrides status, version
+		// unreadable, cleanup, no benchmark; stats: those four plus the
+		// rollup), so a new helper shows up as a changed count.
+		T.check(!body(ca, "private void afterPush(").contains("stitcher."),
+				"afterPush makes no Suite API call of its own");
+		T.check(!ca.contains("skip.props") && !ca.contains("skip.stats"),
+				"the skip maps are read only inside pushObject");
+		String code = stripComments(ca);
+		T.eq(4, count(code, "stitcher.pushProperties("),
+				"direct stitcher.pushProperties calls in ComplianceAdapter");
+		T.eq(5, count(code, "stitcher.pushStats("),
+				"direct stitcher.pushStats calls in ComplianceAdapter");
+		// Both branches carry the skip: on the profile-name-only path
+		// (non-vSAN cluster) a dropped skip means no -1 is ever pushed
+		// while the cleanup still treats the ids as live.
+		inOrder(body(ca, "private void pushOrProfileName("),
+				"pushOrProfileName",
+				"pushComplianceViaClient(resourceId, cr, profileName, skip);",
+				"pushProfileNamePropertyOnly(resourceId, profileName, skip);");
 		for (String[] site : new String[][] {
 				{"HOST", "pushComplianceViaClient(resourceId, cr, "
 						+ "d.profileName, skip);"},
@@ -1133,6 +1155,22 @@ public final class OverridesTest {
 			T.check(at >= 0, where + ": expected, in order: " + f);
 			from = at + f.length();
 		}
+	}
+
+	/** Occurrences of {@code needle} in {@code src}. */
+	static int count(String src, String needle) {
+		int n = 0;
+		for (int at = src.indexOf(needle); at >= 0;
+				at = src.indexOf(needle, at + needle.length())) {
+			n++;
+		}
+		return n;
+	}
+
+	/** {@code src} with block and line comments removed. */
+	static String stripComments(String src) {
+		return src.replaceAll("(?s)/\\*.*?\\*/", "")
+				.replaceAll("//[^\\n]*", "");
 	}
 
 	static String readSrc(String path) {
