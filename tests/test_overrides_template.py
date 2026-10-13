@@ -61,9 +61,14 @@ class TemplateTest(unittest.TestCase):
     def test_password_attempts_example(self):
         self.assertIn('<Override control="esx.account-lockout-max-attempts" '
                       'expected="5"/>', self.text)
-        for kind in ("Skip control=", "Override control=", "Profile version=",
-                     "Profile kind="):
+        for kind in ("Skip control=", "Override control=", "Profile kind="):
             self.assertIn(kind, self.text)
+
+    def test_no_instance_wide_profile_example(self):
+        # Build 92: a Profile without kind is rejected, so the template
+        # must not show one.
+        for entry in re.findall(r"<Profile\b[^>]*>", self.text):
+            self.assertIn("kind=", entry, entry)
 
     def test_no_em_dash(self):
         self.assertNotIn("\u2014", self.text)

@@ -93,9 +93,9 @@ public final class BenchmarkSelector {
 
 	/**
 	 * Build 90: this selector with the overrides file's Profile pins
-	 * applied. {@code pinsByKind} holds one profile per pinned kind (the
-	 * caller has already resolved an instance-wide pin into every kind it
-	 * covers, and let a per-kind pin win over it). A pinned kind is scored
+	 * applied. {@code pinsByKind} holds one profile per pinned kind (build
+	 * 92: pins are per kind only; the instance setting owns the
+	 * instance-wide choice). A pinned kind is scored
 	 * against its pin whatever its version, like a fixed profile; every
 	 * other kind keeps this selector's mode. {@link #isAuto()} is
 	 * unchanged.

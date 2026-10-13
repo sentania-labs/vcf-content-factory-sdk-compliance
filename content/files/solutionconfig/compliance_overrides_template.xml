@@ -75,15 +75,14 @@
   -->
 
   <!--
-  PROFILE: pin the guide version instead of Auto (by version).
-  Without kind, the pin applies to every object of this instance. With
-  kind, it applies to that object kind only, and wins over a pin without
-  kind.
+  PROFILE: pin the guide version for one object kind instead of Auto
+  (by version) or the account's fixed guide. kind is required. To pin
+  every object to one guide, use the account's Compliance Profile
+  setting instead: a Profile without kind is rejected.
   Versions: SCG 6.7, SCG 7.0, SCG 8.0, SCG 9.0, SCG 9.1
   Kinds: HostSystem, VirtualMachine, vCenter, ClusterComputeResource,
          DistributedVirtualSwitch, DistributedVirtualPortgroup
 
-  <Profile version="SCG 9.0"/>
   <Profile kind="VirtualMachine" version="SCG 8.0"/>
   -->
 </ComplianceOverrides>

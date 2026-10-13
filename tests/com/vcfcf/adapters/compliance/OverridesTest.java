@@ -58,20 +58,16 @@ public final class OverridesTest {
 				"<!-- a comment is ignored -->"
 				+ "<Skip control=\"esx.a\"/>"
 				+ "<Override control=\"esx.b\" expected=\" 5 \"/>"
-				+ "<Profile version=\"SCG 9.0\"/>"
 				+ "<Profile kind=\"VirtualMachine\" version=\"SCG 8.0\"/>");
 		T.eq(0, p.rejected.size(), "no rejections: " + p.rejected);
-		T.eq(4, p.entries.size(), "four entries");
+		T.eq(3, p.entries.size(), "three entries");
 		ComplianceOverrides.Entry skip = p.entries.get(0);
 		T.eq(ComplianceOverrides.Type.SKIP, skip.type, "skip type");
 		T.eq("esx.a", skip.control, "skip control");
 		ComplianceOverrides.Entry ovr = p.entries.get(1);
 		T.eq(ComplianceOverrides.Type.OVERRIDE, ovr.type, "override type");
 		T.eq("5", ovr.expected, "override value trimmed");
-		ComplianceOverrides.Entry inst = p.entries.get(2);
-		T.eq("VMware_SCG_9.0", inst.profileName, "instance pin");
-		T.eq(null, inst.kind, "instance pin has no kind");
-		ComplianceOverrides.Entry vm = p.entries.get(3);
+		ComplianceOverrides.Entry vm = p.entries.get(2);
 		T.eq("VMware_SCG_8.0", vm.profileName, "VM pin");
 		T.eq(BenchmarkSelector.Kind.VM, vm.kind, "VM pin kind");
 		T.eq("<Skip control=\"esx.a\"/>", skip.text, "entry text for logs");
@@ -108,17 +104,20 @@ public final class OverridesTest {
 				+ "<Skip contorl=\"esx.a\"/>"                      // unknown attribute
 				+ "<Skip/>"                                        // missing control
 				+ "<Override control=\"esx.b\"/>"                  // missing expected
-				+ "<Profile/>"                                     // missing version
-				+ "<Profile version=\"SCG 10.0\"/>"                // unknown version
+				+ "<Profile kind=\"vm\"/>"                         // missing version
+				+ "<Profile kind=\"vm\" version=\"SCG 10.0\"/>"    // unknown version
 				+ "<Profile kind=\"Datastore\" version=\"SCG 9.0\"/>" // unknown kind
 				+ "<Skip control=\"esx.c\"/><Skip control=\"esx.c\"/>"   // dup
 				+ "<Override control=\"esx.d\" expected=\"1\"/>"
 				+ "<Override control=\"esx.d\" expected=\"2\"/>"   // dup
-				+ "<Profile version=\"SCG 9.0\"/><Profile version=\"9.1\"/>" // dup
+				+ "<Profile version=\"SCG 9.0\"/>"                 // instance-wide
+				+ "<Profile/>"                                     // instance-wide
 				+ "<Profile kind=\"vm\" version=\"8.0\"/>"
 				+ "<Profile kind=\"VirtualMachine\" version=\"9.0\"/>"); // dup
-		T.eq(11, p.rejected.size(), "eleven rejected: " + p.rejected);
-		T.eq(4, p.entries.size(), "four accepted (first of each duplicate)");
+		T.eq(12, p.rejected.size(), "twelve rejected: " + p.rejected);
+		T.eq(3, p.entries.size(), "three accepted (first of each duplicate)");
+		T.check(p.rejected.get(4).contains("missing version"),
+				"missing version message: " + p.rejected.get(4));
 		T.check(p.rejected.get(0).contains("unknown entry type"),
 				"unknown element message");
 		T.check(p.rejected.get(1).contains("unknown attribute 'contorl'"),
@@ -129,6 +128,28 @@ public final class OverridesTest {
 				"unknown version lists the valid names: " + p.rejected.get(5));
 		T.check(p.rejected.get(6).contains("unknown kind 'Datastore'"),
 				"unknown kind message");
+		// Build 92: a Profile without kind is rejected with the design's
+		// wording; the instance setting owns the instance-wide choice.
+		T.eq("<Profile version=\"SCG 9.0\"/>: instance-wide pin: use the "
+				+ "Compliance Profile setting", p.rejected.get(9),
+				"instance-wide pin rejected");
+		T.eq("<Profile/>: instance-wide pin: use the Compliance Profile "
+				+ "setting", p.rejected.get(10), "bare Profile rejected");
+		for (ComplianceOverrides.Entry e : p.entries) {
+			if (e.type == ComplianceOverrides.Type.PROFILE) {
+				T.check(e.kind != null, "every accepted pin has a kind");
+			}
+		}
+		// Rejected, it pins nothing and the rest of the file applies.
+		ComplianceOverrides.Resolved inst = ComplianceOverrides.resolve(
+				parse("<Profile version=\"SCG 9.0\"/><Skip control=\""
+						+ LOCKOUT + "\"/>"),
+				new BenchmarkLoader().loadAll(".").values());
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			T.eq(null, inst.pinFor(k), "no pin for " + k);
+		}
+		T.eq(1, inst.rejected.size(), "reported once: " + inst.rejected);
+		T.check(inst.skipped.contains(LOCKOUT), "the Skip still applies");
 		ComplianceOverrides.Entry firstOverride = null;
 		for (ComplianceOverrides.Entry e : p.entries) {
 			if (e.type == ComplianceOverrides.Type.OVERRIDE) firstOverride = e;
@@ -299,7 +320,8 @@ public final class OverridesTest {
 		}
 		// Nothing to change: the same map comes back.
 		ComplianceOverrides.Resolved pinsOnly = ComplianceOverrides.resolve(
-				parse("<Profile version=\"SCG 9.0\"/>"), all.values());
+				parse("<Profile kind=\"HostSystem\" version=\"SCG 9.0\"/>"),
+				all.values());
 		T.check(pinsOnly.adjust(all) == all, "pins only: profiles untouched");
 		T.check(ComplianceOverrides.Resolved.EMPTY.adjust(all) == all,
 				"empty: profiles untouched");
@@ -510,7 +532,7 @@ public final class OverridesTest {
 				"Compliant -1 (not evaluated)");
 	}
 
-	/** Per-kind pin beats the instance pin, which beats Auto (by version). */
+	/** A per-kind pin beats Auto (by version) and the fixed choice. */
 	static void pinPrecedence(Map<String, BenchmarkProfile> all)
 			throws Exception {
 		BenchmarkSelector auto = BenchmarkSelector.auto(all);
@@ -533,17 +555,18 @@ public final class OverridesTest {
 				"host on an unmapped version is still no benchmark");
 
 		ComplianceOverrides.Resolved both = ComplianceOverrides.resolve(parse(
-				"<Profile version=\"SCG 9.1\"/>"
+				"<Profile kind=\"HostSystem\" version=\"SCG 9.1\"/>"
 				+ "<Profile kind=\"vm\" version=\"SCG 8.0\"/>"), all.values());
-		T.eq("VMware_SCG_9.1", both.pinFor(HOST), "instance pin for hosts");
-		T.eq("VMware_SCG_8.0", both.pinFor(VM), "kind pin wins for VMs");
+		T.eq("VMware_SCG_9.1", both.pinFor(HOST), "host pin");
+		T.eq("VMware_SCG_8.0", both.pinFor(VM), "VM pin");
+		T.eq(null, both.pinFor(VC), "an unpinned kind has no pin");
 		BenchmarkSelector s2 = auto.withPins(both.pins(all));
 		T.eq("VMware_SCG_9.1", s2.select(HOST, "8.0.3").profileName,
-				"instance pin beats Auto");
-		T.eq("VMware_SCG_9.1", s2.select(VC, "7.0.3").profileName,
-				"instance pin covers the vCenter kind");
+				"host pin beats Auto");
+		T.eq("VMware_SCG_7.0", s2.select(VC, "7.0.3").profileName,
+				"the vCenter kind stays Auto");
 		T.eq("VMware_SCG_8.0", s2.select(VM, "9.1.0").profileName,
-				"kind pin beats the instance pin");
+				"VM pin beats Auto");
 		T.eq("SCG_8.0", s2.select(VM, "9.1.0").bucket, "pinned bucket");
 
 		// A pin replaces a fixed choice too.
@@ -557,8 +580,8 @@ public final class OverridesTest {
 		// Pins pick up the cycle's adjusted profiles (skips and overrides
 		// apply under a pin too).
 		ComplianceOverrides.Resolved withSkip = ComplianceOverrides.resolve(
-				parse("<Profile version=\"SCG 9.0\"/><Skip control=\""
-						+ LOCKOUT + "\"/>"), all.values());
+				parse("<Profile kind=\"HostSystem\" version=\"SCG 9.0\"/>"
+						+ "<Skip control=\"" + LOCKOUT + "\"/>"), all.values());
 		BenchmarkProfile pinned = withSkip.pins(withSkip.adjust(all)).get(HOST);
 		T.eq(null, find(pinned, LOCKOUT), "skip applies under a pin");
 
