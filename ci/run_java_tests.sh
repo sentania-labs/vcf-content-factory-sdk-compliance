@@ -16,11 +16,13 @@ for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
         ControlEvaluatorTest ComplianceRollupTest ComplianceDecisionsTest \
         MixedVersionSimulationTest Build74ReadPathsTest \
         Build76CleanupAbsentTest Build77FaultTest \
-        EnvironmentKeyContractTest EsxcliCycleCacheTest OverridesTest; do
+        EnvironmentKeyContractTest EsxcliCycleCacheTest OverridesTest \
+        CertificateTest; do
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 python3 tests/test_generate_compliance_alerts.py
 python3 tests/test_describe_symptom_sets.py
+python3 tests/test_describe_account_dialog.py
 python3 tests/test_dashboard_alert_lists.py
 python3 tests/test_dashboard_widget_types.py
 python3 tests/test_overrides_template.py

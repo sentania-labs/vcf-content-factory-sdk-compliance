@@ -287,8 +287,13 @@ public final class EsxcliCycleCacheTest {
 		String cycle = body(ca, "private void collectWorldCycle(");
 		String[] stmts = cycle.split(";");
 		T.check(stmts.length > 2, "cycle body has statements");
-		T.eq("vsphere.ensureConnected()", stmts[0].trim(),
+		T.eq("ensureVCenterConnected()", stmts[0].trim(),
 				"cycle body statement 1");
+		// Build 93: that helper is ensureConnected plus the certificate
+		// message.
+		T.check(body(ca, "private void ensureVCenterConnected()")
+				.startsWith("try { vsphere.ensureConnected();"),
+				"the helper connects first");
 		T.eq("vsphere.beginCycle()", stmts[1].trim(),
 				"cycle body statement 2 (before any read)");
 		T.check(body(ca, "private void collectWorld(")

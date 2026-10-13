@@ -604,7 +604,7 @@ final class EsxcliSoapClient {
 	 * session cookie and return the parsed response Document, or
 	 * {@code null} on a non-2xx response (a SOAP fault HTTP 500 included
 	 * — the caller maps any failure to command-failed). Reuses the
-	 * adapter's trust-all SSL factory.
+	 * vCenter client's SSL factory (the platform trust path).
 	 */
 	private Document post(String soapBody, String soapAction) throws Exception {
 		String envelope =

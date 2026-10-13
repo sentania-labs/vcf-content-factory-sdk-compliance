@@ -98,25 +98,14 @@ public final class VSphereClient {
 	// and so this object, can outlive any number of cycles.
 	private volatile EsxcliSoapClient esxcli;
 
-	private final boolean trustAll;       // true only on the explicit lab opt-out
-
-	public VSphereClient(String vcenterHost, String username, String password) {
-		// Standalone / test convenience: no platform context available, so fall
-		// back to the trust-all factory (lab posture). Production code paths use
-		// the SSLSocketFactory-injecting constructor below.
-		this(vcenterHost, username, password, trustAllSslFactory(), null, true);
-	}
-
 	/**
-	 * Task #12 — platform-trust-by-default constructor. The
-	 * {@link SSLSocketFactory} is chosen by the adapter
-	 * ({@code ComplianceAdapter.sslSocketFactoryFor}) in line with the framework
-	 * SSL convention: platform trust store by default,
-	 * {@code allowInsecure=true} as the documented per-adapter-config opt-out.
-	 * This client no longer hard-codes a trust-all factory — it honours whatever
-	 * trust decision the adapter made, and threads the same factory into the
-	 * per-cycle {@link EsxcliSoapClient} so the esxcli slice validates
-	 * identically.
+	 * The {@link SSLSocketFactory} is chosen by the adapter
+	 * ({@code ComplianceAdapter.sslSocketFactoryFor}): the platform trust
+	 * path, always (build 93 removed the Allow Insecure SSL opt-out, its
+	 * trust-all factory and its hostname-verification bypass). The same
+	 * factory is threaded into the per-cycle {@link EsxcliSoapClient} so the
+	 * esxcli slice validates identically, and the JDK's default hostname
+	 * verifier stays in place.
 	 *
 	 * @param sslFactory the socket factory to use for the HTTPS SOAP
 	 *                    connection. Must not be null on the production path.
@@ -124,18 +113,13 @@ public final class VSphereClient {
 	 *                   per RetrieveProperties, inventory counts). May be null
 	 *                   (standalone / test use), in which case the client logs
 	 *                   nothing.
-	 * @param trustAll   true only when the adapter selected the
-	 *                   {@code allowInsecure} opt-out; controls whether hostname
-	 *                   verification is bypassed. When false the JDK default
-	 *                   hostname verifier validates the certificate's hostname.
 	 */
 	public VSphereClient(String vcenterHost, String username, String password,
-			SSLSocketFactory sslFactory, Logger log, boolean trustAll) {
+			SSLSocketFactory sslFactory, Logger log) {
 		this.vcenterUrl = "https://" + vcenterHost + "/sdk";
 		this.username = username;
 		this.password = password;
 		this.sslFactory = sslFactory;
-		this.trustAll = trustAll;
 		this.log = log;
 	}
 
@@ -1423,13 +1407,8 @@ public final class VSphereClient {
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 		if (conn instanceof HttpsURLConnection && sslFactory != null) {
 			((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
-			// Task #12: only bypass hostname verification on the explicit
-			// allowInsecure lab opt-out. On the platform-trust path the JDK
-			// default verifier validates the certificate hostname — leaving the
-			// verifier untouched preserves that default.
-			if (trustAll) {
-				((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
-			}
+			// The JDK default hostname verifier stays in place: the
+			// certificate must carry the name vCenter is entered by.
 		}
 		conn.setRequestMethod("POST");
 		conn.setDoOutput(true);
@@ -1723,30 +1702,6 @@ public final class VSphereClient {
 			}
 		}
 		return sb.toString();
-	}
-
-	private static javax.net.ssl.SSLSocketFactory trustAllSslFactory() {
-		try {
-			javax.net.ssl.SSLContext ctx =
-					javax.net.ssl.SSLContext.getInstance("TLS");
-			ctx.init(null, new javax.net.ssl.TrustManager[]{
-					new javax.net.ssl.X509TrustManager() {
-						public void checkClientTrusted(
-								java.security.cert.X509Certificate[] c,
-								String a) {}
-						public void checkServerTrusted(
-								java.security.cert.X509Certificate[] c,
-								String a) {}
-						public java.security.cert.X509Certificate[]
-								getAcceptedIssuers() {
-							return new java.security.cert.X509Certificate[0];
-						}
-					}
-			}, null);
-			return ctx.getSocketFactory();
-		} catch (Exception e) {
-			throw new RuntimeException("SSL setup failed", e);
-		}
 	}
 
 	// -----------------------------------------------------------------------

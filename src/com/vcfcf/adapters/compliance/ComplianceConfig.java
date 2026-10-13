@@ -5,7 +5,6 @@ public final class ComplianceConfig {
 	public final String vcenterHost;
 	public final String username;
 	public final String password;
-	public final boolean allowInsecure;
 
 	/**
 	 * Build 93: the retired "Compliance Profile" setting. The identifier is
@@ -15,6 +14,14 @@ public final class ComplianceConfig {
 	 * {@link #retiredProfileNotice(String)} once per configure.
 	 */
 	public static final String RETIRED_PROFILE_KEY = "benchmark_profile";
+
+	/**
+	 * Build 93: the retired "Allow Insecure SSL" setting. The identifier is
+	 * gone from describe.xml and the adapter always validates the vCenter
+	 * certificate; a stored value is read only to log
+	 * {@link #retiredAllowInsecureNotice(String)} once per configure.
+	 */
+	public static final String RETIRED_ALLOW_INSECURE_KEY = "allowInsecure";
 
 	/**
 	 * HOLD (owner decision pending, build 74): the adapter-instance setting
@@ -45,21 +52,13 @@ public final class ComplianceConfig {
 	public final String overridesFile;
 
 	public ComplianceConfig(String vcenterHost, String username, String password,
-			String allowInsecure, String readApplianceSettings,
-			String overridesFile) {
+			String readApplianceSettings, String overridesFile) {
 		this.overridesFile = OverridesStore.normaliseName(overridesFile);
 		this.readApplianceSettings = parseReadAppliance(readApplianceSettings);
 		this.vcenterHost = (vcenterHost != null && !vcenterHost.isEmpty())
 				? vcenterHost : "localhost";
 		this.username = (username != null) ? username : "";
 		this.password = (password != null) ? password : "";
-		// Strict-by-default (build 50, review B1): only the explicit literal
-		// "true" opts into trust-all. null / blank / absent / any other value
-		// parses to false -> platform trust store validation. This makes the
-		// secure default actually engage for every existing and freshly-created
-		// instance (which have no allowInsecure field), matching describe.xml
-		// default="false" and the documented "platform trust by default".
-		this.allowInsecure = "true".equalsIgnoreCase(allowInsecure);
 	}
 
 	/** Build 92: the retired Custom choice, as an instance may still store it. */
@@ -91,6 +90,26 @@ public final class ComplianceConfig {
 		return "The Compliance Profile setting was removed in build 93. This "
 				+ "account stored '" + v + "'; it now runs "
 				+ BenchmarkSelector.AUTO + "." + pin;
+	}
+
+	/**
+	 * Build 93: the WARN line for an account that stored
+	 * {@code allowInsecure=true} (any case, surrounding whitespace ignored),
+	 * or null for any other stored value. Such an account validated nothing
+	 * before; it now validates strictly, so the line says how to accept the
+	 * certificate.
+	 */
+	static String retiredAllowInsecureNotice(String stored) {
+		if (stored == null || !"true".equalsIgnoreCase(stored.trim())) {
+			return null;
+		}
+		return "The Allow Insecure SSL setting was removed in build 93. This "
+				+ "account stored allowInsecure=true; the vCenter certificate "
+				+ "is now validated against the VCF Operations trust store. If "
+				+ "collection fails with a certificate error, open the account "
+				+ "and click Validate Connection to review and accept the "
+				+ "certificate, and enter vCenter by the name on its "
+				+ "certificate.";
 	}
 
 	/** "true" / "false" (case-insensitive); anything else takes the default. */

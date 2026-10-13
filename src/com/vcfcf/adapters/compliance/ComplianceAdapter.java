@@ -134,7 +134,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// below and the retired Custom rollup bucket.
 		String storedProfile = getIdentifier(resourceConfig,
 				ComplianceConfig.RETIRED_PROFILE_KEY);
-		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
+		// Build 93: Allow Insecure SSL is removed; read only for the WARN.
+		String storedAllowInsecure = getIdentifier(resourceConfig,
+				ComplianceConfig.RETIRED_ALLOW_INSECURE_KEY);
 		String readAppliance = getIdentifier(resourceConfig,
 				ComplianceConfig.READ_APPLIANCE_KEY);
 		String overridesFile = getIdentifier(resourceConfig,
@@ -144,7 +146,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				allowInsecure, readAppliance, overridesFile);
+				readAppliance, overridesFile);
 		boolean storedAsCustom = ComplianceConfig.isCustomName(storedProfile);
 		this.zeroCustomBucket = storedAsCustom;
 		String profileNotice =
@@ -153,16 +155,21 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			// Build 93: one INFO per configure naming the stored value.
 			logInfo(profileNotice);
 		}
+		String tlsNotice =
+				ComplianceConfig.retiredAllowInsecureNotice(storedAllowInsecure);
+		if (tlsNotice != null) {
+			// Build 93: one WARN per configure; validation is strict.
+			logWarn(tlsNotice);
+		}
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor(config));
+				sslContextFor());
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
-				sslSocketFactoryFor(config),
-				componentLogger(VSphereClient.class),
-				config.allowInsecure);
+				sslSocketFactoryFor(),
+				componentLogger(VSphereClient.class));
 
 		this.benchmarkLoader = new BenchmarkLoader();
 		// HOLD (owner decision pending): "Read vCenter appliance settings".
@@ -197,7 +204,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
 				+ " profile=" + BenchmarkSelector.AUTO
-				+ " allowInsecure=" + config.allowInsecure
 				+ " readApplianceSettings=" + config.readApplianceSettings
 				+ " overridesFile="
 				+ (config.overridesFile.isEmpty() ? "(none)"
@@ -206,18 +212,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build 74: the TLS context for the REST clients (VAMI appliance API and
-	 * Test Connection), with the same trust decision as the SOAP client:
-	 * trust-all only on the explicit allowInsecure opt-out, otherwise the
-	 * PLATFORM context (it used to be the JDK default context, which does not
-	 * trust a lab or enterprise CA, so every VAMI read failed on vCenters
-	 * whose certificate the platform trusts). Null (JDK default) only when no
-	 * platform context is available, e.g. a bare Test Connection instance.
+	 * The TLS context for the REST clients (session, inventory, VAMI
+	 * appliance API, Test Connection): always the PLATFORM context, which
+	 * trusts the VCF Operations trust store plus the certificates accepted on
+	 * this instance through Validate Connection. Build 93: the Allow Insecure
+	 * SSL trust-all branch is removed. Null (JDK default trust) only when no
+	 * platform context is available, never trust-all.
 	 */
-	private javax.net.ssl.SSLContext sslContextFor(ComplianceConfig cfg) {
-		if (cfg.allowInsecure) {
-			return insecureSslContext();
-		}
+	private javax.net.ssl.SSLContext sslContextFor() {
 		try {
 			return getPlatformSslContext();
 		} catch (RuntimeException e) {
@@ -229,48 +231,50 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Task #12 — pick the SSL socket factory for the raw-SOAP
-	 * {@link VSphereClient} connection in line with the framework SSL
-	 * convention (migration guide §16 / {@code HttpClientBuilder}):
-	 *
-	 * <ul>
-	 *   <li><b>platform trust by default</b> — {@link #getPlatformSslContext()}
-	 *       (the same SSLContext {@code HttpClientBuilder.platformSsl(this)}
-	 *       installs) so the vCenter certificate is validated against the VCF
-	 *       Ops platform trust store. This is the secure default.</li>
-	 *   <li><b>{@code allowInsecure} per-adapter-config opt-out</b> — only when
-	 *       the instance's {@code allowInsecure} identifier is set does the
-	 *       client fall back to {@link #insecureSslContext()} (trust-all),
-	 *       exactly as {@code HttpClientBuilder.allowInsecure(true)} does. This
-	 *       is the documented lab opt-out, surfaced in the log line above.</li>
-	 * </ul>
-	 *
-	 * <p>Returns the {@link javax.net.ssl.SSLSocketFactory} of the chosen
-	 * context. If the platform context cannot be obtained (e.g. a standalone
-	 * collector with no platform trust store) the JDK default factory is used
-	 * — never a silent fall-through to trust-all. The chosen factory is handed
-	 * into {@link VSphereClient}, which threads it through to its per-cycle
-	 * {@link EsxcliSoapClient} so the esxcli slice honours the same trust
-	 * decision.
+	 * The SSL socket factory for the raw-SOAP {@link VSphereClient}
+	 * connection (and its per-cycle {@link EsxcliSoapClient}): the platform
+	 * context's factory, so the vim25 walk validates the vCenter certificate
+	 * exactly as the REST clients do. The JDK's default hostname verifier
+	 * stays in place on that path. Build 93: the Allow Insecure SSL trust-all
+	 * branch is removed. If no platform context can be obtained the JDK
+	 * default factory is used, never trust-all.
 	 */
-	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor(
-			ComplianceConfig cfg) {
-		if (cfg.allowInsecure) {
-			logWarn("allowInsecure=true — vCenter SOAP TLS certificate "
-					+ "validation is DISABLED for this instance (lab opt-out). "
-					+ "Set allowInsecure=false to validate against the platform "
-					+ "trust store.");
-			return insecureSslContext().getSocketFactory();
+	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor() {
+		javax.net.ssl.SSLContext platform = null;
+		try {
+			platform = getPlatformSslContext();
+		} catch (RuntimeException e) {
+			logWarn("Platform SSL context unavailable for the vCenter SOAP "
+					+ "client: " + e.getMessage());
 		}
-		javax.net.ssl.SSLContext platform = getPlatformSslContext();
 		if (platform != null) {
 			return platform.getSocketFactory();
 		}
-		logWarn("Platform SSL context unavailable and allowInsecure=false — "
-				+ "using the JDK default trust store for the vCenter SOAP "
-				+ "connection.");
+		logWarn("Platform SSL context unavailable: using the JDK default "
+				+ "trust store for the vCenter SOAP connection.");
 		return (javax.net.ssl.SSLSocketFactory)
 				javax.net.ssl.SSLSocketFactory.getDefault();
+	}
+
+	// -----------------------------------------------------------------------
+	// certificateCheckUrls (framework hook, build 93)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Build 93: the vCenter endpoint VCF Operations reviews on Validate
+	 * Connection, so an untrusted certificate brings up the Review and
+	 * Accept Certificate dialog instead of failing. Derived only from the
+	 * passed (possibly unsaved) config, never from instance state; see
+	 * {@link VCenterCertificates#checkUrls}. {@code @Override} on purpose:
+	 * a buildkit older than 1.0.11 has no such hook and must fail to
+	 * compile rather than build a pak that never offers the dialog.
+	 */
+	@Override
+	protected List<String> certificateCheckUrls(ResourceConfig rc) {
+		return VCenterCertificates.checkUrls(
+				getIdentifier(rc, "vcenter_host"),
+				ComplianceConfig.parseReadAppliance(getIdentifier(rc,
+						ComplianceConfig.READ_APPLIANCE_KEY)));
 	}
 
 	// -----------------------------------------------------------------------
@@ -296,18 +300,32 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 
 			String vcenterHost = getIdentifier(rc, "vcenter_host");
-			String allowInsecure = getIdentifier(rc, "allowInsecure");
 			String username = getCredentialField(rc, "username");
 			String password = getCredentialField(rc, "password");
 
 			ComplianceConfig testCfg = new ComplianceConfig(
 					vcenterHost, username, password,
-					allowInsecure, null, null);
+					null, null);
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
-					sslContextFor(testCfg));
-			testApi.login();
+					sslContextFor());
+			try {
+				testApi.login();
+			} catch (Exception e) {
+				VCenterCertificates.Failure f = VCenterCertificates.classify(e);
+				if (f == null) throw e;
+				// Build 93: rethrow WITHOUT the cause. The framework's final
+				// onTest replaces the text of any failure whose cause chain
+				// shows a trust problem with its generic message, which offers
+				// the removed Allow Insecure SSL setting. The original is
+				// logged here instead.
+				logWarn("Test Connection: vCenter certificate problem ("
+						+ f + "): " + e, e);
+				throw new Exception(VCenterCertificates.message(f,
+						vcenterHost) + " (" + e.getClass().getSimpleName()
+						+ ")");
+			}
 			try {
 				SimpleJson hosts = testApi.listHosts();
 				int count = 0;
@@ -450,10 +468,28 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
+	/**
+	 * Build 93: {@code vsphere.ensureConnected()}, with a certificate the
+	 * instance does not trust (or one issued for another name) turned into
+	 * the admin-facing instruction (open the account and Validate
+	 * Connection; enter vCenter by the name on its certificate). The cause
+	 * is kept for the log; any other failure is rethrown unchanged.
+	 */
+	private void ensureVCenterConnected() throws Exception {
+		try {
+			vsphere.ensureConnected();
+		} catch (Exception e) {
+			VCenterCertificates.Failure f = VCenterCertificates.classify(e);
+			if (f == null) throw e;
+			throw new Exception(VCenterCertificates.message(f,
+					config.vcenterHost), e);
+		}
+	}
+
 	/** The cycle body; {@link #collectWorld} times it. */
 	private void collectWorldCycle(ResourceConfig worldRc,
 			List<MetricData> out) throws Exception {
-		vsphere.ensureConnected();
+		ensureVCenterConnected();
 		// Build 85: fresh esxcli reads every cycle. The esxcli cache lived as
 		// long as the vCenter session, so a stale result (pass or failure)
 		// could be served cycle after cycle; a stale pass is a false pass.
@@ -2000,7 +2036,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		VamiApiClient client = new VamiApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor(config), this::logWarn);
+				sslContextFor(), this::logWarn);
 		try {
 			java.util.Map<String, Object> values = new java.util.HashMap<>();
 			for (BenchmarkProfile.Control c : controls) {
