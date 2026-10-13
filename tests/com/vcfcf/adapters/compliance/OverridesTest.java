@@ -44,6 +44,8 @@ public final class OverridesTest {
 		pinPrecedence(all);
 		store();
 		fetchFailureAlert();
+		absentClassification();
+		timeFormat();
 		adapterWiringSourcePins();
 		System.out.println("OverridesTest: all assertions passed");
 	}
@@ -834,7 +836,7 @@ public final class OverridesTest {
 		s = st.refresh("site-a", f, t2);
 		T.eq(OverridesStore.Status.PARSE_FAILED, s.status, "parse failed");
 		T.eq("a", s.parsed.entries.get(0).control, "previous parse kept");
-		T.eq("parse failed, last good from 2026-10-13 14:05 CDT",
+		T.eq("parse failed, last good from 2026-10-13 14:05 -05:00",
 				s.statusText(0, zone), "parse failed text, local time");
 		T.check(s.notLoaded(), "parse failure raises the alert");
 
@@ -844,7 +846,7 @@ public final class OverridesTest {
 		s = st.refresh("site-a", f, t2);
 		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "fetch failed");
 		T.eq("a", s.parsed.entries.get(0).control, "kept on fetch failure");
-		T.eq("fetch failed: HTTP 503, last good from 2026-10-13 14:05 CDT",
+		T.eq("fetch failed: HTTP 503, last good from 2026-10-13 14:05 -05:00",
 				s.statusText(0, zone), "fetch failed text");
 		T.check(!s.notLoaded(), "one failure with a copy in force: no alert");
 
@@ -859,9 +861,24 @@ public final class OverridesTest {
 		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "no channel");
 		T.check(s.parsed != null, "kept without a channel");
 
-		// Absent (HTTP 400 / 1501): no overrides, last good dropped.
+		// A 400 without apiErrorCode 1501 (what the framework GET reports
+		// today, factory issue #201) is a fetch failure: the copy is kept.
 		f.fail = new java.io.IOException(
 				"Suite API GET https://localhost/suite-api/x HTTP 400");
+		s = st.refresh("site-a", f, t2);
+		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "bare 400 fails");
+		T.check(s.parsed != null, "bare 400 keeps the copy in force");
+		T.eq(4, s.fetchFailures, "bare 400 counts as the 4th failure");
+		T.eq("fetch failed 4 cycles: HTTP 400 (no such file, or a bad "
+				+ "request), last good from 2026-10-13 14:05 -05:00",
+				s.statusText(0, zone), "bare 400 text");
+
+		// Absent (HTTP 400 / 1501): no overrides, last good dropped.
+		f.fail = new java.io.IOException(
+				"Suite API GET https://localhost/suite-api/x HTTP 400 "
+						+ "{\"message\":\"Value \\\"site-a.xml of type "
+						+ "SOLUTION_CONFIG\\\" is invalid for request param.\","
+						+ "\"apiErrorCode\":1501}");
 		s = st.refresh("site-a", f, t2);
 		T.eq(OverridesStore.Status.ABSENT, s.status, "absent");
 		T.check(s.parsed == null, "absent runs with no overrides");
@@ -903,6 +920,81 @@ public final class OverridesTest {
 		want.put("VCF-CF Compliance|Summary|overrides_overridden", 1.0);
 		want.put("VCF-CF Compliance|Summary|overrides_not_loaded", 1.0);
 		T.eq(want, vs, "vCenter stat keys");
+	}
+
+	/**
+	 * Codex P2 on PR #45: only HTTP 404, or HTTP 400 with apiErrorCode 1501,
+	 * means the file is absent. Any other 400 keeps the last good copy.
+	 */
+	static void absentClassification() {
+		String u = "Suite API GET https://localhost/suite-api/api/"
+				+ "configurations/files?path=SolutionConfig/";
+		T.check(OverridesStore.isAbsent(u + "a.xml HTTP 404"), "404 absent");
+		T.check(OverridesStore.isAbsent(
+				u + "a.xml HTTP 400 {\"apiErrorCode\":1501}"), "400/1501 absent");
+		T.check(OverridesStore.isAbsent(
+				u + "a.xml HTTP 400 {\"apiErrorCode\" : \"1501\"}"),
+				"400/1501 absent, spaced and quoted");
+		T.check(OverridesStore.isAbsent(u + "a.xml HTTP 400 apiErrorCode=1501"),
+				"400/1501 absent, key=value text");
+		T.check(!OverridesStore.isAbsent(u + "a.xml HTTP 400"),
+				"bare 400 (no body) is not absent");
+		T.check(!OverridesStore.isAbsent(
+				u + "a.xml HTTP 400 {\"apiErrorCode\":1500}"),
+				"400 with another code is not absent");
+		T.check(!OverridesStore.isAbsent(
+				u + "a.xml HTTP 400 {\"apiErrorCode\":15010}"),
+				"400 with a longer code is not absent");
+		T.check(!OverridesStore.isAbsent(u + "site-1501.xml HTTP 400"),
+				"1501 in the file name is not the error code");
+		T.check(!OverridesStore.isAbsent(
+				u + "a.xml HTTP 503 {\"apiErrorCode\":1501}"),
+				"1501 on a 503 is not absent");
+		T.check(!OverridesStore.isAbsent(null), "null is not absent");
+
+		// Through the store: another 400 with no copy in force alerts at
+		// once and names the ambiguity; with a copy in force it keeps it.
+		ZoneId zone = ZoneId.of("America/Chicago");
+		Instant t1 = Instant.parse("2026-10-13T19:05:00Z");
+		OverridesStore st = new OverridesStore();
+		FakeFetcher f = new FakeFetcher();
+		f.fail = new java.io.IOException(u + "a.xml HTTP 400 "
+				+ "{\"apiErrorCode\":1502}");
+		OverridesStore.Snapshot s = st.refresh("a", f, t1);
+		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "other 400 fails");
+		T.check(s.notLoaded(), "other 400, no copy: alert");
+		T.eq("fetch failed: HTTP 400 (no such file, or a bad request), no "
+				+ "copy in force", s.statusText(0, zone), "other 400 text");
+		f.fail = new java.io.IOException(u + "a.xml HTTP 404");
+		s = st.refresh("a", f, t1);
+		T.eq(OverridesStore.Status.ABSENT, s.status, "404 absent via store");
+	}
+
+	/**
+	 * Codex P2 on PR #45: the status time is the local time with a numeric
+	 * offset taken from the zone rules, never a locale-provider zone name
+	 * (OpenJDK 25 renders America/Chicago as GMT-05:00, older JDKs as CDT).
+	 */
+	static void timeFormat() {
+		Instant t = Instant.parse("2026-10-13T19:05:00Z");
+		ZoneId chicago = ZoneId.of("America/Chicago");
+		String summer = OverridesStore.formatTime(t, chicago);
+		T.eq("2026-10-13 14:05 -05:00", summer, "CDT as offset");
+		T.check(!summer.contains("CDT") && !summer.contains("GMT"),
+				"no zone name");
+		T.eq("2026-01-13 13:05 -06:00", OverridesStore.formatTime(
+				Instant.parse("2026-01-13T19:05:00Z"), chicago), "CST as offset");
+		T.eq("2026-10-13 19:05 +00:00",
+				OverridesStore.formatTime(t, ZoneId.of("UTC")), "UTC, never Z");
+		T.eq("2026-10-14 00:35 +05:30", OverridesStore.formatTime(t,
+				ZoneId.of("Asia/Kolkata")), "half-hour offset");
+		// The text parses back to the same instant and offset.
+		java.time.OffsetDateTime back = java.time.OffsetDateTime.parse(summer,
+				java.time.format.DateTimeFormatter.ofPattern(
+						"yyyy-MM-dd HH:mm xxx", java.util.Locale.ROOT));
+		T.eq(t, back.toInstant(), "round-trips to the instant");
+		T.eq(java.time.ZoneOffset.ofHours(-5), back.getOffset(),
+				"round-trips to the offset");
 	}
 
 	/**
@@ -963,7 +1055,7 @@ public final class OverridesTest {
 		T.check(s.parsed != null, "the copy stays in force");
 		T.check(s.notLoaded(), "3rd straight failure raises the alert");
 		T.eq("fetch failed 3 cycles: HTTP 503, last good from 2026-10-13 "
-				+ "14:05 CDT", s.statusText(0, zone), "3 cycles text");
+				+ "14:05 -05:00", s.statusText(0, zone), "3 cycles text");
 		s = st.refresh("site-a", null, t2);
 		T.check(s.notLoaded(), "a 4th (no channel) still alerts");
 		T.eq(4, s.fetchFailures, "and counts on");
