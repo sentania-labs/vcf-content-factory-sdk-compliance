@@ -39,14 +39,24 @@ public final class BenchmarkProfile {
 	/** Controls demoted by the manual-review overlay (diagnostics). */
 	public final int manualReviewCount;
 
+	/**
+	 * Build 90: ids of the controls whose expected value comes from the
+	 * instance's overrides file (see {@link ComplianceOverrides}). The push
+	 * marks their Expected and Actual properties "(site override)".
+	 */
+	private final java.util.Set<String> siteOverridden;
+
 	public BenchmarkProfile(String name, List<Control> controls) {
 		this.name = name;
 		this.controls = Collections.unmodifiableList(controls);
 		int manual = 0;
+		java.util.Set<String> site = new java.util.TreeSet<>();
 		for (Control c : this.controls) {
 			if (c.manualReview) manual++;
+			if (c.siteOverride) site.add(c.controlId);
 		}
 		this.manualReviewCount = manual;
+		this.siteOverridden = Collections.unmodifiableSet(site);
 		List<Control> host = new java.util.ArrayList<>();
 		List<Control> vm = new java.util.ArrayList<>();
 		List<Control> vc = new java.util.ArrayList<>();
@@ -71,6 +81,11 @@ public final class BenchmarkProfile {
 
 	public List<Control> hostControls() {
 		return hostSlice;
+	}
+
+	/** Build 90: control ids whose expected value is a site override. */
+	public java.util.Set<String> siteOverriddenIds() {
+		return siteOverridden;
 	}
 
 	public List<Control> vmControls() {
@@ -210,6 +225,9 @@ public final class BenchmarkProfile {
 		// v3: true when the manual-review overlay demoted this control.
 		public final boolean manualReview;
 
+		// Build 90: true when expectedValue comes from the overrides file.
+		public final boolean siteOverride;
+
 		public Control(String controlId, String priority, String resourceKind,
 				String adapterKind, String parameter, String parameterKind,
 				String valueType, String expectedValue, String title,
@@ -218,7 +236,7 @@ public final class BenchmarkProfile {
 			this(controlId, priority, resourceKind, adapterKind, parameter,
 					parameterKind, valueType, expectedValue, title,
 					descriptionText, sourceRef, remediationText, readRecipe,
-					false);
+					false, false);
 		}
 
 		private Control(String controlId, String priority, String resourceKind,
@@ -226,8 +244,9 @@ public final class BenchmarkProfile {
 				String valueType, String expectedValue, String title,
 				String descriptionText, String sourceRef,
 				String remediationText, String readRecipe,
-				boolean manualReview) {
+				boolean manualReview, boolean siteOverride) {
 			this.manualReview = manualReview;
+			this.siteOverride = siteOverride;
 			this.controlId = controlId != null ? controlId : "";
 			this.priority = priority != null ? priority : "P2";
 			this.resourceKind = resourceKind != null ? resourceKind : "";
@@ -293,7 +312,21 @@ public final class BenchmarkProfile {
 		public Control asManualReview() {
 			return new Control(controlId, priority, resourceKind, adapterKind,
 					parameter, "manual_audit", valueType, expectedValue, title,
-					descriptionText, sourceRef, remediationText, "", true);
+					descriptionText, sourceRef, remediationText, "", true,
+					siteOverride);
+		}
+
+		/**
+		 * Build 90: a copy of this control scored against {@code expected}
+		 * (an overrides-file value already checked by
+		 * {@link ComplianceOverrides#checkValue}) instead of the SCG value.
+		 * Everything else, including the manual-review flag, is kept.
+		 */
+		public Control withSiteExpected(String expected) {
+			return new Control(controlId, priority, resourceKind, adapterKind,
+					parameter, parameterKind, valueType, expected, title,
+					descriptionText, sourceRef, remediationText, readRecipe,
+					manualReview, true);
 		}
 
 		/**

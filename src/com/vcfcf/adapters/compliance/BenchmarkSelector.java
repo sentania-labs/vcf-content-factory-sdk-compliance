@@ -74,11 +74,47 @@ public final class BenchmarkSelector {
 
 	private final BenchmarkProfile fixed;                 // fixed mode
 	private final Map<String, BenchmarkProfile> byScg;    // auto: "9.1" -> profile
+	// Build 90: Profile pins from the overrides file, by kind. A pinned kind
+	// takes its pinned profile in place of Auto or the fixed choice.
+	private final Map<Kind, BenchmarkProfile> pins;
 
 	private BenchmarkSelector(BenchmarkProfile fixed,
 			Map<String, BenchmarkProfile> byScg) {
+		this(fixed, byScg, Collections.<Kind, BenchmarkProfile>emptyMap());
+	}
+
+	private BenchmarkSelector(BenchmarkProfile fixed,
+			Map<String, BenchmarkProfile> byScg,
+			Map<Kind, BenchmarkProfile> pins) {
 		this.fixed = fixed;
 		this.byScg = byScg;
+		this.pins = pins;
+	}
+
+	/**
+	 * Build 90: this selector with the overrides file's Profile pins
+	 * applied. {@code pinsByKind} holds one profile per pinned kind (the
+	 * caller has already resolved an instance-wide pin into every kind it
+	 * covers, and let a per-kind pin win over it). A pinned kind is scored
+	 * against its pin whatever its version, like a fixed profile; every
+	 * other kind keeps this selector's mode. {@link #isAuto()} is
+	 * unchanged.
+	 */
+	public BenchmarkSelector withPins(Map<Kind, BenchmarkProfile> pinsByKind) {
+		if (pinsByKind == null || pinsByKind.isEmpty()) return this;
+		Map<Kind, BenchmarkProfile> m = new java.util.EnumMap<>(Kind.class);
+		for (Map.Entry<Kind, BenchmarkProfile> e : pinsByKind.entrySet()) {
+			if (e.getKey() != null && e.getValue() != null) {
+				m.put(e.getKey(), e.getValue());
+			}
+		}
+		return new BenchmarkSelector(fixed, byScg,
+				Collections.unmodifiableMap(m));
+	}
+
+	/** Build 90: the pinned profile for {@code kind}, or null. */
+	public BenchmarkProfile pinFor(Kind kind) {
+		return pins.get(kind);
 	}
 
 	/** Fixed mode: {@code profile} for every object. */
@@ -120,6 +156,10 @@ public final class BenchmarkSelector {
 	 * else; see {@link #governingVersion}). Ignored in fixed mode.
 	 */
 	public Selection select(Kind kind, String version) {
+		BenchmarkProfile pinned = pins.get(kind);
+		if (pinned != null) {
+			return Selection.of(pinned);
+		}
 		if (fixed != null) {
 			return Selection.of(fixed);
 		}
