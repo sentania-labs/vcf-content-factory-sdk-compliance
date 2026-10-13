@@ -9,8 +9,9 @@ public final class ComplianceConfig {
 	/**
 	 * Build 93: the retired "Compliance Profile" setting. The identifier is
 	 * gone from describe.xml and every instance runs
-	 * {@link BenchmarkSelector#AUTO}; an account created earlier may still
-	 * carry a stored value, which the adapter reads only to log
+	 * {@link BenchmarkSelector#AUTO}. If the platform still hands the
+	 * adapter a stored value (the build 92 devel upgrade suggests it drops
+	 * a removed identifier's value), it is read only to log
 	 * {@link #retiredProfileNotice(String)} once per configure.
 	 */
 	public static final String RETIRED_PROFILE_KEY = "benchmark_profile";
@@ -18,8 +19,9 @@ public final class ComplianceConfig {
 	/**
 	 * Build 93: the retired "Allow Insecure SSL" setting. The identifier is
 	 * gone from describe.xml and the adapter always validates the vCenter
-	 * certificate; a stored value is read only to log
-	 * {@link #retiredAllowInsecureNotice(String)} once per configure.
+	 * certificate. If the platform still hands the adapter a stored value,
+	 * it is read only to log {@link #retiredAllowInsecureNotice(String)}
+	 * once per configure.
 	 */
 	public static final String RETIRED_ALLOW_INSECURE_KEY = "allowInsecure";
 

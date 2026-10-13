@@ -53,8 +53,9 @@ import org.w3c.dom.NodeList;
  *       profile is rejected for every profile: the SCG value stays, never a
  *       pass.</li>
  *   <li>{@code Profile}: pins the SCG version for the instance, or with
- *       {@code kind} for one object kind, in place of Auto (by version) or
- *       the fixed choice. A per-kind pin wins over the instance pin.</li>
+ *       {@code kind} for one object kind, in place of Auto (by version)
+ *       (the only mode since build 93). A per-kind pin wins over the
+ *       instance pin.</li>
  * </ul>
  *
  * <p>Unknown elements, attributes, versions, kinds and control ids are
@@ -561,7 +562,7 @@ public final class ComplianceOverrides {
 
 		/**
 		 * The profile name pinned for {@code kind}: its own pin, else the
-		 * instance pin, else null (no pin: the instance's mode applies).
+		 * instance pin, else null (no pin: Auto (by version) applies).
 		 */
 		public String pinFor(BenchmarkSelector.Kind kind) {
 			String p = kindPins.get(kind);
@@ -572,7 +573,7 @@ public final class ComplianceOverrides {
 		 * Build 90 (review N1): the skipped ids in force for this instance.
 		 * A control kind is scored from its pinned profile when the file pins
 		 * that kind, otherwise from the instance's own profiles ({@code
-		 * base}: every bundled one in Auto, the one chosen otherwise). An id
+		 * base}: every bundled one, since every instance runs Auto). An id
 		 * counts when one of those profiles scores it for its kind. Both
 		 * arguments are the profiles BEFORE adjustment, since a skip removes
 		 * the control. A Skip accepted only because some other bundled
@@ -677,8 +678,8 @@ public final class ComplianceOverrides {
 	 * </ul>
 	 *
 	 * @param parsed   the parsed file (null: nothing to apply)
-	 * @param profiles every profile loaded this cycle (bundled, and the
-	 *                 instance's own when it is not bundled)
+	 * @param profiles every profile loaded this cycle (the bundled SCG
+	 *                 profiles)
 	 */
 	public static Resolved resolve(Parsed parsed,
 			Collection<BenchmarkProfile> profiles) {
