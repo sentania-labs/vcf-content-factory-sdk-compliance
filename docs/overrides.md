@@ -305,22 +305,3 @@ VCF Operations policy for those objects. The control is still checked
 and still counts in the score. Use the policy when the control matters
 but the alert is noise. Use Skip when the control does not apply to
 your site and should not count against the score.
-
-## Moving from a Custom profile CSV
-
-The Custom profile choice, and its CSV path on the collector, still
-work in this release but are deprecated. While an account uses them,
-the adapter log shows a WARN each time the account is configured. To
-move:
-
-1. Compare your CSV with the bundled profile it was copied from.
-2. For each row you deleted, add a Skip entry.
-3. For each expected value you changed, add an Override entry.
-4. If you used the CSV to stay on one guide version, add a Profile
-   entry.
-5. Set **Compliance Profile** back to `Auto (by version)` (or the fixed
-   guide you want), and set **Overrides file** to your copy.
-
-The overrides file adjusts the bundled guides. Unlike the Custom CSV,
-the manual-review list keeps applying, so you do not need to remove
-those controls yourself.

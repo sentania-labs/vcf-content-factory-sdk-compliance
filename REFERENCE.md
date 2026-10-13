@@ -23,8 +23,7 @@ Generated from `describe.xml` and `resources.properties`.
 | Field | Key | Default | Required |
 |---|---|---|---|
 | vCenter Host / IP | `vcenter_host` | — | Yes |
-| Compliance Profile (Custom is deprecated, use Overrides file) | `benchmark_profile` | Auto (by version) | Yes |
-| Custom Profile CSV Path (deprecated, use Overrides file; required if profile is Custom) | `custom_profile_path` | - | No |
+| Compliance Profile | `benchmark_profile` | Auto (by version) | Yes |
 | Overrides file (name of your copy in Administration > Configuration Files, no extension) | `overrides_file` | - | No |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | false | No |
 | Read vCenter appliance settings (true needs the account in SSO group SystemConfiguration.Administrators, which also grants appliance write access) | `read_appliance_settings` | false | No |

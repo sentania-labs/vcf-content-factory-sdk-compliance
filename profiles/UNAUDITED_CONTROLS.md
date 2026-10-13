@@ -62,8 +62,7 @@ that text, so scoring them failed every object (false fails, never false
 passes). Since build 57 they are listed in `profiles/manual_review.csv`
 and load as `manual_audit`: not scored, no per-control keys, no alert.
 The overlay is per profile (a control is demoted only in the profiles
-that list it) and applies to bundled profiles only, never to a Custom
-profile. Site values for these controls are the job of the planned
+that list it). Site values for these controls are the job of the planned
 per-connection control overrides.
 
 | Profile | control_ids |

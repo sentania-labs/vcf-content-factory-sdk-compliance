@@ -6,8 +6,15 @@ public final class ComplianceConfig {
 	public final String username;
 	public final String password;
 	public final String benchmarkProfile;
-	public final String customProfilePath;
 	public final boolean allowInsecure;
+
+	/**
+	 * Build 92: the Custom profile (a CSV on the collector) is removed. An
+	 * instance whose stored Compliance Profile still reads {@code Custom}
+	 * runs as {@link BenchmarkSelector#AUTO}; this flag lets the adapter log
+	 * one WARN naming the removal when the instance is configured.
+	 */
+	public final boolean storedAsCustom;
 
 	/**
 	 * HOLD (owner decision pending, build 74): the adapter-instance setting
@@ -29,9 +36,9 @@ public final class ComplianceConfig {
 	public final boolean readApplianceSettings;
 
 	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String customProfilePath, String allowInsecure) {
+			String benchmarkProfile, String allowInsecure) {
 		this(vcenterHost, username, password, benchmarkProfile,
-				customProfilePath, allowInsecure, null);
+				allowInsecure, null);
 	}
 
 	/**
@@ -44,14 +51,14 @@ public final class ComplianceConfig {
 	public final String overridesFile;
 
 	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String customProfilePath, String allowInsecure,
+			String benchmarkProfile, String allowInsecure,
 			String readApplianceSettings) {
 		this(vcenterHost, username, password, benchmarkProfile,
-				customProfilePath, allowInsecure, readApplianceSettings, null);
+				allowInsecure, readApplianceSettings, null);
 	}
 
 	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String customProfilePath, String allowInsecure,
+			String benchmarkProfile, String allowInsecure,
 			String readApplianceSettings, String overridesFile) {
 		this.overridesFile = OverridesStore.normaliseName(overridesFile);
 		this.readApplianceSettings = parseReadAppliance(readApplianceSettings);
@@ -59,9 +66,10 @@ public final class ComplianceConfig {
 				? vcenterHost : "localhost";
 		this.username = (username != null) ? username : "";
 		this.password = (password != null) ? password : "";
-		this.benchmarkProfile = (benchmarkProfile != null && !benchmarkProfile.isEmpty())
-				? benchmarkProfile : "VMware_SCG_8.0";
-		this.customProfilePath = (customProfilePath != null) ? customProfilePath.trim() : "";
+		this.storedAsCustom = isCustomName(benchmarkProfile);
+		this.benchmarkProfile = storedAsCustom ? BenchmarkSelector.AUTO
+				: (benchmarkProfile != null && !benchmarkProfile.isEmpty())
+						? benchmarkProfile : "VMware_SCG_8.0";
 		// Strict-by-default (build 50, review B1): only the explicit literal
 		// "true" opts into trust-all. null / blank / absent / any other value
 		// parses to false -> platform trust store validation. This makes the
@@ -82,13 +90,9 @@ public final class ComplianceConfig {
 		return BenchmarkSelector.AUTO.equals(benchmarkProfile);
 	}
 
-	/**
-	 * Build 90: true when the instance uses the deprecated Custom CSV
-	 * profile (replaced by the overrides file; kept one release behind a
-	 * WARN).
-	 */
-	public boolean isCustom() {
-		return "Custom".equalsIgnoreCase(benchmarkProfile);
+	/** Build 92: the retired Custom choice, as an instance may still store it. */
+	static boolean isCustomName(String raw) {
+		return raw != null && "Custom".equalsIgnoreCase(raw.trim());
 	}
 
 	/** "true" / "false" (case-insensitive); anything else takes the default. */

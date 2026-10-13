@@ -1,5 +1,11 @@
 # Canonical Benchmark CSV Schema
 
+Contributor reference for the bundled profiles: how the shipped SCG
+CSVs under `profiles/canonical/` are laid out and read. Operators tune
+controls with the overrides file (docs/overrides.md), not by editing or
+supplying a CSV; since build 92 the adapter loads the bundled profiles
+only.
+
 The compliance adapter consumes benchmarks in a single, header-aware
 CSV format. Source benchmarks (VMware SCG 6.7, 7.0, 8.0, 9.0, 9.1) are
 normalized into this schema before being loaded by the
@@ -126,7 +132,7 @@ Rules:
   fetch can never be scored as "list empty → compliant".
 
 - `read_recipe` is **optional** and kept OUT of the loader's required-
-  column set, so older bundled or custom CSVs still load.
+  column set, so older canonical CSVs still load.
 - A `vim_property` or `esxcli` control with an **empty** `read_recipe`
   is **non-evaluable** (informational only): it loads and appears for
   traceability, and the evaluator skips it — it is *not* counted as
@@ -137,8 +143,7 @@ Rules:
 
 The bundled normalizers own the vim-path knowledge for the shipped
 profiles via the `_READ_RECIPE_BY_PARAMETER` map in
-`scripts/_compliance_normalize.py`. Custom-profile authors supply
-`read_recipe` directly in their CSV.
+`scripts/_compliance_normalize.py`.
 
 ### Unreadable outcome
 
@@ -504,8 +509,8 @@ two groups of bundled-profile controls:
 
 The loader demotes each listed control, in the listed profile only, to
 `manual_audit` (no recipe): not evaluable, never pushed, never alerted,
-never a pass. The overlay is applied to bundled profiles, never to a
-Custom profile, and is kept outside the canonical CSVs so regenerating
+never a pass. The overlay is applied to every bundled profile, and is
+kept outside the canonical CSVs so regenerating
 a profile cannot silently undo it. Since build 70 a missing overlay file
 FAILS the bundled-profile load (the adapter goes Down with an actionable
 message): without it the standard-switch controls would be scored (a

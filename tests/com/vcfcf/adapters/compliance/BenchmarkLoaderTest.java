@@ -37,11 +37,39 @@ public final class BenchmarkLoaderTest {
 		expectThrows("VMware_SCG_6.5", "not bundled in this version");
 		expectThrows("VMware_SCG_10.0", "not bundled in this version");
 
-		// Custom without a path reaches the resolver and gets its own
-		// actionable message (the valid Custom+path branch never calls
-		// the resolver).
-		expectThrows("Custom", "custom_profile_path");
-		expectThrows("custom", "custom_profile_path");
+		// Build 92: Custom is gone. The resolver treats it as unknown and
+		// the message no longer offers it.
+		expectThrows("Custom", "not bundled in this version");
+		try {
+			BenchmarkLoader.resolveBundledProfileName("Custom");
+		} catch (RuntimeException e) {
+			if (e.getMessage().contains("or Custom")) {
+				throw new AssertionError("message still offers Custom: "
+						+ e.getMessage());
+			}
+		}
+		// An instance stored as Custom runs as Auto and is flagged once for
+		// the configure WARN; any other value is untouched.
+		for (String stored : new String[] {"Custom", "custom", " Custom "}) {
+			ComplianceConfig c = new ComplianceConfig("vc", "u", "p", stored,
+					"false");
+			if (!c.storedAsCustom || !c.isAuto()) {
+				throw new AssertionError("stored '" + stored + "' should run "
+						+ "as Auto and be flagged");
+			}
+		}
+		ComplianceConfig fixed = new ComplianceConfig("vc", "u", "p",
+				"VMware_SCG_9.0", "false");
+		if (fixed.storedAsCustom
+				|| !"VMware_SCG_9.0".equals(fixed.benchmarkProfile)) {
+			throw new AssertionError("a bundled choice is untouched");
+		}
+		ComplianceConfig blank = new ComplianceConfig("vc", "u", "p", null,
+				"false");
+		if (blank.storedAsCustom
+				|| !"VMware_SCG_8.0".equals(blank.benchmarkProfile)) {
+			throw new AssertionError("blank keeps the pre-v3 8.0 fallback");
+		}
 
 		// Filename mapping covers every bundled profile.
 		expectFilename("VMware_SCG_6.7", "scg_6.7.csv");

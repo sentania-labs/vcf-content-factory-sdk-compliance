@@ -12,8 +12,7 @@ inside see [overview.md](overview.md).
 | vCenter Host / IP | Yes | - | vCenter FQDN or IP |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom (deprecated since build 90) |
-| Custom Profile CSV Path | No | - | Deprecated since build 90. Filesystem path to a profile CSV on the collector, used only with Custom |
+| Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0 or VMware_SCG_9.1 (Custom was removed in build 92) |
 | Overrides file | No | - | Build 90. Name of your copy of `compliance_overrides_template` in Administration > Configuration Files > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
 | Allow Insecure SSL | No | false | Accept self-signed certificates |
 | Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
@@ -22,7 +21,9 @@ inside see [overview.md](overview.md).
 stores the configured value on each adapter instance, and a pak upgrade
 does not rewrite it (the new default applies to new instances only). An instance stored as a fixed `VMware_SCG_9.1`, for example, keeps scoring
 every object against SCG 9.1 until someone edits it to `Auto (by version)`. An instance with no stored value keeps the pre-v3
-fallback, SCG 8.0.
+fallback, SCG 8.0. An instance stored as `Custom` (removed in build 92)
+logs one WARN each time it is configured and runs as `Auto (by
+version)`.
 
 ## Benchmark selection
 
@@ -40,9 +41,6 @@ fallback, SCG 8.0.
   score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
   "Compliance data not collected").
 - **Fixed profile:** that SCG for every object regardless of version.
-- **Custom (deprecated, build 90):** a profile CSV on the collector, for
-  every object. Still works this release; each configure logs a WARN
-  naming the overrides file as the replacement.
 - **Overrides file (build 90):** applied on top of whichever of the above
   is set. A `Profile` pin replaces the choice for every kind (no `kind`)
   or for one kind (a `kind` pin wins over an instance pin); `Skip` removes
@@ -70,10 +68,7 @@ wrongly read from the distributed switch. The file is required: a pak
 without it fails to load rather than scoring those controls.
 
 To tune controls for your site, use an overrides file
-([overrides.md](overrides.md)). The Custom CSV choice is deprecated: it
-reads a CSV in the canonical profile format from a path on the
-collector that runs the instance, and the manual-review list is not
-applied to it.
+([overrides.md](overrides.md)).
 
 ## Keys pushed onto VMWARE resources
 
@@ -145,7 +140,6 @@ VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an invent
                                                kind) failed and rollup keys were held back
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
-                                               (+ Custom)
 ```
 
 Overrides file status, per vCenter (build 90), pushed every cycle:

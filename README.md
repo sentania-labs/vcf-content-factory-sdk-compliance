@@ -165,9 +165,12 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   `overrides_overridden`; the Compliance World shows the same keys for
   the last account to collect. The alert "Compliance overrides file not
   loaded" fires on the vCenter when the named file is missing or is not
-  valid XML. The Custom profile CSV choice still works in this release
-  but is deprecated; [docs/overrides.md](docs/overrides.md) says how to
-  move.
+  valid XML. See [docs/overrides.md](docs/overrides.md).
+- **The Custom profile CSV is gone.** (Build 92.) The Compliance Profile
+  setting offers `Auto (by version)` and the bundled SCG versions only,
+  and the Custom Profile CSV Path setting is removed. An account still set
+  to `Custom` logs one WARN when it is configured and runs as
+  `Auto (by version)`. Site changes go in the overrides file.
 - **VMs that use a dvfilter on purpose now fail `vm.dvfilter`.** (Build
   90.) The pack now finds `ethernet*.filter*.name` settings, so a VM with a
   dvfilter attached (for example an NSX for vSphere distributed firewall or

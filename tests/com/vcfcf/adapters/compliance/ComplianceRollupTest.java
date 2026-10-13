@@ -80,8 +80,6 @@ public final class ComplianceRollupTest {
 		T.near(4, s.get(P + "Benchmark|SCG_9.1|objects"), "9.1 objects");
 		T.near(0, s.get(P + "Benchmark|SCG_6.7|objects"), "6.7 zero, pushed");
 		T.near(2, s.get(P + "Benchmark|none|objects"), "none objects");
-		T.check(!s.containsKey(P + "Benchmark|Custom|objects"),
-				"Custom only when used");
 		T.near(0, s.get(P + "Benchmark|unknown|objects"), "unknown pushed as 0");
 
 		// Benchmark buckets add up to every object recorded.
@@ -95,12 +93,6 @@ public final class ComplianceRollupTest {
 		Map<String, Double> e = new ComplianceRollup().toStats();
 		T.near(0, e.get(P + "All|scored"), "empty scored");
 		T.check(!e.containsKey(P + "All|avg_score"), "empty has no avg");
-
-		// Custom profile bucket appears when used.
-		ComplianceRollup c = new ComplianceRollup();
-		c.recordEvaluated(BenchmarkSelector.Kind.HOST,
-				BenchmarkSelector.bucketOf("Custom"), 1, 0, 0, 100.0);
-		T.near(1, c.toStats().get(P + "Benchmark|Custom|objects"), "custom");
 
 		// Review B2: version unreadable (no previous benchmark) is
 		// non-compliant and in the unknown bucket, never no_benchmark.

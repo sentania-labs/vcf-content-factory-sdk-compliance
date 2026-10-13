@@ -101,8 +101,7 @@ for:
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile (Custom is deprecated, use Overrides file) | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object. `Custom` is deprecated (build 90) and logs a WARN; it still works this release. Existing instances keep their stored choice on upgrade. |
-| Custom Profile CSV Path (deprecated, use Overrides file; required if profile is Custom) | `custom_profile_path` | No | - | Deprecated. Filesystem path on the collector to a profile CSV in the pack's canonical profile format (the same columns as the bundled `profiles/canonical/scg_*.csv`). Used only when the profile is `Custom`. |
+| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object. Existing instances keep their stored choice on upgrade, except `Custom` (removed in build 92), which runs as `Auto (by version)`. To pin one object kind to a version, use a `Profile` entry with `kind` in the overrides file. |
 | Overrides file (name of your copy in Administration > Configuration Files, no extension) | `overrides_file` | No | - | The name of your copy of `compliance_overrides_template` in Administration > Configuration Files > Management Packs Configuration, without `.xml`. Empty: no overrides. See [overrides.md](overrides.md). |
 | Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
@@ -177,10 +176,12 @@ for:
   (per-control and score ones wait 1 and cancel after 3; the collection
   ones stay 1 and 1). Nothing to edit by hand.
 
-- **Custom profile CSV is deprecated (build 90).** An instance set to
-  `Custom` keeps working, and logs a WARN each time it is configured.
-  Move its changes into an overrides file ([overrides.md](overrides.md),
-  "Moving from a Custom profile CSV").
+- **The Custom profile CSV is removed (build 92).** The Compliance
+  Profile setting no longer offers `Custom`, and the Custom Profile CSV
+  Path setting is gone. An instance still set to `Custom` logs one WARN
+  each time it is configured and runs as `Auto (by version)`; edit it and
+  choose `Auto (by version)` or a bundled SCG to clear the warning. Site
+  changes go in an overrides file ([overrides.md](overrides.md)).
 
 ## Troubleshooting
 

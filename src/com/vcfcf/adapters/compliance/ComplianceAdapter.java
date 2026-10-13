@@ -122,7 +122,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ResourceConfig resourceConfig) {
 		String vcenterHost = getIdentifier(resourceConfig, "vcenter_host");
 		String profile = getIdentifier(resourceConfig, "benchmark_profile");
-		String customPath = getIdentifier(resourceConfig, "custom_profile_path");
 		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
 		String readAppliance = getIdentifier(resourceConfig,
 				ComplianceConfig.READ_APPLIANCE_KEY);
@@ -133,19 +132,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, customPath, allowInsecure, readAppliance,
-				overridesFile);
-		if (config.isCustom()) {
-			// Build 90: one release of deprecation for the Custom CSV path.
-			logWarn("Compliance Profile 'Custom' (a CSV on the collector at "
-					+ "custom_profile_path) is deprecated and will be removed "
-					+ "in a later release. Replace it with the Overrides file "
-					+ "setting: copy compliance_overrides_template in "
-					+ "Administration > Configuration Files > Management Packs "
-					+ "Configuration, add your Skip / Override / Profile "
-					+ "entries, and set this instance's Overrides file to the "
-					+ "copy's name (see docs/overrides.md). The Custom CSV "
-					+ "keeps working in this release.");
+				profile, allowInsecure, readAppliance, overridesFile);
+		if (config.storedAsCustom) {
+			// Build 92: the Custom profile CSV is removed. One WARN per
+			// configure; the instance runs as Auto (by version).
+			logWarn("Compliance Profile 'Custom' was removed in build 92 "
+					+ "(the profile CSV on the collector and its "
+					+ "custom_profile_path setting are no longer read). This "
+					+ "instance runs as " + BenchmarkSelector.AUTO + ". Edit "
+					+ "the instance and choose " + BenchmarkSelector.AUTO
+					+ " or a bundled SCG version to clear this warning. Skip, "
+					+ "Override and per-kind Profile entries go in the "
+					+ "Overrides file (see docs/overrides.md).");
 		}
 
 		this.vcApi = new VCenterApiClient(
@@ -295,7 +293,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			ComplianceConfig testCfg = new ComplianceConfig(
 					vcenterHost, username, password,
-					/*profile*/ null, /*customPath*/ null, allowInsecure);
+					/*profile*/ null, allowInsecure);
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
@@ -581,9 +579,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			base = BenchmarkSelector.auto(all);
 		} else {
 			BenchmarkProfile profile = benchmarkLoader.load(
-					config.benchmarkProfile,
-					config.customProfilePath,
-					confDir);
+					config.benchmarkProfile, confDir);
 			if (!profile.name.equals(config.benchmarkProfile)) {
 				logWarn("Profile load divergence: requested='"
 						+ config.benchmarkProfile + "' resolved='"
@@ -607,8 +603,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return base;
 		}
 
-		// Every profile the file can name: all bundled ones (cached) plus the
-		// instance's own when it is not bundled (Custom).
+		// Every profile the file can name: all bundled ones (cached). Since
+		// build 92 the instance's own profiles are always bundled ones.
 		java.util.Map<String, BenchmarkProfile> bundled =
 				benchmarkLoader.loadAll(confDir);
 		java.util.Map<String, BenchmarkProfile> known =

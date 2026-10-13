@@ -21,7 +21,7 @@ import java.util.regex.Pattern;
  *       maps to 8.0). Any other version gets NO benchmark: profile name
  *       {@code "no benchmark for <ESX|vCenter> X.Y"}, no score, no
  *       per-control results.</li>
- *   <li><b>Fixed</b> (any bundled profile or Custom): that profile for
+ *   <li><b>Fixed</b> (any bundled profile): that profile for
  *       every object regardless of version (the pre-v3 behavior).</li>
  * </ul>
  *
@@ -242,7 +242,7 @@ public final class BenchmarkSelector {
 
 	/**
 	 * Rollup benchmark bucket for a profile name: {@code VMware_SCG_9.1}
-	 * -> {@code SCG_9.1}; {@code Custom} -> {@code Custom}.
+	 * -> {@code SCG_9.1}; any other name is its own bucket.
 	 */
 	public static String bucketOf(String profileName) {
 		String scg = scgOfProfileName(profileName);

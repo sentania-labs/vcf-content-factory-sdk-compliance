@@ -29,8 +29,7 @@ import java.util.Map;
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
  * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
- * unknown (always pushed, 0 when unused) plus Custom when a custom profile
- * is in use. {@code unknown} counts objects whose governing version could
+ * unknown (always pushed, 0 when unused). {@code unknown} counts objects whose governing version could
  * not be read and that had no previous benchmark to fall back on (build 58);
  * they are non-compliant (unreadable), never no_benchmark.
  *

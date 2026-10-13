@@ -90,7 +90,7 @@ public final class ProfileSetTest {
 
 		// The fixed-profile path applies the overlay too.
 		BenchmarkProfile fixed91 = new BenchmarkLoader().load(
-				"VMware_SCG_9.1", null, ".");
+				"VMware_SCG_9.1", ".");
 		T.check(!find(fixed91.controls, "esx.log-forwarding").isEvaluable(),
 				"fixed 9.1 esx.log-forwarding demoted");
 
