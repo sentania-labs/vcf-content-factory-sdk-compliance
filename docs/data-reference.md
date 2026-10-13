@@ -13,7 +13,7 @@ inside see [overview.md](overview.md).
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
 | Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0 or VMware_SCG_9.1 (Custom was removed in build 92) |
-| Overrides file | No | - | Build 90. Name of your copy of `compliance_overrides_template` in Administration > Configuration Files > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
+| Overrides file | No | - | Build 90. Name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
 | Allow Insecure SSL | No | false | Accept self-signed certificates |
 | Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 

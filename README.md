@@ -39,7 +39,8 @@ benchmark" rather than scored against the wrong one. You can also pin
 every object to one guide.
 
 **Lets you tune it to your site.** One file in VCF Operations
-(Administration > Configuration Files) turns controls off, sets your own
+(Infrastructure Operations > Configurations > Management Packs
+Configuration) turns controls off, sets your own
 expected values (say 5 failed logons instead of the guide's number), and
 pins the guide version per object kind. Nothing is staged on a
 collector, and one file can serve several vCenters. See

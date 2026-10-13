@@ -161,7 +161,7 @@ OVERRIDES_REC_TEXT = (
     "HTTP status "
     "is an error VCF Operations returned, and no answer means it was not "
     "reached. The adapter log names the problem. To fix a missing file: "
-    "open Administration > Configuration Files > Management Packs "
+    "open Infrastructure Operations > Configurations > Management Packs "
     "Configuration and check that a file with exactly the name in the "
     "instance's Overrides file setting exists (the name without .xml, same "
     "case). If it does not, copy compliance_overrides_template and give the "

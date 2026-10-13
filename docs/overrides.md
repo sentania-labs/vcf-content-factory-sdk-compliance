@@ -36,11 +36,15 @@ You cannot:
 
 ## Step 1: Copy the template
 
-1. In VCF Operations, open **Administration > Configuration Files >
-   Management Packs Configuration**.
-2. Find `compliance_overrides_template`. The pack installs it.
-3. Copy it and give the copy a name, for example
-   `compliance_overrides_vc01`.
+1. In VCF Operations, open **Infrastructure Operations >
+   Configurations > Management Packs Configuration**.
+2. Find `compliance_overrides_template`, under **System Defined**. The
+   pack installs it.
+3. Clone it. The dialog suggests the name
+   `compliance_overrides_template.xml_Copy`, still under System
+   Defined. Replace it with your own name ending in `.xml`, for example
+   `compliance_overrides_vc01.xml`, and save. The copy then appears
+   under **User Defined**.
 
 Do not edit the template itself. An upgrade of the pack can replace the
 template. Your copy has a name the pack never uses, so no upgrade
@@ -53,7 +57,8 @@ the template itself.
 1. Open **Administration > Integrations > Accounts** and edit the
    compliance account.
 2. Set **Overrides file** to the name of your copy, without `.xml`. For
-   example `compliance_overrides_vc01`.
+   example `compliance_overrides_vc01` for the file
+   `compliance_overrides_vc01.xml`.
 3. Save.
 
 Leave **Overrides file** empty to run with no overrides. An empty

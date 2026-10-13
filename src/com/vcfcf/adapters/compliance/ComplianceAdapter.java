@@ -668,9 +668,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				logWarn("Overrides file '" + snap.fileName + "' not loaded: "
 						+ snap.detail + ". Running with no overrides (the "
 						+ "guide's values only). Copy "
-						+ "compliance_overrides_template in Administration > "
-						+ "Configuration Files > Management Packs Configuration "
-						+ "and give the copy this name, or correct the "
+						+ "compliance_overrides_template in Infrastructure "
+						+ "Operations > Configurations > Management Packs "
+						+ "Configuration and save the copy under this name "
+						+ "plus .xml (it lands in User Defined), or correct the "
 						+ "instance's Overrides file setting.");
 				break;
 			case PARSE_FAILED:

@@ -8,11 +8,13 @@
   it. Your copy has a name the pack never uses, so no upgrade touches it.
 
   How to use it:
-  1. In VCF Operations, open Administration > Configuration Files >
+  1. In VCF Operations, open Infrastructure Operations > Configurations >
      Management Packs Configuration.
-  2. Copy compliance_overrides_template and give the copy a name, for
-     example compliance_overrides_vc01. One copy can serve several
-     vCenters.
+  2. Clone compliance_overrides_template (under System Defined). The
+     dialog suggests compliance_overrides_template.xml_Copy; replace it
+     with your own name ending in .xml, for example
+     compliance_overrides_vc01.xml, and save. The copy appears under
+     User Defined. One copy can serve several vCenters.
   3. Edit the copy: remove the comment markers around the entries you
      want and change the values.
   4. Edit the compliance account (Administration > Integrations >

@@ -8,8 +8,8 @@ import java.util.regex.Pattern;
 
 /**
  * Build 90: reads the instance's overrides file from the VCF Ops central
- * configuration-file store (UI: Administration, Configuration Files,
- * Management Packs Configuration), once per cycle, and keeps the last good
+ * configuration-file store (UI on 9.0.2: Infrastructure Operations,
+ * Configurations, Management Packs Configuration), once per cycle, and keeps the last good
  * parse. Ported from the vcommunity adapter's SolutionConfigStore.
  *
  * <p>Wire: {@code GET /api/configurations/files?path=SolutionConfig/<name>.xml}
