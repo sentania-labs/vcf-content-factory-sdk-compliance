@@ -122,7 +122,7 @@ public final class CertificateTest {
 					"no PKIX trigger text: " + m);
 			T.check(!m.contains("Allow Insecure") && !m.contains("insecure"),
 					"no removed setting: " + m);
-			T.check(m.indexOf('—') < 0, "no em dash");
+			T.check(m.indexOf('\u2014') < 0, "no em dash");
 		}
 	}
 

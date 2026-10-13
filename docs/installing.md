@@ -118,7 +118,7 @@ version, use the overrides file ([overrides.md](overrides.md)).
 
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
-| vCenter Host / IP | `vcenter_host` | Yes | — | The target vCenter, by the name on its certificate (see the TLS section). |
+| vCenter Host / IP | `vcenter_host` | Yes | - | The target vCenter, by the name on its certificate (see the TLS section). |
 | Overrides file (name of your copy in Management Packs Configuration, without .xml) | `overrides_file` | No | - | The name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides. See [overrides.md](overrides.md). |
 | Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Username | `username` | Yes | — | vCenter account (SSO). Privileges depend on Read vCenter appliance settings; see Permissions Required. |
