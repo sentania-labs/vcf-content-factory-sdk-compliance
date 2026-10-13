@@ -388,6 +388,27 @@ public final class CertificateTest {
 		T.check(!VCenterCertificates.nameMatches(null, both), "null host");
 		T.check(!VCenterCertificates.nameMatches(" ", both), "blank host");
 
+		T.check(!VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("300.1.1.1")),
+				"out-of-range octet is not an IP literal");
+		T.check(!VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("10.0.0.256")),
+				"octet 256 is not an IP literal");
+		T.check(VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("10.0.0.1")),
+				"dotted quad is an IP literal");
+		T.check(VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("255.255.255.255")),
+				"octet 255 is an IP literal");
+		T.check(VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("[::1]")),
+				"bracketed IPv6 is an IP literal");
+		T.check(!VCenterCertificates.isIpLiteral(
+				VCenterCertificates.normalizeHost("vc01.lab.local")),
+				"hostname is not an IP literal");
+		T.check(!VCenterCertificates.nameMatches("300.1.1.1", both),
+				"out-of-range dotted host does not match");
+
 		X509Certificate wild = cert(dir, "wild", "CN=wild",
 				"dns:*.lab.local,dns:*.com");
 		T.check(VCenterCertificates.nameMatches("vc02.lab.local", wild),

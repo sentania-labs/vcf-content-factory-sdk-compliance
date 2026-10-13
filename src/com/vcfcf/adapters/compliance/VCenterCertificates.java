@@ -442,8 +442,21 @@ public final class VCenterCertificates {
 	private static final Pattern IPV4 =
 			Pattern.compile("^\\d{1,3}(\\.\\d{1,3}){3}$");
 
-	private static boolean isIpLiteral(String h) {
-		return h.indexOf(':') >= 0 || IPV4.matcher(h).matches();
+	/**
+	 * True for an IPv6 literal (any colon, the bracket already removed by
+	 * normalizeHost) or a dotted quad whose four octets are each 0 to 255.
+	 * A dotted string with an out-of-range octet (300.1.1.1) is not a
+	 * literal, so it is never handed to InetAddress, which would resolve
+	 * it through DNS.
+	 */
+	static boolean isIpLiteral(String h) {
+		if (h == null) return false;
+		if (h.indexOf(':') >= 0) return true;
+		if (!IPV4.matcher(h).matches()) return false;
+		for (String octet : h.split("\\.")) {
+			if (Integer.parseInt(octet) > 255) return false;
+		}
+		return true;
 	}
 
 	/** The address of an IP literal, never a DNS lookup; null otherwise. */
