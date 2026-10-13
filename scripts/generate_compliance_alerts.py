@@ -528,11 +528,13 @@ def render(controls: list):
         f'cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
         f'      <State severity="Automatic">\n'
         f'        <Impact type="badge" key="risk"/>\n'
-        f'        <SymptomSets operator="or">\n'
-        f'          <SymptomSet ref="{OVERRIDES_SYMPTOM}" operator="and"\n'
-        f'                      aggregation="any" applyOn="self" '
+        # Build 91: one symptom goes bare. VCF Operations rejects a
+        # <SymptomSets> container with fewer than two children ("A
+        # composite symptom set should contain at least two Symptom
+        # Sets"), which failed the build 90 install.
+        f'        <SymptomSet ref="{OVERRIDES_SYMPTOM}" operator="and"\n'
+        f'                    aggregation="any" applyOn="self" '
         f'negateCondition="false"/>\n'
-        f'        </SymptomSets>\n'
         f'        <Recommendations>\n'
         f'          <Recommendation ref="{OVERRIDES_REC_ID}" priority="1"/>\n'
         f'        </Recommendations>\n'

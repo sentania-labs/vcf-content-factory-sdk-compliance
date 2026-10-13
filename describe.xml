@@ -4154,10 +4154,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_overrides_vcenter_not_loaded" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_overrides_vcenter_not_loaded" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_overrides_check" priority="1"/>
         </Recommendations>

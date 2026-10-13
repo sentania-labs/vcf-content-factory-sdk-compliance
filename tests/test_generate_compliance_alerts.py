@@ -258,8 +258,11 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(self.props[a.get("nameKey")],
                          gen.ALERT_NAME_PREFIX
                          + "Compliance overrides file not loaded")
+        # Build 91: a single symptom set is bare under State, never in a
+        # <SymptomSets> container (Ops rejects a one-child composite).
+        self.assertIsNone(a.find(NS + "State/" + NS + "SymptomSets"))
         refs = [x.get("ref") for x in a.findall(
-            NS + "State/" + NS + "SymptomSets/" + NS + "SymptomSet")]
+            NS + "State/" + NS + "SymptomSet")]
         self.assertEqual(refs, [gen.OVERRIDES_SYMPTOM])
         rec = a.find(NS + "State/" + NS + "Recommendations/"
                      + NS + "Recommendation")

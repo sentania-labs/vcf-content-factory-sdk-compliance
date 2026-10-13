@@ -20,6 +20,7 @@ for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 python3 tests/test_generate_compliance_alerts.py
+python3 tests/test_describe_symptom_sets.py
 python3 tests/test_dashboard_alert_lists.py
 python3 tests/test_dashboard_widget_types.py
 python3 tests/test_overrides_template.py
