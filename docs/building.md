@@ -44,6 +44,18 @@ python3 -m sdk_buildkit validate-sdk .   # cheap loop: compile-check
 python3 -m sdk_buildkit build-sdk .      # emits the .pak
 ```
 
+**Buildkit version: 1.0.11 or later (since build 93).** Build 93
+overrides the framework's `certificateCheckUrls` hook (the Validate
+Connection certificate accept dialog), which first ships in
+sdk-buildkit 1.0.11. The override is marked `@Override` on purpose: with
+sdk-buildkit 1.0.10 or older, `validate-sdk` and `build-sdk` fail to
+compile with "method does not override or implement a method from a
+supertype" instead of building a pak that never offers the dialog. A
+tagged release of build 93 or later therefore needs the floating
+`sdk-buildkit-v1` tag (which CI uses) to point at 1.0.11 or later, or a
+pinned 1.0.11+ tag. A build inside a VCF Content Factory checkout
+compiles the framework from the checkout and is not affected.
+
 **Profile data contract.** The bundled profiles under
 `profiles/canonical/` follow [CANONICAL_SCHEMA.md](../CANONICAL_SCHEMA.md),
 the column-by-column contract between the normalizer scripts and the

@@ -103,12 +103,14 @@ one page: vCenter, clusters, distributed switches and portgroups.
    **Administration > Integrations > Accounts > Add**. Give it your
    vCenter address, using the name on the vCenter's certificate rather
    than its IP, and a vCenter account with read access (see
-   [installing.md](docs/installing.md) for the exact privileges). Leave
-   the compliance profile at `Auto (by version)`.
-4. Click **Validate Connection**. If it fails with a certificate error
-   (common with a private CA or a self-signed vCenter certificate), set
-   **Allow Insecure SSL** to `true` for now. A version that lets you
-   accept the certificate from that dialog instead is in progress.
+   [installing.md](docs/installing.md) for the exact privileges). The
+   overrides file and the appliance-settings switch are under
+   **Advanced Settings**; you can leave both alone to start.
+4. Click **Validate Connection**. If the vCenter certificate is
+   self-signed or from a private CA, VCF Operations shows it for review:
+   accept it, and the account trusts it from then on. Accepting does not
+   fix a name mismatch, which is why step 3 asks for the name on the
+   certificate.
 5. Wait. The pack collects every 5 minutes, and the per-control alerts need
    a second collection before they fire, so give it about 15 minutes before
    you judge the results. Nothing needs enabling in a policy: the
@@ -167,14 +169,22 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   the last account to collect. The alert "Compliance overrides file not
   loaded" fires on the vCenter when the named file is missing or is not
   valid XML. See [docs/overrides.md](docs/overrides.md).
-- **The Custom profile CSV is gone.** (Build 92.) The Compliance Profile
-  setting offers `Auto (by version)` and the bundled SCG versions only,
-  and the Custom Profile CSV Path setting is removed. An account still set
-  to `Custom` logs one WARN when it is configured and runs as
-  `Auto (by version)`. Its vCenter's `Rollup|Benchmark|Custom|objects`
+- **The Custom profile CSV is gone.** (Build 92.) The Custom Profile
+  CSV Path setting is removed. An account still stored as `Custom` runs
+  as `Auto (by version)`; its vCenter's `Rollup|Benchmark|Custom|objects`
   is set to 0 once, on the first complete collection after it is
   configured, so the retired count does not linger. Site changes go in
   the overrides file.
+- **No profile choice, no insecure switch.** (Build 93.) The account
+  has no Compliance Profile setting: every object is scored against the
+  SCG for its own version. To pin a version for the whole account or one
+  object kind, use the [overrides file](docs/overrides.md#profile-pin-the-guide-version).
+  Allow Insecure SSL is gone too: the vCenter certificate is always
+  validated, and an untrusted one is accepted in the Validate Connection
+  dialog. An account upgraded with a fixed profile or with Allow
+  Insecure SSL on logs one line saying what changed; one that relied on
+  Allow Insecure SSL may need its certificate accepted (see
+  [installing.md](docs/installing.md#tls-to-vcenter-certificate-trust)).
 - **VMs that use a dvfilter on purpose now fail `vm.dvfilter`.** (Build
   90.) The pack now finds `ethernet*.filter*.name` settings, so a VM with a
   dvfilter attached (for example an NSX for vSphere distributed firewall or
@@ -185,11 +195,11 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   control's metric is set to -1 on every collection while the Skip is in
   the file, so its alert cancels after three collections. In build 90
   and 91 it was set once and the alert stayed open.
-- **Upgrades keep your settings.** An existing account keeps the
-  compliance profile it was set to, even if a new version changes the
-  default. An account from before version-aware scoring with no stored
-  profile keeps scoring against SCG 8.0 until you set it to
-  `Auto (by version)`.
+- **Upgrades keep your accounts.** An existing account keeps its id,
+  history and remaining settings. Since build 93 every account runs
+  `Auto (by version)`, including one that stored a fixed SCG before; to
+  keep such an account on one SCG, add the instance-wide pin to its
+  overrides file.
 
 ## Known issues
 

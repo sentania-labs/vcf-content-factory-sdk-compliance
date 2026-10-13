@@ -17,7 +17,9 @@ You can:
 - **Use your own expected value (Override).** For example, allow 5
   failed logon attempts instead of the guide's value.
 - **Pin the guide version (Profile).** For every object of the account,
-  or for one object kind, instead of Auto (by version).
+  or for one object kind, instead of Auto (by version). Since build 93
+  this file is the only place to pin a version: the account no longer
+  has a Compliance Profile setting.
 
 You cannot:
 
@@ -157,11 +159,17 @@ override.
 <Profile kind="VirtualMachine" version="SCG 8.0"/>
 ```
 
-Without `kind`, the pin applies to every object of the account. With
-`kind`, it applies to that object kind only, and wins over a pin
-without `kind`. Objects of other kinds keep the account's own choice
-(Auto (by version) or a fixed guide). A pin also replaces a fixed guide
-for the kinds it names.
+Without `kind`, the pin applies to every object of the account,
+whatever its version: the instance-wide pin. With `kind`, it applies to
+that object kind only, and wins over the instance-wide pin wherever the
+two are written in the file. Objects of kinds no pin covers stay on
+Auto (by version).
+
+To keep an account that used a fixed Compliance Profile before build 93
+on that guide, add the instance-wide pin, for example
+`<Profile version="SCG 9.0"/>` for an account that was set to
+`VMware_SCG_9.0`. The upgrade log line for the account names the entry
+to add.
 
 Versions: `SCG 6.7`, `SCG 7.0`, `SCG 8.0`, `SCG 9.0`, `SCG 9.1`.
 
@@ -190,8 +198,7 @@ under VCF-CF Compliance, Summary:
 
 "In force" counts only entries for controls that a guide version this
 account uses actually checks: every bundled version under Auto (by
-version), the chosen version under a fixed guide, and the pinned
-version for a pinned kind. An entry for a control only another version
+version), and the pinned version for a pinned kind. An entry for a control only another version
 has is accepted (it is valid) but changes nothing here, so it is not
 counted.
 

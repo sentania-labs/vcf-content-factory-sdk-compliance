@@ -9,21 +9,23 @@ inside see [overview.md](overview.md).
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| vCenter Host / IP | Yes | - | vCenter FQDN or IP |
+| vCenter Host / IP | Yes | - | vCenter, by the name on its certificate (installing.md, TLS section) |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0 or VMware_SCG_9.1 (Custom was removed in build 92) |
-| Overrides file | No | - | Build 90. Name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
-| Allow Insecure SSL | No | false | Accept self-signed certificates |
-| Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
+| Overrides file | No | - | Advanced Settings. Build 90. Name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
+| Read vCenter appliance settings | No | false | Advanced Settings; a true/false choice. Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 
-**Existing instances keep their stored profile on upgrade.** VCF Ops
-stores the configured value on each adapter instance, and a pak upgrade
-does not rewrite it (the new default applies to new instances only). An instance stored as a fixed `VMware_SCG_9.1`, for example, keeps scoring
-every object against SCG 9.1 until someone edits it to `Auto (by version)`. An instance with no stored value keeps the pre-v3
-fallback, SCG 8.0. An instance stored as `Custom` (removed in build 92)
-logs one WARN each time it is configured and runs as `Auto (by
-version)`.
+**No profile setting (build 93).** The Compliance Profile setting is
+removed and every instance runs Auto (by version). An instance that
+stored a fixed SCG (for example `VMware_SCG_9.1`) or `Custom` logs one
+INFO line each time it is configured, naming the stored value, and runs
+Auto. To score every object of an instance against one SCG, use the
+overrides file's instance-wide pin, `<Profile version="SCG 9.1"/>`.
+
+**No Allow Insecure SSL (build 93).** The vCenter certificate is always
+validated; an untrusted one is accepted in the Validate Connection
+dialog. An instance that stored `allowInsecure=true` logs one WARN each
+time it is configured. See installing.md, TLS section.
 
 ## Benchmark selection
 
@@ -40,10 +42,10 @@ version)`.
   collected: `profile_name` = `benchmark unknown: ESX version unreadable`,
   score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
   "Compliance data not collected").
-- **Fixed profile:** that SCG for every object regardless of version.
-- **Overrides file (build 90):** applied on top of whichever of the above
-  is set. A `Profile` pin replaces the choice for every kind (no `kind`)
-  or for one kind (a `kind` pin wins over an instance pin); `Skip` removes
+- **Overrides file (build 90):** applied on top. A `Profile` pin
+  replaces Auto for every kind (no `kind`, the instance-wide pin) or for
+  one kind (a `kind` pin wins over the instance-wide pin), whatever the
+  object's version; `Skip` removes
   a control from every loaded profile; `Override` replaces its expected
   value. The manual-review list still applies. See
   [overrides.md](overrides.md).

@@ -23,13 +23,16 @@ Generated from `describe.xml` and `resources.properties`.
 | Field | Key | Default | Required |
 |---|---|---|---|
 | vCenter Host / IP | `vcenter_host` | — | Yes |
-| Compliance Profile | `benchmark_profile` | Auto (by version) | Yes |
 | Overrides file (name of your copy in Management Packs Configuration, without .xml) | `overrides_file` | - | No |
-| Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | false | No |
 | Read vCenter appliance settings (true needs the account in SSO group SystemConfiguration.Administrators, which also grants appliance write access) | `read_appliance_settings` | false | No |
 
 The Overrides file setting (build 90) names your copy of
 `compliance_overrides_template`; see [docs/overrides.md](docs/overrides.md).
+It and Read vCenter appliance settings sit under Advanced Settings. Build
+93 removes Compliance Profile (`benchmark_profile`; every instance runs
+Auto (by version), pins live in the overrides file) and Allow Insecure
+SSL (`allowInsecure`; the vCenter certificate is always validated and an
+untrusted one is accepted in the Validate Connection dialog).
 
 ---
 
