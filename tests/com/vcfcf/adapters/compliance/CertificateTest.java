@@ -128,8 +128,12 @@ public final class CertificateTest {
 		T.eq(VCenterCertificates.Failure.NAME_MISMATCH,
 				VCenterCertificates.classify(new RuntimeException("wrap",
 						new java.io.IOException(
-								"hostname mismatch, should be <vc01>"))),
-				"a further rewording: hostname plus should be, in a cause");
+								"HTTPS hostname mismatch, should be <vc01>"))),
+				"a further rewording: https hostname plus should be, in a cause");
+		T.eq(null, VCenterCertificates.classify(
+				new java.net.UnknownHostException(
+						"hostname vc01 should be resolvable")),
+				"near miss: hostname plus should be without https is not a name mismatch");
 		T.eq(null, VCenterCertificates.classify(new java.io.IOException(
 				"unknown hostname vc01")),
 				"hostname alone is not a name mismatch");

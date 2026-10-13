@@ -164,15 +164,18 @@ public final class VCenterCertificates {
 	 * {@code HttpsURLConnection}'s post-handshake hostname rejection. The
 	 * wording moved between JDKs: 17 says {@code HTTPS hostname wrong:
 	 * should be <host>}, 25 says {@code Wrong HTTPS hostname: should be
-	 * <host>}. Matched loosely (case-insensitive "hostname" plus "should
-	 * be") so a further rewording keeps the name-mismatch guidance.
+	 * <host>}. Also matched loosely (case-insensitive "https hostname"
+	 * plus "should be") so a further rewording keeps the name-mismatch
+	 * guidance. A bare "hostname" is not enough: an unrelated error such
+	 * as an UnknownHostException saying "hostname vc01 should be
+	 * resolvable" must not read as a name mismatch.
 	 */
 	static boolean isHostnameWrong(String m) {
 		if (m == null) return false;
 		String l = m.toLowerCase(java.util.Locale.ROOT);
 		return l.contains("https hostname wrong")
 				|| l.contains("wrong https hostname")
-				|| (l.contains("hostname") && l.contains("should be"));
+				|| (l.contains("https hostname") && l.contains("should be"));
 	}
 
 	/**
