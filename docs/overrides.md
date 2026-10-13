@@ -105,7 +105,11 @@ The value must suit the control:
 
 - A number control takes a whole number, such as `5` or `900`.
 - A true/false control takes `true` or `false`.
-- A text control takes any text.
+- A text control takes any text. On a text advanced setting, `NULL`
+  (any case) and a blank quoted value such as `" "` are rejected. `""`
+  means "set, with an empty value" and is accepted only where the
+  guide's own value for that control is empty (`esx.network-dvfilter`);
+  anywhere else it is rejected.
 
 These forms also work:
 
@@ -202,7 +206,7 @@ The reason is one of:
 |---|---|
 | `refused (HTTP 401)`, `refused (HTTP 403)` | VCF Operations answered and refused the identity the adapter uses to read the file. |
 | `HTTP <status>` | VCF Operations answered with that error, for example `HTTP 503`. |
-| `no Suite API channel` | The adapter has no connection to VCF Operations on this collector. |
+| `no Suite API channel` | The adapter has no connection to VCF Operations on this collector. The status then reaches Compliance World only: it is not written to the vCenter object, so the alert cannot fire. |
 | `no answer (<error>)` | VCF Operations was not reached, for example a timeout. |
 
 The time is the collector's local time.
@@ -250,6 +254,10 @@ file not loaded** fires on the vCenter object when:
   `fetch failed: <reason>, no copy in force`), or
 - the file could not be read for 3 collections in a row, even with an
   earlier copy in force (status `fetch failed N cycles: ...`).
+
+With no Suite API channel, the status reaches Compliance World only and
+the vCenter alert cannot fire; check Compliance World's Summary keys and
+the "Ambient Suite API stitcher unavailable" line in the adapter log.
 
 A missing file means no overrides at all. The pack never keeps using an
 old copy of a file that is gone. A broken or unreadable file keeps the

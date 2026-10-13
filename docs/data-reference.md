@@ -94,6 +94,23 @@ file, Expected reads `<value> (site override)` and a read Actual reads
 Actual reads `(skipped by override file <name>)` once its 0 or 1 has
 been set to -1.
 
+Actual values you can see:
+
+- the value read, for example `TRUE` or `900`.
+- `(undefined)`: the setting is not set on the object (absent, or set
+  with an empty value). Compliant is 1 when the guide allows it to be
+  unset (`X or Undefined`, `X or Not Present`, bare `Not Present`) and 0
+  otherwise (build 90; before build 90 an unset setting was skipped).
+- `""`: the setting is set with an empty value and the guide's value is
+  explicitly empty (`esx.network-dvfilter`); Compliant is 1.
+- `<key>=<value>; <key>=<value>`: a control whose parameter is a key
+  pattern (`vm.dvfilter`, `ethernet*.filter*.name`) lists every
+  matching setting with its value, for example
+  `ethernet0.filter0.name=dvfilter-generic-vmware`. Any match fails
+  `Not Present` (build 90; before build 90 this control always passed).
+- `(unreadable)`: the read failed; Compliant is -1.
+- the site-override and skipped forms above.
+
 Per object:
 ```
 VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."

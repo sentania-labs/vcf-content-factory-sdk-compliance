@@ -481,8 +481,41 @@ public final class ComplianceOverrides {
 				return "'" + t + "' is not true or false";
 			}
 			default:
-				return "n/a".equalsIgnoreCase(t) ? "N/A is not a value" : null;
+				if ("n/a".equalsIgnoreCase(t)) return "N/A is not a value";
+				if ("advanced_setting".equals(c.parameterKind)) {
+					return checkTextAdvanced(c, t);
+				}
+				return null;
 		}
+	}
+
+	/**
+	 * Build 90 (N6): the explicit-empty forms on a text advanced setting.
+	 * The evaluator passes a present, empty value against an expected value
+	 * of {@code ""} or {@code NULL}, so those forms would turn that pass on
+	 * for any control. {@code NULL} (any case) reads like a literal value
+	 * and is rejected; a quoted blank such as {@code " "} is rejected; a
+	 * bare {@code ""} is accepted only when the guide's own value for the
+	 * control is itself empty ({@code esx.network-dvfilter}).
+	 */
+	private static String checkTextAdvanced(BenchmarkProfile.Control c,
+			String t) {
+		if ("null".equalsIgnoreCase(t)) {
+			return "NULL is not a value; write \"\" for an explicitly empty "
+					+ "setting where the guide allows it";
+		}
+		if (t.length() >= 2 && t.charAt(0) == '"'
+				&& t.charAt(t.length() - 1) == '"') {
+			String inner = t.substring(1, t.length() - 1);
+			if (inner.trim().isEmpty()) {
+				if (!inner.isEmpty()) return "a blank quoted value is not a value";
+				return ControlEvaluator.expectsExplicitEmpty(c.suggestedValue)
+						? null
+						: "\"\" (explicitly empty) is accepted only where the "
+								+ "guide's own value is empty";
+			}
+		}
+		return null;
 	}
 
 	// ----- resolve against the loaded profiles ----------------------------

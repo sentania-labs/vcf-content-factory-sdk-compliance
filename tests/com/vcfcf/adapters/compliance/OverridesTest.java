@@ -211,6 +211,23 @@ public final class OverridesTest {
 		ok(strVim, "vmx-21 or higher");
 		bad(strVim, "n/a");
 		ok(strAdvVm, "FALSE or Undefined");
+		// build 90 (N6): explicit-empty forms on a text advanced setting
+		BenchmarkProfile.Control strAdv = find(p90, "esx.log-level");
+		BenchmarkProfile.Control dvf = find(p90, "esx.network-dvfilter");
+		T.eq("string", strAdv.valueType, "fixture: string advanced setting");
+		T.eq("advanced_setting", dvf.parameterKind, "fixture: dvfilter advanced");
+		ok(strAdv, "info");
+		bad(strAdv, "NULL");
+		bad(strAdv, "null");
+		bad(strAdv, "Null");
+		bad(strAdv, "\" \"");               // quoted blank
+		bad(strAdv, "   ");                  // whitespace only
+		bad(strAdv, "\"\"");                 // guide value is not empty
+		bad(strAdv, "not:null");
+		ok(dvf, "\"\"");                     // guide value is ""
+		bad(dvf, "NULL");
+		bad(dvf, "\"  \"");
+		ok(dvf, "10.0.0.1");
 	}
 
 	static void ok(BenchmarkProfile.Control c, String v) {

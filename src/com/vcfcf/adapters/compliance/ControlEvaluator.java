@@ -133,8 +133,45 @@ public final class ControlEvaluator {
 			}
 			if (param.contains("\n")) continue;
 
-			String actual = advancedSettings.get(param);
 			String expected = control.suggestedValue;
+
+			// Build 90 (W3): a parameter containing "*" is a key pattern,
+			// not a literal key (vm.dvfilter: "ethernet*.filter*.name").
+			// It used to be looked up literally, was never found, and
+			// "Not Present" passed even with ethernet0.filter0.name set.
+			// Every key in this successful read that matches the pattern
+			// is considered; a failed read never gets here (it goes to
+			// evaluateControlsUnreadable, which treats a pattern control
+			// as unreadable like any other).
+			if (isKeyPattern(param)) {
+				List<String[]> matched = matchKeys(param, advancedSettings);
+				if (matched.isEmpty()) {
+					boolean ok = allowsUndefined(expected);
+					results.add(new ControlResult(control.scgId,
+							"(undefined)", expected, ok,
+							control.description));
+					if (ok) pass++; else fail++;
+					continue;
+				}
+				boolean ok;
+				if (requiresAbsence(expected)) {
+					ok = false;
+				} else {
+					ok = true;
+					for (String[] kv : matched) {
+						if (!presentValueMatches(kv[1], expected)) {
+							ok = false;
+						}
+					}
+				}
+				results.add(new ControlResult(control.scgId,
+						describeMatches(matched), expected, ok,
+						control.description));
+				if (ok) pass++; else fail++;
+				continue;
+			}
+
+			String actual = advancedSettings.get(param);
 
 			// SCG 'or Undefined' / 'Not Present' semantics. When the
 			// VMX/host advanced setting key isn't carried in the
@@ -195,23 +232,8 @@ public final class ControlEvaluator {
 			boolean compliant;
 			if (requiresAbsence(expected)) {
 				compliant = false;
-			} else if (isNonEmptyMode(expected)) {
-				// Presence / non-empty mode (build 39). We reached this
-				// branch only because actual is non-null AND non-empty
-				// (the actual==null||isEmpty branch above already handled
-				// the absent case), so a present value is compliant.
-				compliant = nonEmptyMatches(actual);
-			} else if (isNotEqualMode(expected)) {
-				// Not-equal mode (build 39): compliant iff the PRESENT
-				// value differs from the target. A missing/empty value
-				// never reaches here (the branch above fails it, build
-				// 90), so a missing value is NEVER scored as "not equal
-				// to X, so pass".
-				compliant = notEqualMatches(actual, notEqualTarget(expected));
-			} else if (isVmxMinimumMode(expected)) {
-				compliant = vmxMinimumMatches(actual, expected);
 			} else {
-				compliant = valuesMatch(actual, expected);
+				compliant = presentValueMatches(actual, expected);
 			}
 
 			results.add(new ControlResult(
@@ -291,6 +313,83 @@ public final class ControlEvaluator {
 		// unreadableCount carries the count, the collection alert fires.
 		return new ComplianceResult(resourceName, 0, 0, 0, unreadable,
 				score(0, 0, unreadable), results);
+	}
+
+	/**
+	 * Compare a PRESENT, non-empty advanced-setting value against the
+	 * expected value in whichever comparison mode the expected value
+	 * selects. Callers short-circuit the absent / empty / unreadable cases
+	 * and bare "Not Present" before calling this.
+	 */
+	static boolean presentValueMatches(String actual, String expected) {
+		if (isNonEmptyMode(expected)) {
+			// Presence / non-empty mode (build 39): the caller reached
+			// here only with a non-null, non-empty actual.
+			return nonEmptyMatches(actual);
+		} else if (isNotEqualMode(expected)) {
+			// Not-equal mode (build 39): compliant iff the PRESENT value
+			// differs from the target. A missing/empty value never reaches
+			// here (build 90 fails it first), so a missing value is NEVER
+			// scored as "not equal to X, so pass".
+			return notEqualMatches(actual, notEqualTarget(expected));
+		} else if (isVmxMinimumMode(expected)) {
+			return vmxMinimumMatches(actual, expected);
+		}
+		return valuesMatch(actual, expected);
+	}
+
+	/** Build 90 (W3): true when an advanced-setting parameter is a key pattern. */
+	static boolean isKeyPattern(String param) {
+		return param != null && param.indexOf('*') >= 0;
+	}
+
+	/**
+	 * Build 90 (W3): the pattern for a parameter containing "*". Each "*"
+	 * matches one or more characters within a single dot-separated segment
+	 * ("ethernet*.filter*.name" matches "ethernet0.filter1.name"), and the
+	 * match is case-insensitive, as VMX keys are.
+	 */
+	static java.util.regex.Pattern keyPattern(String param) {
+		String[] parts = param.split("\\*", -1);
+		StringBuilder re = new StringBuilder();
+		for (int i = 0; i < parts.length; i++) {
+			if (i > 0) re.append("[^.]+");
+			re.append(java.util.regex.Pattern.quote(parts[i]));
+		}
+		return java.util.regex.Pattern.compile(re.toString(),
+				java.util.regex.Pattern.CASE_INSENSITIVE);
+	}
+
+	/**
+	 * Build 90 (W3): the keys in a successful settings read that match a
+	 * pattern parameter AND carry a non-empty value, as {key, value} pairs
+	 * sorted by key. A matching key with an empty value is unset, the same
+	 * rule a literal key follows.
+	 */
+	static List<String[]> matchKeys(String param, Map<String, String> settings) {
+		java.util.regex.Pattern p = keyPattern(param);
+		java.util.TreeMap<String, String> hits = new java.util.TreeMap<>();
+		for (Map.Entry<String, String> e : settings.entrySet()) {
+			String k = e.getKey();
+			String v = e.getValue();
+			if (k == null || v == null || v.isEmpty()) continue;
+			if (p.matcher(k).matches()) hits.put(k, v);
+		}
+		List<String[]> out = new ArrayList<>();
+		for (Map.Entry<String, String> e : hits.entrySet()) {
+			out.add(new String[] { e.getKey(), e.getValue() });
+		}
+		return out;
+	}
+
+	/** Build 90 (W3): Actual for a pattern control, "key=value; key=value". */
+	static String describeMatches(List<String[]> matched) {
+		StringBuilder sb = new StringBuilder();
+		for (String[] kv : matched) {
+			if (sb.length() > 0) sb.append("; ");
+			sb.append(kv[0]).append('=').append(kv[1]);
+		}
+		return sb.toString();
 	}
 
 	/**

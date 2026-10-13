@@ -239,6 +239,17 @@ informational-only.
 | `powercli_only` | Requires PowerCLI-specific cmdlet that has no direct vSphere SOAP equivalent. | no |
 | `manual_audit` | Has no machine-readable assessment command. Human review only. | no |
 
+**Key patterns (build 90).** An `advanced_setting` `parameter`
+containing `*` is a key pattern, not a literal key: each `*` matches one
+or more characters within one dot-separated segment, case-insensitive,
+against every key of the object's successful settings read. Matching
+keys with a non-empty value are the present values: bare `Not Present`
+fails on any match; other modes pass only when every match passes; no
+match takes the absent-key branch (Actual `(undefined)`). Actual lists
+the matches as `key=value; key=value`. A failed read is UNREADABLE as
+for any other `advanced_setting`. Today only `vm.dvfilter`
+(`ethernet*.filter*.name`, SCG 7.0 to 9.1) uses one.
+
 The "evaluable" flag is *derived*; there is no separate column.
 `advanced_setting` is always evaluable; `vim_property`, `esxcli`, and
 `vami_api` are evaluable only when `read_recipe` is non-empty (the recipe

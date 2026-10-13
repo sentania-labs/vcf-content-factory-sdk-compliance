@@ -56,8 +56,10 @@ first.
 because of permissions, connectivity or an unsupported read method, that
 setting counts against the score instead of being quietly treated as
 fine. A "Compliance data not collected" alert tells you which object is
-affected and what to look at. (One known gap: a setting that is simply
-absent is currently skipped rather than failed; see Known issues.)
+affected and what to look at. A setting that is simply absent (unset)
+fails, with Actual "(undefined)", unless the guide allows it to be unset:
+an expected value of "X or Undefined", "X or Not Present" or a bare "Not
+Present".
 
 ## The dashboards
 

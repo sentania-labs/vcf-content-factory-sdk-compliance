@@ -92,6 +92,7 @@ public final class ControlEvaluatorTest {
 		T.check(!forced.compliant, "unreadable overrides compliant=true");
 
 		absentAdvancedSetting();
+		patternParameter();
 
 		System.out.println("ControlEvaluatorTest: all assertions passed");
 	}
@@ -184,5 +185,67 @@ public final class ControlEvaluatorTest {
 				"vm1");
 		T.eq(1, r.passCount, "TRUE set: pass");
 		T.eq(1, r.failCount, "FALSE set against TRUE or Undefined: fail");
+	}
+
+	/**
+	 * Build 90 (W3): a parameter containing "*" is matched as a key
+	 * pattern. vm.dvfilter ("ethernet*.filter*.name", Not Present) used to
+	 * look the pattern up as a literal key and always passed.
+	 */
+	private static void patternParameter() {
+		BenchmarkProfile.Control dvf = advCtl("vm.dvfilter",
+				"ethernet*.filter*.name", "Not Present");
+		java.util.List<BenchmarkProfile.Control> one = Arrays.asList(dvf);
+
+		// No filter keys: pass, Actual (undefined).
+		Map<String, String> vm = new HashMap<>();
+		vm.put("ethernet0.virtualDev", "vmxnet3");
+		vm.put("ethernet0.present", "TRUE");
+		ControlEvaluator.ComplianceResult r = ControlEvaluator
+				.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.passCount, "no filter keys: pass");
+		T.eq(1, r.totalCount, "no filter keys: counted");
+		T.eq("(undefined)", r.controlResults.get(0).actual,
+				"no filter keys: Actual (undefined)");
+
+		// One filter key: fail, with the key named in Actual.
+		vm.put("ethernet0.filter0.name", "dvfilter-generic-vmware");
+		r = ControlEvaluator.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.failCount, "one filter key: fail");
+		T.eq(0, r.passCount, "one filter key: no pass");
+		T.check(!r.controlResults.get(0).compliant, "one filter key: not compliant");
+		T.eq("ethernet0.filter0.name=dvfilter-generic-vmware",
+				r.controlResults.get(0).actual, "Actual names the matched key");
+
+		// Several, case-insensitive, sorted, listed together.
+		vm.put("Ethernet1.Filter2.name", "nsx-dvfilter");
+		r = ControlEvaluator.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.failCount, "two filter keys: one fail");
+		T.eq("Ethernet1.Filter2.name=nsx-dvfilter; "
+				+ "ethernet0.filter0.name=dvfilter-generic-vmware",
+				r.controlResults.get(0).actual, "Actual lists every match");
+
+		// A matching key with an empty value is unset, like a literal key.
+		Map<String, String> blank = new HashMap<>();
+		blank.put("ethernet0.filter0.name", "");
+		r = ControlEvaluator.evaluateControls(one, blank, "vm1");
+		T.eq(1, r.passCount, "empty filter name: unset, pass");
+
+		// A non-matching key does not count.
+		Map<String, String> near = new HashMap<>();
+		near.put("ethernet0.filter0.name.extra", "x");
+		near.put("ethernet0.filter.name", "x");
+		r = ControlEvaluator.evaluateControls(one, near, "vm1");
+		T.eq(1, r.passCount, "keys outside the pattern: pass");
+
+		// A failed read stays unreadable: never a pass.
+		r = ControlEvaluator.evaluateControlsUnreadable(one, "vm1");
+		T.eq(1, r.unreadableCount, "read failure: unreadable");
+		T.eq(0, r.passCount, "read failure: no pass");
+		T.check(r.controlResults.get(0).unreadable, "read failure: marked unreadable");
+		T.check(!r.controlResults.get(0).compliant, "read failure: not compliant");
+
+		T.check(ControlEvaluator.keyPattern("ethernet*.filter*.name")
+				.matcher("ethernet12.filter3.name").matches(), "pattern multi-digit");
 	}
 }

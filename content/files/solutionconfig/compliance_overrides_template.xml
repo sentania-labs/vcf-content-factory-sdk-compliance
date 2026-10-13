@@ -47,6 +47,9 @@
   OVERRIDE: score against your value instead of the guide's value.
   The value must suit the control: a whole number for a number control,
   true or false for a true/false control, any text for a text control.
+  On a text advanced setting, NULL and a blank quoted value are rejected,
+  and "" (set, but empty) is accepted only where the guide's own value is
+  empty (esx.network-dvfilter).
   These forms also work:
     (non-empty)       compliant when the setting has any value
     not:X             compliant when the setting has a value other than X
