@@ -21,14 +21,21 @@ CHILD_TAGS = {NS + "SymptomSet", NS + "SymptomSets"}
 
 
 def undersized(root):
-    """Every <SymptomSets> (any depth) with fewer than two set children,
-    as (owning alert id, child count)."""
+    """Every <SymptomSets> anywhere in the describe with fewer than two set
+    children, as (enclosing alert id or None, child count). Scans the whole
+    tree, not just AlertDefinitions, so a container in any section fails."""
+    parent = {c: p for p in root.iter() for c in p}
     out = []
-    for alert in root.iter(NS + "AlertDefinition"):
-        for sets in alert.iter(NS + "SymptomSets"):
-            n = sum(1 for c in sets if c.tag in CHILD_TAGS)
-            if n < 2:
-                out.append((alert.get("id"), n))
+    for sets in root.iter(NS + "SymptomSets"):
+        n = sum(1 for c in sets if c.tag in CHILD_TAGS)
+        if n < 2:
+            alert, node = None, sets
+            while node in parent:
+                node = parent[node]
+                if node.tag == NS + "AlertDefinition":
+                    alert = node.get("id")
+                    break
+            out.append((alert, n))
     return out
 
 
@@ -41,7 +48,8 @@ class DescribeSymptomSetsTest(unittest.TestCase):
 
     def test_detector_catches_one_child_composite(self):
         # Guard the guard: a one-child and an empty container both flag,
-        # a two-child one and a nested two-child one do not.
+        # a two-child one and a nested two-child one do not, and a container
+        # outside any AlertDefinition still flags (alert id None).
         xml = (
             f'<r xmlns="{NS[1:-1]}">'
             '<AlertDefinition id="one"><State><SymptomSets operator="or">'
@@ -55,9 +63,12 @@ class DescribeSymptomSetsTest(unittest.TestCase):
             '<SymptomSet ref="a"/><SymptomSets operator="or">'
             '<SymptomSet ref="b"/></SymptomSets></SymptomSets>'
             '</State></AlertDefinition>'
+            '<Other><SymptomSets operator="or"><SymptomSet ref="c"/>'
+            '</SymptomSets></Other>'
             '</r>')
         self.assertEqual(undersized(ET.fromstring(xml)),
-                         [("one", 1), ("empty", 0), ("nested", 1)])
+                         [("one", 1), ("empty", 0), ("nested", 1),
+                          (None, 1)])
 
 
 if __name__ == "__main__":
