@@ -42,9 +42,8 @@ version)`.
   "Compliance data not collected").
 - **Fixed profile:** that SCG for every object regardless of version.
 - **Overrides file (build 90):** applied on top of whichever of the above
-  is set. A `Profile` pin replaces the choice for the one kind it names
-  (`kind` is required since build 92; a pin without `kind` is rejected,
-  because the instance setting owns the instance-wide choice); `Skip` removes
+  is set. A `Profile` pin replaces the choice for every kind (no `kind`)
+  or for one kind (a `kind` pin wins over an instance pin); `Skip` removes
   a control from every loaded profile; `Override` replaces its expected
   value. The manual-review list still applies. See
   [overrides.md](overrides.md).

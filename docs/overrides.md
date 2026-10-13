@@ -2,7 +2,7 @@
 
 You tune the compliance pack from one XML file in VCF Operations. You
 can turn a control off, score a control against your own value, or pin
-the guide version for one object kind. Nothing is copied to a collector. Every collector
+the guide version. Nothing is copied to a collector. Every collector
 reads the file from VCF Operations at the start of each collection.
 
 The bundled guides, Auto (by version), and the manual-review list keep
@@ -16,9 +16,8 @@ You can:
   no longer counts in the score. Its metric reads -1 (not evaluated).
 - **Use your own expected value (Override).** For example, allow 5
   failed logon attempts instead of the guide's value.
-- **Pin the guide version for one object kind (Profile).** For example,
-  score VMs against SCG 8.0 while everything else stays on Auto (by
-  version).
+- **Pin the guide version (Profile).** For every object of the account,
+  or for one object kind, instead of Auto (by version).
 
 You cannot:
 
@@ -30,9 +29,6 @@ You cannot:
   stay that way. An entry naming one is rejected.
 - **Change an alert's name, severity or recommendation.** Those ship
   with the pack.
-- **Pin every object to one guide version.** That is the account's
-  **Compliance Profile** setting (Auto (by version) or one bundled SCG).
-  A `Profile` entry without `kind` is rejected.
 
 ## Step 1: Copy the template
 
@@ -86,6 +82,7 @@ A file with all three entry types:
 <ComplianceOverrides>
   <Skip control="esx.account-lockout-duration"/>
   <Override control="esx.account-lockout-max-attempts" expected="5"/>
+  <Profile version="SCG 9.0"/>
   <Profile kind="VirtualMachine" version="SCG 8.0"/>
 </ComplianceOverrides>
 ```
@@ -153,18 +150,18 @@ it was scored against.
 A setting the pack could not read is never a pass, with or without an
 override.
 
-### Profile: pin the guide version for one kind
+### Profile: pin the guide version
 
 ```xml
+<Profile version="SCG 9.0"/>
 <Profile kind="VirtualMachine" version="SCG 8.0"/>
 ```
 
-The pin applies to that object kind only. Objects of other kinds keep
-the account's own choice (Auto (by version) or a fixed guide). A pin
-also replaces a fixed guide for the kind it names. `kind` is required:
-`<Profile version="SCG 9.0"/>` is rejected with "instance-wide pin: use
-the Compliance Profile setting", because the account's Compliance
-Profile setting is the one place for that choice.
+Without `kind`, the pin applies to every object of the account. With
+`kind`, it applies to that object kind only, and wins over a pin
+without `kind`. Objects of other kinds keep the account's own choice
+(Auto (by version) or a fixed guide). A pin also replaces a fixed guide
+for the kinds it names.
 
 Versions: `SCG 6.7`, `SCG 7.0`, `SCG 8.0`, `SCG 9.0`, `SCG 9.1`.
 
@@ -251,8 +248,6 @@ Reasons you can see:
 - a value that does not suit the control (the guide's value is kept)
 - an Override of a control that is also skipped (the Skip wins)
 - an unknown version or kind
-- a `Profile` without `kind` (instance-wide pin: use the Compliance
-  Profile setting)
 - an unknown entry type or attribute
 - a second entry for the same control, or a second pin for the same
   kind (the first one is used)

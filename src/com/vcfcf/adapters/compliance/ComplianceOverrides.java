@@ -36,6 +36,7 @@ import org.w3c.dom.NodeList;
  * &lt;ComplianceOverrides&gt;
  *   &lt;Skip control="esx.account-lockout-max-attempts"/&gt;
  *   &lt;Override control="esx.account-lockout-max-attempts" expected="5"/&gt;
+ *   &lt;Profile version="SCG 9.0"/&gt;
  *   &lt;Profile kind="VirtualMachine" version="SCG 8.0"/&gt;
  * &lt;/ComplianceOverrides&gt;
  * </pre>
@@ -51,11 +52,9 @@ import org.w3c.dom.NodeList;
  *       mode ({@link #checkValue}). A value that fails the check in any
  *       profile is rejected for every profile: the SCG value stays, never a
  *       pass.</li>
- *   <li>{@code Profile}: pins the SCG version for one object kind
- *       ({@code kind} is required), in place of Auto (by version) or the
- *       fixed choice. Build 92: a Profile without {@code kind} (an
- *       instance-wide pin) is rejected; the instance's Compliance Profile
- *       setting owns that choice, so each decision has one place.</li>
+ *   <li>{@code Profile}: pins the SCG version for the instance, or with
+ *       {@code kind} for one object kind, in place of Auto (by version) or
+ *       the fixed choice. A per-kind pin wins over the instance pin.</li>
  * </ul>
  *
  * <p>Unknown elements, attributes, versions, kinds and control ids are
@@ -80,7 +79,7 @@ public final class ComplianceOverrides {
 		public final String control;       // SKIP, OVERRIDE
 		public final String expected;      // OVERRIDE
 		public final String profileName;   // PROFILE: resolved bundled name
-		public final BenchmarkSelector.Kind kind;   // PROFILE: the pinned kind
+		public final BenchmarkSelector.Kind kind;   // PROFILE: null = instance
 		public final String text;          // the entry as written, for logs
 
 		Entry(Type type, String control, String expected, String profileName,
@@ -153,6 +152,7 @@ public final class ComplianceOverrides {
 		List<String> rejected = new ArrayList<>();
 		Set<String> skipped = new LinkedHashSet<>();
 		Set<String> overridden = new LinkedHashSet<>();
+		boolean instancePin = false;
 		Set<BenchmarkSelector.Kind> kindPins =
 				java.util.EnumSet.noneOf(BenchmarkSelector.Kind.class);
 
@@ -185,12 +185,6 @@ public final class ComplianceOverrides {
 				continue;
 			}
 			if (type == Type.PROFILE) {
-				if (!el.hasAttribute("kind")) {
-					// Build 92: one place per decision. The instance-wide
-					// choice is the Compliance Profile setting.
-					rejected.add(text + ": " + INSTANCE_PIN_REJECTED);
-					continue;
-				}
 				String version = attr(el, "version");
 				if (version == null) {
 					rejected.add(text + ": missing version");
@@ -202,18 +196,30 @@ public final class ComplianceOverrides {
 							+ "' (use " + versionList() + ")");
 					continue;
 				}
-				String k = attr(el, "kind");
-				BenchmarkSelector.Kind kind = resolveKind(k);
-				if (kind == null) {
-					rejected.add(text + ": unknown kind '"
-							+ (k == null ? "" : k) + "' (use " + KIND_LIST
-							+ ")");
-					continue;
+				BenchmarkSelector.Kind kind = null;
+				if (el.hasAttribute("kind")) {
+					String k = attr(el, "kind");
+					kind = resolveKind(k);
+					if (kind == null) {
+						rejected.add(text + ": unknown kind '"
+								+ (k == null ? "" : k) + "' (use " + KIND_LIST
+								+ ")");
+						continue;
+					}
 				}
-				if (!kindPins.add(kind)) {
-					rejected.add(text + ": duplicate Profile for this kind "
-							+ "(the first one is used)");
-					continue;
+				if (kind == null) {
+					if (instancePin) {
+						rejected.add(text + ": duplicate instance Profile (the "
+								+ "first one is used)");
+						continue;
+					}
+					instancePin = true;
+				} else {
+					if (!kindPins.add(kind)) {
+						rejected.add(text + ": duplicate Profile for this kind "
+								+ "(the first one is used)");
+						continue;
+					}
 				}
 				entries.add(new Entry(Type.PROFILE, null, null, profileName,
 						kind, text));
@@ -249,13 +255,6 @@ public final class ComplianceOverrides {
 		}
 		return new Parsed(entries, rejected);
 	}
-
-	/**
-	 * Build 92: the rejection reason for a Profile without {@code kind}
-	 * (the design's wording).
-	 */
-	static final String INSTANCE_PIN_REJECTED =
-			"instance-wide pin: use the Compliance Profile setting";
 
 	/** Throws on every problem instead of printing to stderr. */
 	private static final org.xml.sax.ErrorHandler SILENT =
@@ -527,7 +526,7 @@ public final class ComplianceOverrides {
 	public static final class Resolved {
 		public static final Resolved EMPTY = new Resolved(
 				Collections.<String>emptySet(),
-				Collections.<String, String>emptyMap(),
+				Collections.<String, String>emptyMap(), null,
 				Collections.<BenchmarkSelector.Kind, String>emptyMap(),
 				Collections.<String>emptyList(),
 				Collections.<String>emptyList());
@@ -536,6 +535,8 @@ public final class ComplianceOverrides {
 		public final Set<String> skipped;
 		/** Control id to the accepted expected value. */
 		public final Map<String, String> overridden;
+		/** Instance-wide pin (bundled profile name), or null. */
+		public final String instancePin;
 		/** Per-kind pins (bundled profile names). */
 		public final Map<BenchmarkSelector.Kind, String> kindPins;
 		/** Every rejected entry, parse-time and resolve-time, one message each. */
@@ -544,10 +545,11 @@ public final class ComplianceOverrides {
 		public final List<String> applied;
 
 		Resolved(Set<String> skipped, Map<String, String> overridden,
-				Map<BenchmarkSelector.Kind, String> kindPins,
+				String instancePin, Map<BenchmarkSelector.Kind, String> kindPins,
 				List<String> rejected, List<String> applied) {
 			this.skipped = Collections.unmodifiableSet(skipped);
 			this.overridden = Collections.unmodifiableMap(overridden);
+			this.instancePin = instancePin;
 			this.kindPins = Collections.unmodifiableMap(kindPins);
 			this.rejected = Collections.unmodifiableList(rejected);
 			this.applied = Collections.unmodifiableList(applied);
@@ -558,11 +560,12 @@ public final class ComplianceOverrides {
 		}
 
 		/**
-		 * The profile name pinned for {@code kind}, or null (no pin: the
-		 * instance's mode applies).
+		 * The profile name pinned for {@code kind}: its own pin, else the
+		 * instance pin, else null (no pin: the instance's mode applies).
 		 */
 		public String pinFor(BenchmarkSelector.Kind kind) {
-			return kindPins.get(kind);
+			String p = kindPins.get(kind);
+			return p != null ? p : instancePin;
 		}
 
 		/**
@@ -674,7 +677,8 @@ public final class ComplianceOverrides {
 	 * </ul>
 	 *
 	 * @param parsed   the parsed file (null: nothing to apply)
-	 * @param profiles every profile loaded this cycle (the bundled ones)
+	 * @param profiles every profile loaded this cycle (bundled, and the
+	 *                 instance's own when it is not bundled)
 	 */
 	public static Resolved resolve(Parsed parsed,
 			Collection<BenchmarkProfile> profiles) {
@@ -683,6 +687,7 @@ public final class ComplianceOverrides {
 		List<String> applied = new ArrayList<>();
 		Set<String> skipped = new TreeSet<>();
 		Map<String, String> overridden = new LinkedHashMap<>();
+		String instancePin = null;
 		Map<BenchmarkSelector.Kind, String> kindPins =
 				new EnumMap<>(BenchmarkSelector.Kind.class);
 
@@ -703,9 +708,15 @@ public final class ComplianceOverrides {
 		for (Entry e : parsed.entries) {
 			switch (e.type) {
 				case PROFILE:
-					kindPins.put(e.kind, e.profileName);
-					applied.add("profile " + e.profileName + " for "
-							+ e.kind.rollupName);
+					if (e.kind == null) {
+						instancePin = e.profileName;
+						applied.add("profile " + e.profileName
+								+ " for every kind");
+					} else {
+						kindPins.put(e.kind, e.profileName);
+						applied.add("profile " + e.profileName + " for "
+								+ e.kind.rollupName);
+					}
 					break;
 				case SKIP: {
 					String why = scoredProblem(byId.get(e.control));
@@ -748,7 +759,8 @@ public final class ComplianceOverrides {
 				}
 			}
 		}
-		return new Resolved(skipped, overridden, kindPins, rejected, applied);
+		return new Resolved(skipped, overridden, instancePin, kindPins,
+				rejected, applied);
 	}
 
 	/**
