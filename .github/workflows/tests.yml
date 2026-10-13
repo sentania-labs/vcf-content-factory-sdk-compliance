@@ -15,6 +15,13 @@
 # ComplianceDecisionsTest, MixedVersionSimulationTest) and the generator's
 # unittest suite compile and run on a plain JDK + python3, so the full set
 # runs here, and the same set gates the tag build.
+#
+# JDK matrix: 17 (the long-standing CI JDK) and 25 (the newest LTS). JDK
+# behavior drifts between releases in ways the adapter reads: zone-name
+# rendering (CDT on 17, GMT-05:00 on 25) and the HttpsURLConnection
+# hostname-rejection wording both escaped to Codex review on 17 alone
+# (PRs #45 and #46). Both legs must pass; fail-fast is off so one leg's
+# failure does not hide the other's.
 name: tests
 
 on:
@@ -33,16 +40,20 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '25']
 
     steps:
       - name: Checkout adapter source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.java }}
 
       - name: Check generated alert definitions are current
         run: python3 scripts/generate_compliance_alerts.py --check
