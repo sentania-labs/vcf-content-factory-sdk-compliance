@@ -299,6 +299,12 @@ guide version checks the control:
 - Its Actual property reads `(skipped by override file <your file>)`.
 - It no longer counts in the object's score.
 
+This includes objects where the guide checks the control but it does not
+apply to that object, for example a skipped vSAN control on a cluster
+without vSAN. Such an object never had a metric for the control, and the
+Skip creates one that reads -1. It is not a pass: -1 means not
+evaluated, and no alert fires on it.
+
 Because the -1 is sent every collection (since build 92), an open alert
 for the control sees the samples it needs to cancel and clears after
 three collections (about 15 minutes at the default interval), the usual

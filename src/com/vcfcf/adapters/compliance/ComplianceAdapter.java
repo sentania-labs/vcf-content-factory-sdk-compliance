@@ -92,6 +92,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// overrides_overridden), not every entry accepted against any bundled
 	// profile.
 	private volatile int cycleSkippedInForce;
+	// Build 92 (review N2): the account is stored as the removed Custom
+	// profile; zero its retired rollup bucket on the next complete rollup.
+	private volatile boolean zeroCustomBucket;
 	private volatile int cycleOverriddenInForce;
 
 	public ComplianceAdapter() {
@@ -138,6 +141,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
 				profile, allowInsecure, readAppliance, overridesFile);
+		this.zeroCustomBucket = config.storedAsCustom;
 		if (config.storedAsCustom) {
 			// Build 92: the Custom profile CSV is removed. One WARN per
 			// configure; the instance runs as Auto (by version).
@@ -791,6 +795,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		java.util.Map<String, Double> stats = rollup.toStats();
+		boolean zeroedCustom = zeroCustomBucket
+				&& ComplianceRollup.zeroRetiredCustom(stats);
 		if (!rollup.incompleteKinds().isEmpty()) {
 			logWarn("Inventory listing failed this cycle for "
 					+ rollup.incompleteKinds() + " (the vCenter listing, or "
@@ -802,6 +808,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		stitcher.pushStats(vcEntry.resourceId, stats,
 				System.currentTimeMillis());
+		if (zeroedCustom) {
+			zeroCustomBucket = false;
+			logInfo("Account stored as Custom: "
+					+ ComplianceRollup.RETIRED_CUSTOM_KEY + " set to 0 once");
+		}
 		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
 				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")");
 	}
@@ -995,17 +1006,21 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			pushNoBenchmark(resourceId, d.profileName);
 		}
 		afterPush(kind, moid, d, resourceId, cs,
-				java.util.Collections.<String>emptySet());
+				java.util.Collections.<String>emptySet(), null);
 	}
 
 	/**
 	 * After an object with a decided benchmark (scored, or no benchmark):
 	 * remember the benchmark for the B2 fallback, and queue the object for
 	 * this cycle's stale-control cleanup when it was pushed.
+	 *
+	 * @param skip the skipped controls in force that went out in this
+	 *             object's push ({@link #skipInForce}); null or empty: none.
+	 *             They join the live set, so the cleanup leaves them alone.
 	 */
 	private void afterPush(BenchmarkSelector.Kind kind, String moid,
 			ComplianceDecisions.Decision d, String resourceId, CycleStats cs,
-			java.util.Set<String> pushed) {
+			java.util.Set<String> pushed, ComplianceDecisions.SkipPush skip) {
 		if (moid == null) return;
 		String prev = memory.record(LastBenchmarkMemory.key(kind, moid),
 				d.profileName);
@@ -1014,12 +1029,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ prev + "' -> '" + d.profileName + "'");
 		}
 		if (resourceId != null && stitcher != null) {
-			java.util.Set<String> skippedNow =
-					pushSkippedInForce(kind, d, resourceId, cs);
 			java.util.Set<String> live = pushed;
-			if (!skippedNow.isEmpty()) {
+			if (skip != null && !skip.isEmpty()) {
+				cs.skipPushedObjects++;
+				cs.skipPushedKeys += skip.ids.size();
 				live = new java.util.TreeSet<>(pushed);
-				live.addAll(skippedNow);
+				live.addAll(skip.ids);
 			}
 			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
 					d.profileName, live));
@@ -1027,32 +1042,24 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build 92 (adapter issue #41): push Compliant = -1 and the skip Actual
-	 * text for every skipped control in force on this object, EVERY cycle
+	 * Build 92 (adapter issue #41): Compliant = -1 and the skip Actual text
+	 * for every skipped control in force on this object, sent EVERY cycle
 	 * while the Skip is in the file ({@link ComplianceDecisions#skipPush}).
 	 * One -1 sample was not enough: the per-control symptom needs its cancel
 	 * cycles of fresh non-triggering samples before the alert cancels.
-	 * Removing the Skip stops this push and the control is scored again on
-	 * the same cycle. Returns the ids pushed, so the end-of-cycle cleanup
-	 * treats them as live.
+	 * Removing the Skip empties this and the control is scored again on the
+	 * same cycle. Review W3: the result is merged into the object's own
+	 * push ({@link ComplianceDecisions#pushObject}), never a separate call.
 	 */
-	private java.util.Set<String> pushSkippedInForce(
-			BenchmarkSelector.Kind kind, ComplianceDecisions.Decision d,
-			String resourceId, CycleStats cs) {
+	private ComplianceDecisions.SkipPush skipInForce(
+			BenchmarkSelector.Kind kind, ComplianceDecisions.Decision d) {
 		ComplianceOverrides.Resolved r = cycleOverrides;
-		if (d.profile == null || r.skipped.isEmpty()) {
-			return java.util.Collections.emptySet();
+		if (d.profile == null || r == null || r.skipped.isEmpty()) {
+			return null;
 		}
-		ComplianceDecisions.SkipPush sp = ComplianceDecisions.skipPush(kind,
+		return ComplianceDecisions.skipPush(kind,
 				cycleUnadjusted.get(d.profileName), r.skipped,
 				config.overridesFile);
-		if (sp.isEmpty()) return sp.ids;
-		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId, sp.props, ts);
-		stitcher.pushStats(resourceId, sp.stats, ts);
-		cs.skipPushedObjects++;
-		cs.skipPushedKeys += sp.ids.size();
-		return sp.ids;
 	}
 
 	/** One object queued for end-of-cycle cleanup. */
@@ -1422,9 +1429,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				if (wholeHostUnreadable) cs.hostsWhollyUnreadable++;
 			}
 
-			pushComplianceViaClient(resourceId, cr, d.profileName);
+			ComplianceDecisions.SkipPush skip =
+					skipInForce(BenchmarkSelector.Kind.HOST, d);
+			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
-					ComplianceDecisions.pushedIds(cr));
+					ComplianceDecisions.pushedIds(cr), skip);
 		}
 		logInfo("Hosts scored this cycle: " + cs.hostsScored + " of "
 				+ cs.hosts + " (" + cs.hostsNonCompliant + " non-compliant, "
@@ -1536,9 +1545,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			pushComplianceViaClient(resourceId, cr, d.profileName);
+			ComplianceDecisions.SkipPush skip =
+					skipInForce(BenchmarkSelector.Kind.VM, d);
+			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
-					ComplianceDecisions.pushedIds(cr));
+					ComplianceDecisions.pushedIds(cr), skip);
 		}
 		logInfo("VM compliance: " + cs.vms + " VMs seen, "
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
@@ -1660,12 +1671,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER, d.bucket,
 				cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-		pushComplianceViaClient(resourceId, cr, d.profileName);
+		ComplianceDecisions.SkipPush skip =
+				skipInForce(BenchmarkSelector.Kind.VCENTER, d);
+		pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 		logInfo("Pushed vCenter compliance data to " + he.hostName
 				+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
 				+ ")");
 		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs,
-				ComplianceDecisions.pushedIds(cr));
+				ComplianceDecisions.pushedIds(cr), skip);
 		return he;
 	}
 
@@ -1827,9 +1840,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 				cr.unreadableCount, cr.score);
-		pushOrProfileName(resourceId, cr, d.profileName);
+		ComplianceDecisions.SkipPush skip = skipInForce(kind, d);
+		pushOrProfileName(resourceId, cr, d.profileName, skip);
 		afterPush(kind, moid, d, resourceId, cs,
-				ComplianceDecisions.pushedIds(cr));
+				ComplianceDecisions.pushedIds(cr), skip);
 	}
 
 	/**
@@ -1876,11 +1890,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// ----- shared push / evaluation helpers -------------------------------
 
 	private void pushOrProfileName(String resourceId,
-			ControlEvaluator.ComplianceResult cr, String profileName) {
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			ComplianceDecisions.SkipPush skip) {
 		if (cr.totalCount > 0 || cr.unreadableCount > 0) {
-			pushComplianceViaClient(resourceId, cr, profileName);
+			pushComplianceViaClient(resourceId, cr, profileName, skip);
 		} else {
-			pushProfileNamePropertyOnly(resourceId, profileName);
+			pushProfileNamePropertyOnly(resourceId, profileName, skip);
 		}
 	}
 
@@ -2093,12 +2108,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * never linger. No score (never a sentinel).
 	 */
 	private void pushProfileNamePropertyOnly(String resourceId,
-			String profileName) {
-		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId,
-				ComplianceDecisions.profileNameProps(profileName), ts);
-		stitcher.pushStats(resourceId,
-				ComplianceDecisions.nothingEvaluatedStats(), ts);
+			String profileName, ComplianceDecisions.SkipPush skip) {
+		ComplianceDecisions.pushObject(stitcher, resourceId,
+				ComplianceDecisions.profileNameProps(profileName),
+				ComplianceDecisions.nothingEvaluatedStats(), skip,
+				System.currentTimeMillis());
 		logInfo("Pushed profile_name='" + profileName + "' to resource="
 				+ resourceId);
 	}
@@ -2128,13 +2142,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.
 	 */
 	private void pushComplianceViaClient(String resourceId,
-			ControlEvaluator.ComplianceResult cr, String profileName) {
-		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId,
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			ComplianceDecisions.SkipPush skip) {
+		ComplianceDecisions.pushObject(stitcher, resourceId,
 				ComplianceDecisions.complianceProps(cr, profileName,
-						siteOverriddenFor(profileName)), ts);
-		stitcher.pushStats(resourceId, ComplianceDecisions.complianceStats(cr),
-				ts);
+						siteOverriddenFor(profileName)),
+				ComplianceDecisions.complianceStats(cr), skip,
+				System.currentTimeMillis());
 	}
 
 	/** Per-cycle counters for the completion log line. */

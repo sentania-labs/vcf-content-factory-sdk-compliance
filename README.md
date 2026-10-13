@@ -171,7 +171,10 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   setting offers `Auto (by version)` and the bundled SCG versions only,
   and the Custom Profile CSV Path setting is removed. An account still set
   to `Custom` logs one WARN when it is configured and runs as
-  `Auto (by version)`. Site changes go in the overrides file.
+  `Auto (by version)`. Its vCenter's `Rollup|Benchmark|Custom|objects`
+  is set to 0 once, on the first complete collection after it is
+  configured, so the retired count does not linger. Site changes go in
+  the overrides file.
 - **VMs that use a dvfilter on purpose now fail `vm.dvfilter`.** (Build
   90.) The pack now finds `ethernet*.filter*.name` settings, so a VM with a
   dvfilter attached (for example an NSX for vSphere distributed firewall or

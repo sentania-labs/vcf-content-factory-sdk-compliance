@@ -115,6 +115,7 @@ public final class ComplianceRollupTest {
 		build88Unmatched();
 		build88Pods();
 		build88DevelWorkedExample();
+		build92RetiredCustom();
 
 		System.out.println("ComplianceRollupTest: all assertions passed");
 	}
@@ -313,5 +314,30 @@ public final class ComplianceRollupTest {
 		T.near(140, w.get(P + "All|non_compliant")
 				+ o.get(P + "All|non_compliant"),
 				"build 88 environment Non-Compliant 140");
+	}
+
+	/**
+	 * Build 92 (review N2): an account stored as the removed Custom profile
+	 * zeroes Benchmark|Custom|objects once, only on a complete rollup.
+	 */
+	static void build92RetiredCustom() {
+		ComplianceRollup r = new ComplianceRollup();
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 10, 0, 0,
+				ControlEvaluator.score(10, 0, 0));
+		Map<String, Double> s = r.toStats();
+		T.check(!s.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
+				"no Custom bucket normally");
+		T.check(ComplianceRollup.zeroRetiredCustom(s), "complete: added");
+		T.near(0, s.get(ComplianceRollup.RETIRED_CUSTOM_KEY), "pushed as 0");
+		T.eq(P + "Benchmark|Custom|objects",
+				ComplianceRollup.RETIRED_CUSTOM_KEY, "the build 91 key");
+
+		ComplianceRollup inc = new ComplianceRollup();
+		inc.markIncomplete(BenchmarkSelector.Kind.VM);
+		Map<String, Double> is = inc.toStats();
+		T.check(!ComplianceRollup.zeroRetiredCustom(is),
+				"incomplete: Benchmark keys held back, Custom not zeroed");
+		T.check(!is.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
+				"incomplete: no Custom key");
 	}
 }

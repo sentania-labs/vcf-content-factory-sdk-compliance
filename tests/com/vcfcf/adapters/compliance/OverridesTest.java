@@ -40,6 +40,7 @@ public final class OverridesTest {
 		siteOverrideProps();
 		skipRoutesToStaleKeyPath(all);
 		skipPushedEveryCycle(all);
+		skipRidesInObjectPush(all);
 		pinPrecedence(all);
 		store();
 		fetchFailureAlert();
@@ -624,6 +625,116 @@ public final class OverridesTest {
 				"Skip removed: a non-compliant host pushes 0");
 	}
 
+	/** Records every call a push makes, as the Suite API would see it. */
+	static final class CountingSink implements ComplianceDecisions.PushSink {
+		final List<Map<String, String>> props = new java.util.ArrayList<>();
+		final List<Map<String, Double>> stats = new java.util.ArrayList<>();
+
+		@Override
+		public void pushProperties(String resourceId,
+				Map<String, String> properties, long timestamp) {
+			props.add(new HashMap<>(properties));
+		}
+
+		@Override
+		public void pushStats(String resourceId, Map<String, Double> s,
+				long timestamp) {
+			stats.add(new HashMap<>(s));
+		}
+
+		int calls() {
+			return props.size() + stats.size();
+		}
+	}
+
+	/**
+	 * Review of build 92, W3: the skipped controls in force travel in the
+	 * SAME push as the object's scored controls, one properties call and
+	 * one stats call per object per cycle, whether or not a Skip is in
+	 * force. Build 92 as first written sent the skip in a second pair of
+	 * calls (four per object per cycle).
+	 */
+	static void skipRidesInObjectPush(Map<String, BenchmarkProfile> all)
+			throws Exception {
+		BenchmarkSelector.Kind HOST = BenchmarkSelector.Kind.HOST;
+		String skipId = "esx.account-lockout-duration";
+		String file = "compliance_overrides_wld01";
+		BenchmarkProfile guide = all.get("VMware_SCG_9.0");
+		ComplianceOverrides.Resolved r = ComplianceOverrides.resolve(parse(
+				"<Skip control=\"" + skipId + "\"/>"), all.values());
+		BenchmarkProfile current = r.adjust(guide);
+		java.util.List<BenchmarkProfile.Control> scored =
+				new java.util.ArrayList<>();
+		Map<String, String> values = new HashMap<>();
+		for (BenchmarkProfile.Control c : current.hostControls()) {
+			if (BenchmarkSelector.evaluatedFor(HOST, c)
+					&& "advanced_setting".equals(c.parameterKind)) {
+				scored.add(c);
+				values.put(c.parameter, c.expectedValue);
+			}
+		}
+		T.check(!scored.isEmpty(), "fixture: scored host controls");
+		ControlEvaluator.ComplianceResult cr =
+				ControlEvaluator.evaluateControls(scored, values, "h");
+		Map<String, String> props = ComplianceDecisions.complianceProps(cr,
+				guide.name, Collections.<String>emptySet());
+		Map<String, Double> stats = ComplianceDecisions.complianceStats(cr);
+		ComplianceDecisions.SkipPush sp = ComplianceDecisions.skipPush(HOST,
+				guide, r.skipped, file);
+		T.check(!sp.isEmpty(), "fixture: a Skip in force");
+
+		for (int cycle = 1; cycle <= 3; cycle++) {
+			CountingSink sink = new CountingSink();
+			ComplianceDecisions.pushObject(sink, "rid", props, stats, sp,
+					1000L * cycle);
+			T.eq(1, sink.props.size(), "cycle " + cycle
+					+ ": one properties call per object");
+			T.eq(1, sink.stats.size(), "cycle " + cycle
+					+ ": one stats call per object");
+			Map<String, Double> sent = sink.stats.get(0);
+			Map<String, String> sentP = sink.props.get(0);
+			T.eq(-1.0, sent.get(ComplianceDecisions.compliantKey(skipId)),
+					"cycle " + cycle + ": the skip -1 in the object's push");
+			T.eq("(skipped by override file " + file + ")",
+					sentP.get(ComplianceDecisions.K + skipId + "|Actual"),
+					"cycle " + cycle + ": the skip Actual in the same push");
+			BenchmarkProfile.Control first = scored.get(0);
+			T.eq(1.0, sent.get(ComplianceDecisions.compliantKey(
+					first.controlId)), "cycle " + cycle
+							+ ": a scored control in the same push");
+			for (Map.Entry<String, Double> e : stats.entrySet()) {
+				T.eq(e.getValue(), sent.get(e.getKey()), "cycle " + cycle
+						+ ": scored stat kept " + e.getKey());
+			}
+			T.eq(stats.size() + sp.stats.size(), sent.size(),
+					"cycle " + cycle + ": no key collision, nothing dropped");
+			T.eq(props.size() + sp.props.size(), sentP.size(),
+					"cycle " + cycle + ": props merged, nothing dropped");
+		}
+
+		// No Skip in force: the same two calls, the payload unchanged.
+		CountingSink plain = new CountingSink();
+		ComplianceDecisions.pushObject(plain, "rid", props, stats, null, 1L);
+		T.eq(2, plain.calls(), "no skip: still one call of each");
+		T.eq(stats, plain.stats.get(0), "no skip: stats unchanged");
+		T.eq(props, plain.props.get(0), "no skip: props unchanged");
+		CountingSink empty = new CountingSink();
+		ComplianceDecisions.pushObject(empty, "rid", props, stats,
+				ComplianceDecisions.skipPush(HOST, guide,
+						Collections.<String>emptySet(), file), 1L);
+		T.eq(2, empty.calls(), "empty skip: one call of each");
+
+		// The non-vSAN cluster shape: nothing evaluated, profile name only,
+		// and the skip -1 still rides in that object's single push.
+		CountingSink na = new CountingSink();
+		ComplianceDecisions.pushObject(na, "rid",
+				ComplianceDecisions.profileNameProps(guide.name),
+				ComplianceDecisions.nothingEvaluatedStats(), sp, 1L);
+		T.eq(2, na.calls(), "profile-name-only object: one call of each");
+		T.eq(-1.0, na.stats.get(0).get(ComplianceDecisions.compliantKey(
+				skipId)), "profile-name-only object: skip -1 merged");
+	}
+
 	/** A per-kind pin beats Auto (by version) and the fixed choice. */
 	static void pinPrecedence(Map<String, BenchmarkProfile> all)
 			throws Exception {
@@ -939,27 +1050,62 @@ public final class OverridesTest {
 						+ "cycleOverrides.skipped, config.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its
-		// skipped controls in force, every cycle, before it is queued for
-		// cleanup, and the cleanup treats them as live.
+		// skipped controls in force, every cycle, and the cleanup treats
+		// them as live. Review W3: the skip payload rides in the object's
+		// own push (one properties call, one stats call), never a second
+		// pair of calls.
 		inOrder(body(ca, "private void afterPush("), "afterPush",
-				"pushSkippedInForce(kind, d, resourceId, cs);",
-				"live.addAll(skippedNow);",
+				"live.addAll(skip.ids);",
 				"new PendingCleanup(kind, resourceId, d.profile, "
 						+ "d.profileName, live)");
-		String skipPush = body(ca, "private java.util.Set<String> "
-				+ "pushSkippedInForce(");
-		inOrder(skipPush, "pushSkippedInForce",
-				"ComplianceDecisions.skipPush(kind, "
-						+ "cycleUnadjusted.get(d.profileName), r.skipped, "
-						+ "config.overridesFile);",
-				"stitcher.pushProperties(resourceId, sp.props, ts);",
-				"stitcher.pushStats(resourceId, sp.stats, ts);");
-		T.check(!skipPush.contains("latest"),
+		String skipIn = body(ca, "private ComplianceDecisions.SkipPush "
+				+ "skipInForce(");
+		inOrder(skipIn, "skipInForce",
+				"ComplianceDecisions.skipPush(kind,",
+				"cycleUnadjusted.get(d.profileName), r.skipped,",
+				"config.overridesFile);");
+		T.check(!skipIn.contains("latest"),
 				"the skip push never depends on a read-back");
+		T.check(!skipIn.contains("stitcher."),
+				"skipInForce makes no Suite API call of its own");
+		T.check(!ca.contains("pushSkippedInForce"),
+				"the separate skip push is gone");
+		for (String sig : new String[] {
+				"private void pushComplianceViaClient(",
+				"private void pushProfileNamePropertyOnly("}) {
+			String b = body(ca, sig);
+			inOrder(b, sig, "ComplianceDecisions.pushObject(stitcher, "
+					+ "resourceId,", "skip,");
+			T.check(!b.contains("stitcher.push"), sig
+					+ ": only the merged push");
+		}
+		for (String[] site : new String[][] {
+				{"HOST", "pushComplianceViaClient(resourceId, cr, "
+						+ "d.profileName, skip);"},
+				{"VM", "pushComplianceViaClient(resourceId, cr, "
+						+ "d.profileName, skip);"},
+				{"VCENTER", "pushComplianceViaClient(resourceId, cr, "
+						+ "d.profileName, skip);"}}) {
+			inOrder(ca, site[0], "skipInForce(BenchmarkSelector.Kind."
+					+ site[0] + ", d);", site[1], "ComplianceDecisions"
+					+ ".pushedIds(cr), skip);");
+		}
+		inOrder(ca, "dvs/dvpg/cluster",
+				"ComplianceDecisions.SkipPush skip = skipInForce(kind, d);",
+				"pushOrProfileName(resourceId, cr, d.profileName, skip);",
+				"ComplianceDecisions.pushedIds(cr), skip);");
 		inOrder(body(ca, "private BenchmarkSelector buildSelector("),
 				"buildSelector unadjusted",
 				"cycleUnadjusted = java.util.Collections.emptyMap();",
 				"cycleUnadjusted = java.util.Collections.unmodifiableMap(known);");
+
+		// Review N2: an account stored as Custom zeroes the retired
+		// bucket in its rollup push, and only once.
+		inOrder(ca, "zeroCustomBucket",
+				"this.zeroCustomBucket = config.storedAsCustom;",
+				"ComplianceRollup.zeroRetiredCustom(stats);",
+				"stitcher.pushStats(vcEntry.resourceId, stats,",
+				"zeroCustomBucket = false;");
 
 		// The push marks site-overridden controls.
 		inOrder(body(ca, "private void pushComplianceViaClient("),

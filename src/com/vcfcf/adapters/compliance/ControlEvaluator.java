@@ -617,8 +617,9 @@ public final class ControlEvaluator {
 				// Unknown expected_value vocabulary for a boolean
 				// actual — fall back to string equality on the
 				// stringified boolean. Same behavior as the host
-				// path so an operator who writes a custom profile
-				// with a literal "true" still gets a sensible match.
+				// path, so an expected value spelled as a literal
+				// (an Override's "true", for example) still gets a
+				// sensible match.
 				return valuesMatch(String.valueOf(a), expected);
 			}
 			return a.equals(expectedBool);
@@ -649,8 +650,8 @@ public final class ControlEvaluator {
 		if ("enabled".equals(lower) || "activated".equals(lower)) {
 			return Boolean.TRUE;
 		}
-		// JS-style literals — some custom profiles write "true"/"false"
-		// directly.
+		// Literals: an Override in the overrides file takes "true" or
+		// "false" for a true/false control.
 		if ("true".equals(lower)) return Boolean.TRUE;
 		if ("false".equals(lower)) return Boolean.FALSE;
 		return null;

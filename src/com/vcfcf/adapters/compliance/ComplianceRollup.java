@@ -71,6 +71,29 @@ public final class ComplianceRollup {
 			BenchmarkSelector.BUCKET_NONE, BenchmarkSelector.BUCKET_UNKNOWN
 	};
 
+	/**
+	 * Build 92 (review N2): the bucket the removed Custom profile used. It
+	 * was pushed only while in use, so an account that was Custom would
+	 * keep its last count on the vCenter forever.
+	 */
+	public static final String RETIRED_CUSTOM_KEY =
+			PREFIX + "Benchmark|Custom|objects";
+
+	/**
+	 * Build 92 (review N2): add {@link #RETIRED_CUSTOM_KEY} = 0 to a rollup
+	 * push, only when the push carries the Benchmark counts (a complete
+	 * cycle; an incomplete one holds them back and must not zero one
+	 * either). Returns true when added, so the caller does it once.
+	 */
+	public static boolean zeroRetiredCustom(Map<String, Double> stats) {
+		if (!stats.containsKey(PREFIX + "Benchmark|"
+				+ BenchmarkSelector.BUCKET_UNKNOWN + "|objects")) {
+			return false;
+		}
+		stats.put(RETIRED_CUSTOM_KEY, 0.0);
+		return true;
+	}
+
 	private static final class Tally {
 		int scored;
 		int nonCompliant;

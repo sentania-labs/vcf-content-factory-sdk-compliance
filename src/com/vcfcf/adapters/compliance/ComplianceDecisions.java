@@ -699,6 +699,44 @@ public final class ComplianceDecisions {
 		return new SkipPush(ids, overridesFile);
 	}
 
+	/**
+	 * Build 92 review W3: where one object's per-cycle push goes. The
+	 * adapter's {@link ComplianceStitcher} in production; a counting sink in
+	 * the tests, which cannot load the SDK.
+	 */
+	public interface PushSink {
+		void pushProperties(String resourceId, Map<String, String> properties,
+				long timestamp);
+		void pushStats(String resourceId, Map<String, Double> stats,
+				long timestamp);
+	}
+
+	/**
+	 * Build 92 review W3: send one object's per-cycle payload with its
+	 * skipped controls in force ({@link #skipPush}) merged in, as ONE
+	 * properties call and ONE stats call. Before this the Skip went out in a
+	 * second pair of Suite API calls per object per cycle (one VM Skip on a
+	 * 5,000-VM vCenter: about 10,000 extra POSTs every cycle). A skipped
+	 * control is not in the adjusted benchmark, so its keys never collide
+	 * with a scored control's.
+	 *
+	 * @param skip null or empty: the payload is sent unchanged
+	 */
+	public static void pushObject(PushSink sink, String resourceId,
+			Map<String, String> props, Map<String, Double> stats,
+			SkipPush skip, long timestamp) {
+		Map<String, String> p = props;
+		Map<String, Double> s = stats;
+		if (skip != null && !skip.isEmpty()) {
+			p = new LinkedHashMap<>(props);
+			p.putAll(skip.props);
+			s = new LinkedHashMap<>(stats);
+			s.putAll(skip.stats);
+		}
+		sink.pushProperties(resourceId, p, timestamp);
+		sink.pushStats(resourceId, s, timestamp);
+	}
+
 	// ----- overrides file status (build 90) --------------------------------
 
 	/** Build 90: the overrides keys, under {@code Summary|}. */
