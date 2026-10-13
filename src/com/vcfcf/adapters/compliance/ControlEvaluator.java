@@ -147,16 +147,45 @@ public final class ControlEvaluator {
 			// silently skipped and total_count came out at 1 (only
 			// vm.vmrc-lock, which is the one VM control that requires
 			// explicit configuration).
+			//
+			// Build 90 (DEF-022): when absence is NOT an allowed state, an
+			// unset key is a FAIL with Actual "(undefined)". It used to be
+			// skipped, which dropped the failing control from the object's
+			// denominator (a higher score for an un-hardened object, and an
+			// alert that could never fire). The settings map here is a
+			// SUCCESSFUL read (a failed read goes to
+			// evaluateControlsUnreadable), so a missing key is a real "not
+			// set", never an unreadable value.
+			//
+			// One exception: a key that is present with an empty value,
+			// against an expected value that is itself explicitly empty
+			// (esx.network-dvfilter: "" in 7.0 and later, NULL in 6.7).
+			// That is the hardened state and passes, with Actual "".
+			if (actual != null && actual.isEmpty()
+					&& expectsExplicitEmpty(expected)) {
+				results.add(new ControlResult(
+						control.scgId,
+						"\"\"",
+						expected,
+						true,
+						control.description
+				));
+				pass++;
+				continue;
+			}
 			if (actual == null || actual.isEmpty()) {
-				if (allowsUndefined(expected)) {
-					results.add(new ControlResult(
-							control.scgId,
-							"(undefined)",
-							expected,
-							true,
-							control.description
-					));
+				boolean ok = allowsUndefined(expected);
+				results.add(new ControlResult(
+						control.scgId,
+						"(undefined)",
+						expected,
+						ok,
+						control.description
+				));
+				if (ok) {
 					pass++;
+				} else {
+					fail++;
 				}
 				continue;
 			}
@@ -175,11 +204,9 @@ public final class ControlEvaluator {
 			} else if (isNotEqualMode(expected)) {
 				// Not-equal mode (build 39): compliant iff the PRESENT
 				// value differs from the target. A missing/empty value
-				// never reaches here (the actual==null||isEmpty branch
-				// above skipped it) — so a missing value is NEVER scored
-				// as "not equal to X → pass". This preserves the cardinal
-				// unreadable-is-not-compliant rule for the advanced_setting
-				// path: absence is an exclusion (skip), never a pass.
+				// never reaches here (the branch above fails it, build
+				// 90), so a missing value is NEVER scored as "not equal
+				// to X, so pass".
 				compliant = notEqualMatches(actual, notEqualTarget(expected));
 			} else if (isVmxMinimumMode(expected)) {
 				compliant = vmxMinimumMatches(actual, expected);
@@ -206,8 +233,9 @@ public final class ControlEvaluator {
 		double score = score(pass, fail, 0);
 
 		// advanced_setting controls have no unreadable outcome: an absent
-		// key is handled by the allowsUndefined / requiresAbsence
-		// semantics above, never an unreadable signal. unreadableCount=0.
+		// key is a pass when the expected value allows absence and a fail
+		// otherwise (build 90, DEF-022), never an unreadable signal and
+		// never a skip. unreadableCount=0.
 		return new ComplianceResult(resourceName, pass, fail, total, 0,
 				score, results);
 	}
@@ -284,6 +312,20 @@ public final class ControlEvaluator {
 		if (e.endsWith(" or undefined")) return true;
 		if (e.endsWith(" or not present")) return true;
 		return false;
+	}
+
+	/**
+	 * Build 90: true when the expected value is an explicit empty value:
+	 * {@code ""} in the canonical CSV (SCG 7.0 and later) or {@code NULL}
+	 * (SCG 6.7), both for {@code esx.network-dvfilter}. A key present with
+	 * an empty value is then the hardened state and passes, rather than
+	 * failing as undefined. A key that is absent altogether still fails.
+	 */
+	static boolean expectsExplicitEmpty(String expected) {
+		if (expected == null) return false;
+		String e = expected.trim();
+		if (e.equalsIgnoreCase("null")) return true;
+		return e.length() >= 2 && stripQuotes(e).trim().isEmpty();
 	}
 
 	/**

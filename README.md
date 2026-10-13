@@ -184,10 +184,6 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
 - [#32](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/32):
   the Objects by SCG Version table only shows the 6.7, 7.0 and 8.0
   columns.
-- [#15](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/15):
-  a few VM settings that are absent (never set) are skipped instead of
-  being checked against the guide's default, which can flatter VM
-  scores.
 
 All open issues are on the
 [issue list](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues).

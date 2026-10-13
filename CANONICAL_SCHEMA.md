@@ -323,11 +323,17 @@ read is **never** folded into a pass:
   setting manager; builds 77 and 78) is never an empty option list: every advanced_setting
   control of the object is UNREADABLE for that cycle (pushed as -1, counted
   in `unreadable_count`, never a pass, never touched by the stale cleanup).
-- For `advanced_setting`, an absent key is **skipped** (excluded from the
-  score denominator) by the existing absent-key branch *before* the
-  `not:` / `(non-empty)` comparison is consulted. In particular the
-  not-equal mode **never** treats a missing value as "not equal to X,
-  therefore compliant" — absence is an exclusion, not a pass.
+- For `advanced_setting`, an absent key (or a present key with an empty
+  value) is decided by the absent-key branch *before* the `not:` /
+  `(non-empty)` comparison is consulted. It is a **pass** with Actual
+  `(undefined)` only when the expected value allows absence (`X or
+  Undefined`, `X or Not Present`, bare `Not Present`); otherwise it is a
+  **fail** with Actual `(undefined)`, counted in the denominator (build 90,
+  DEF-022; before build 90 it was skipped, which raised the score of an
+  un-hardened object). The not-equal mode therefore **never** treats a
+  missing value as "not equal to X, therefore compliant". One exception: a
+  key present with an empty value against an explicitly empty expected
+  value (`""`, or `NULL` in SCG 6.7; `esx.network-dvfilter`) passes.
 
 ### `vmx-N or higher` / `vmx-N or newer` (build 57)
 
