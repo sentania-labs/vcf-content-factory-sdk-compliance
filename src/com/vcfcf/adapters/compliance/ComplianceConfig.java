@@ -5,16 +5,16 @@ public final class ComplianceConfig {
 	public final String vcenterHost;
 	public final String username;
 	public final String password;
-	public final String benchmarkProfile;
 	public final boolean allowInsecure;
 
 	/**
-	 * Build 92: the Custom profile (a CSV on the collector) is removed. An
-	 * instance whose stored Compliance Profile still reads {@code Custom}
-	 * runs as {@link BenchmarkSelector#AUTO}; this flag lets the adapter log
-	 * one WARN naming the removal when the instance is configured.
+	 * Build 93: the retired "Compliance Profile" setting. The identifier is
+	 * gone from describe.xml and every instance runs
+	 * {@link BenchmarkSelector#AUTO}; an account created earlier may still
+	 * carry a stored value, which the adapter reads only to log
+	 * {@link #retiredProfileNotice(String)} once per configure.
 	 */
-	public final boolean storedAsCustom;
+	public static final String RETIRED_PROFILE_KEY = "benchmark_profile";
 
 	/**
 	 * HOLD (owner decision pending, build 74): the adapter-instance setting
@@ -35,12 +35,6 @@ public final class ComplianceConfig {
 	public static final String READ_APPLIANCE_KEY = "read_appliance_settings";
 	public final boolean readApplianceSettings;
 
-	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String allowInsecure) {
-		this(vcenterHost, username, password, benchmarkProfile,
-				allowInsecure, null);
-	}
-
 	/**
 	 * Build 90: the instance setting "Overrides file" (identifier
 	 * {@link #OVERRIDES_FILE_KEY}): the name of the user's copy of
@@ -51,25 +45,14 @@ public final class ComplianceConfig {
 	public final String overridesFile;
 
 	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String allowInsecure,
-			String readApplianceSettings) {
-		this(vcenterHost, username, password, benchmarkProfile,
-				allowInsecure, readApplianceSettings, null);
-	}
-
-	public ComplianceConfig(String vcenterHost, String username, String password,
-			String benchmarkProfile, String allowInsecure,
-			String readApplianceSettings, String overridesFile) {
+			String allowInsecure, String readApplianceSettings,
+			String overridesFile) {
 		this.overridesFile = OverridesStore.normaliseName(overridesFile);
 		this.readApplianceSettings = parseReadAppliance(readApplianceSettings);
 		this.vcenterHost = (vcenterHost != null && !vcenterHost.isEmpty())
 				? vcenterHost : "localhost";
 		this.username = (username != null) ? username : "";
 		this.password = (password != null) ? password : "";
-		this.storedAsCustom = isCustomName(benchmarkProfile);
-		this.benchmarkProfile = storedAsCustom ? BenchmarkSelector.AUTO
-				: (benchmarkProfile != null && !benchmarkProfile.isEmpty())
-						? benchmarkProfile : "VMware_SCG_8.0";
 		// Strict-by-default (build 50, review B1): only the explicit literal
 		// "true" opts into trust-all. null / blank / absent / any other value
 		// parses to false -> platform trust store validation. This makes the
@@ -79,20 +62,35 @@ public final class ComplianceConfig {
 		this.allowInsecure = "true".equalsIgnoreCase(allowInsecure);
 	}
 
-	/**
-	 * v3: true when the instance selects the benchmark per object by
-	 * version ({@link BenchmarkSelector#AUTO}). A blank / absent stored value
-	 * stays on the pre-v3 fallback VMware_SCG_8.0 above, NOT Auto: an
-	 * existing instance keeps behaving exactly as it did until someone edits
-	 * it. New instances get Auto from the describe.xml default.
-	 */
-	public boolean isAuto() {
-		return BenchmarkSelector.AUTO.equals(benchmarkProfile);
-	}
-
 	/** Build 92: the retired Custom choice, as an instance may still store it. */
 	static boolean isCustomName(String raw) {
 		return raw != null && "Custom".equalsIgnoreCase(raw.trim());
+	}
+
+	/**
+	 * Build 93: the INFO line for an account that stored a value in the
+	 * retired Compliance Profile setting, or null when there is nothing to
+	 * say (absent, blank, or the Auto choice, which is what every instance
+	 * now runs). Names the stored value and, for a bundled SCG version, the
+	 * overrides-file entry that pins the instance to it.
+	 */
+	static String retiredProfileNotice(String stored) {
+		if (stored == null) return null;
+		String v = stored.trim();
+		if (v.isEmpty() || BenchmarkSelector.AUTO.equalsIgnoreCase(v)) {
+			return null;
+		}
+		String scg = BenchmarkSelector.scgOfProfileName(v);
+		String pin = scg != null
+				? " To keep scoring every object against SCG " + scg
+						+ ", add <Profile version=\"SCG " + scg + "\"/> to the "
+						+ "instance's overrides file (docs/overrides.md)."
+				: " To pin a guide version for the whole instance, add "
+						+ "<Profile version=\"SCG X.Y\"/> to the instance's "
+						+ "overrides file (docs/overrides.md).";
+		return "The Compliance Profile setting was removed in build 93. This "
+				+ "account stored '" + v + "'; it now runs "
+				+ BenchmarkSelector.AUTO + "." + pin;
 	}
 
 	/** "true" / "false" (case-insensitive); anything else takes the default. */

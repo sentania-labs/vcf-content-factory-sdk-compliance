@@ -70,8 +70,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private final java.util.List<PendingCleanup> pendingCleanup =
 			new java.util.ArrayList<>();
 
-	// Profiles in use this cycle, by name (all bundled in Auto mode, the one
-	// fixed profile otherwise), and this cycle's conf dir.
+	// Profiles in use this cycle, by name (every bundled profile, plus the
+	// overrides file's pins), and this cycle's conf dir.
 	private volatile java.util.Map<String, BenchmarkProfile> profilesByName;
 	private volatile String cycleConfDir;
 
@@ -129,7 +129,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	protected void configureAdapter(ResourceStatus status,
 			ResourceConfig resourceConfig) {
 		String vcenterHost = getIdentifier(resourceConfig, "vcenter_host");
-		String profile = getIdentifier(resourceConfig, "benchmark_profile");
+		// Build 93: the Compliance Profile setting is removed (every instance
+		// runs Auto (by version)); a stored value is read only for the INFO
+		// below and the retired Custom rollup bucket.
+		String storedProfile = getIdentifier(resourceConfig,
+				ComplianceConfig.RETIRED_PROFILE_KEY);
 		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
 		String readAppliance = getIdentifier(resourceConfig,
 				ComplianceConfig.READ_APPLIANCE_KEY);
@@ -140,19 +144,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, allowInsecure, readAppliance, overridesFile);
-		this.zeroCustomBucket = config.storedAsCustom;
-		if (config.storedAsCustom) {
-			// Build 92: the Custom profile CSV is removed. One WARN per
-			// configure; the instance runs as Auto (by version).
-			logWarn("Compliance Profile 'Custom' was removed in build 92 "
-					+ "(the profile CSV on the collector and its "
-					+ "custom_profile_path setting are no longer read). This "
-					+ "instance runs as " + BenchmarkSelector.AUTO + ". Edit "
-					+ "the instance and choose " + BenchmarkSelector.AUTO
-					+ " or a bundled SCG version to clear this warning. Skip, "
-					+ "Override and per-kind Profile entries go in the "
-					+ "Overrides file (see docs/overrides.md).");
+				allowInsecure, readAppliance, overridesFile);
+		boolean storedAsCustom = ComplianceConfig.isCustomName(storedProfile);
+		this.zeroCustomBucket = storedAsCustom;
+		String profileNotice =
+				ComplianceConfig.retiredProfileNotice(storedProfile);
+		if (profileNotice != null) {
+			// Build 93: one INFO per configure naming the stored value.
+			logInfo(profileNotice);
 		}
 
 		this.vcApi = new VCenterApiClient(
@@ -170,9 +169,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// Off = the vami_api controls load as manual review for this
 		// instance (no score, no per-control alert, not attempted).
 		this.benchmarkLoader.setApplianceReads(config.readApplianceSettings);
-		// An instance edit re-runs configure and may change the benchmark
-		// mode (e.g. fixed -> Auto): forget last cycle's benchmarks so the
-		// B2 fallback never reuses a benchmark chosen under the old mode.
+		// An instance edit re-runs configure (and an upgrade from a build with
+		// a fixed Compliance Profile lands here too): forget last cycle's
+		// benchmarks so the B2 fallback never reuses a benchmark chosen under
+		// the old settings.
 		memory.clear();
 
 		// Ambient Suite API stitching — reads maintenanceuser.properties,
@@ -196,7 +196,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
-				+ " profile=" + config.benchmarkProfile
+				+ " profile=" + BenchmarkSelector.AUTO
 				+ " allowInsecure=" + config.allowInsecure
 				+ " readApplianceSettings=" + config.readApplianceSettings
 				+ " overridesFile="
@@ -302,7 +302,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			ComplianceConfig testCfg = new ComplianceConfig(
 					vcenterHost, username, password,
-					/*profile*/ null, allowInsecure);
+					allowInsecure, null, null);
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
@@ -481,11 +481,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} catch (Exception e) {
 			logWarn("Could not read the vCenter version: " + e.getMessage());
 		}
-		if (selector.isAuto()) {
-			logInfo("Auto (by version): vCenter version=" + vcVersion
-					+ " governs vCenter / cluster / vDS / portgroup benchmark "
-					+ "choice");
-		}
+		logInfo("Auto (by version): vCenter version=" + vcVersion
+				+ " governs vCenter / cluster / vDS / portgroup benchmark "
+				+ "choice");
 
 		ComplianceRollup rollup = new ComplianceRollup();
 		CycleStats cs = new CycleStats();
@@ -570,48 +568,27 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build the per-cycle benchmark selector. {@code Auto (by version)}
-	 * loads every bundled profile once (cached by the loader) and selects
-	 * per object; any other value forces that profile for every object.
+	 * Build the per-cycle benchmark selector: {@code Auto (by version)} over
+	 * every bundled profile (loaded once, cached by the loader), selecting
+	 * per object. Build 93: Auto is the only mode.
 	 *
 	 * <p>Build 90: the overrides file ({@code parsed}, null for none) is
 	 * applied on top: skipped controls are removed from every loaded
 	 * profile, overridden expected values replace the SCG values, and
-	 * Profile pins replace the mode for the kinds they name. Auto and the
-	 * manual-review overlay keep working underneath. The result is kept in
+	 * Profile pins replace Auto for the kinds they cover (a pin without
+	 * kind covers every kind; a kind pin wins over it). The manual-review
+	 * overlay keeps working underneath. The result is kept in
 	 * {@link #cycleOverrides} for the push, the cleanup and the status keys.
 	 */
 	private BenchmarkSelector buildSelector(String confDir,
 			ComplianceOverrides.Parsed parsed) {
-		BenchmarkSelector base;
-		java.util.Map<String, BenchmarkProfile> baseProfiles;
-		if (config.isAuto()) {
-			java.util.Map<String, BenchmarkProfile> all =
-					benchmarkLoader.loadAll(confDir);
-			baseProfiles = all;
-			logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
-					+ all.size() + " bundled profiles loaded; "
-					+ benchmarkLoader.lastManualReviewApplied()
-					+ " controls set to manual review (prose expected values, standard-switch controls))");
-			base = BenchmarkSelector.auto(all);
-		} else {
-			BenchmarkProfile profile = benchmarkLoader.load(
-					config.benchmarkProfile, confDir);
-			if (!profile.name.equals(config.benchmarkProfile)) {
-				logWarn("Profile load divergence: requested='"
-						+ config.benchmarkProfile + "' resolved='"
-						+ profile.name + "': profile_name will use the resolved "
-						+ "name");
-			}
-			java.util.Map<String, BenchmarkProfile> one =
-					new java.util.LinkedHashMap<>();
-			one.put(profile.name, profile);
-			baseProfiles = one;
-			logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
-					+ "object (" + benchmarkLoader.lastManualReviewApplied()
-					+ " controls set to manual review (prose expected values, standard-switch controls))");
-			base = BenchmarkSelector.fixed(profile);
-		}
+		java.util.Map<String, BenchmarkProfile> baseProfiles =
+				benchmarkLoader.loadAll(confDir);
+		logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
+				+ baseProfiles.size() + " bundled profiles loaded; "
+				+ benchmarkLoader.lastManualReviewApplied()
+				+ " controls set to manual review (prose expected values, standard-switch controls))");
+		BenchmarkSelector base = BenchmarkSelector.auto(baseProfiles);
 		if (parsed == null || parsed.isEmpty()) {
 			cycleUnadjusted = java.util.Collections.emptyMap();
 			cycleOverrides = ComplianceOverrides.Resolved.EMPTY;
@@ -621,13 +598,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return base;
 		}
 
-		// Every profile the file can name: all bundled ones (cached). Since
-		// build 92 the instance's own profiles are always bundled ones.
-		java.util.Map<String, BenchmarkProfile> bundled =
-				benchmarkLoader.loadAll(confDir);
+		// Every profile the file can name: all bundled ones (cached), which
+		// since build 93 are also the instance's own.
+		java.util.Map<String, BenchmarkProfile> bundled = baseProfiles;
 		java.util.Map<String, BenchmarkProfile> known =
 				new java.util.LinkedHashMap<>(bundled);
-		known.putAll(baseProfiles);
 		ComplianceOverrides.Resolved r =
 				ComplianceOverrides.resolve(parsed, known.values());
 		cycleOverrides = r;
@@ -641,15 +616,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		java.util.Map<String, BenchmarkProfile> effBase = r.adjust(baseProfiles);
 		java.util.Map<String, BenchmarkProfile> effBundled = r.adjust(bundled);
-		BenchmarkSelector selector = config.isAuto()
-				? BenchmarkSelector.auto(effBase)
-				: BenchmarkSelector.fixed(effBase.values().iterator().next());
+		BenchmarkSelector selector = BenchmarkSelector.auto(effBase);
 		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> pins =
 				r.pins(effBundled);
 		selector = selector.withPins(pins);
 
 		// Profiles a decision may name this cycle (the B2 fallback looks the
-		// previous benchmark up here): the mode's own, plus every pin.
+		// previous benchmark up here): every bundled one, plus every pin.
 		java.util.Map<String, BenchmarkProfile> byName =
 				new java.util.LinkedHashMap<>(effBase);
 		for (BenchmarkProfile p : pins.values()) byName.put(p.name, p);
@@ -1284,13 +1257,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String resourceId = he.resourceId;
 
 			String version = null;
-			if (selector.isAuto()) {
-				try {
-					version = vsphere.getHostProductVersion(hostInfo.moRef);
-				} catch (Exception e) {
-					logWarn("Host " + hostName + ": could not read the ESX "
-							+ "version (" + e.getMessage() + ")");
-				}
+			try {
+				version = vsphere.getHostProductVersion(hostInfo.moRef);
+			} catch (Exception e) {
+				logWarn("Host " + hostName + ": could not read the ESX "
+						+ "version (" + e.getMessage() + ")");
 			}
 			if (hostId != null) hostVersions.put(hostId, version);
 
@@ -1499,8 +1470,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				continue;
 			}
 			String resourceId = he.resourceId;
-			String hostVersion = selector.isAuto()
-					? vmHostVersion(vm, hostVersions) : null;
+			String hostVersion = vmHostVersion(vm, hostVersions);
 
 			ComplianceDecisions.Decision d = decide(selector,
 					BenchmarkSelector.Kind.VM, vm.moid,

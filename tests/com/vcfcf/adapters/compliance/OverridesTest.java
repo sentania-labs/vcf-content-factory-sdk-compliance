@@ -725,7 +725,6 @@ public final class OverridesTest {
 				"<Profile kind=\"VirtualMachine\" version=\"SCG 8.0\"/>"),
 				all.values());
 		BenchmarkSelector s1 = auto.withPins(vmOnly.pins(all));
-		T.check(s1.isAuto(), "pinned selector still reads versions");
 		T.eq("VMware_SCG_8.0", s1.select(VM, "9.0.0").profileName,
 				"VM pinned to 8.0 on a 9.0 host");
 		T.eq("VMware_SCG_8.0", s1.select(VM, null).profileName,
@@ -749,13 +748,30 @@ public final class OverridesTest {
 				"kind pin beats the instance pin");
 		T.eq("SCG_8.0", s2.select(VM, "9.1.0").bucket, "pinned bucket");
 
-		// A pin replaces a fixed choice too.
-		BenchmarkSelector fixed = BenchmarkSelector.fixed(
-				all.get("VMware_SCG_7.0")).withPins(vmOnly.pins(all));
-		T.eq("VMware_SCG_8.0", fixed.select(VM, null).profileName,
-				"pin beats the fixed profile");
-		T.eq("VMware_SCG_7.0", fixed.select(HOST, null).profileName,
-				"unpinned kinds keep the fixed profile");
+		// Build 93: the instance pin alone covers every kind at any
+		// version, readable or not, mapped or not (it replaces the removed
+		// fixed Compliance Profile).
+		ComplianceOverrides.Resolved instOnly = ComplianceOverrides.resolve(
+				parse("<Profile version=\"SCG 7.0\"/>"), all.values());
+		BenchmarkSelector s3 = auto.withPins(instOnly.pins(all));
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			T.eq("VMware_SCG_7.0", instOnly.pinFor(k), "instance pin for " + k);
+			for (String v : new String[] {"9.1.0", "10.0.0", null}) {
+				BenchmarkSelector.Selection sel = s3.select(k, v);
+				T.eq("VMware_SCG_7.0", sel.profileName,
+						"instance pin for " + k + " at " + v);
+				T.check(!sel.noBenchmark() && !sel.versionUnreadable(),
+						"a pinned kind is always scored: " + k + " " + v);
+			}
+		}
+		// Order in the file does not matter: the kind pin still wins.
+		ComplianceOverrides.Resolved kindFirst = ComplianceOverrides.resolve(
+				parse("<Profile kind=\"HostSystem\" version=\"SCG 9.1\"/>"
+						+ "<Profile version=\"SCG 7.0\"/>"), all.values());
+		T.eq("VMware_SCG_9.1", kindFirst.pinFor(HOST),
+				"kind pin wins when written first");
+		T.eq("VMware_SCG_7.0", kindFirst.pinFor(VM),
+				"instance pin for the other kinds");
 
 		// Pins pick up the cycle's adjusted profiles (skips and overrides
 		// apply under a pin too).
@@ -1101,7 +1117,7 @@ public final class OverridesTest {
 		// Review N2: an account stored as Custom zeroes the retired
 		// bucket in its rollup push, and only once.
 		inOrder(ca, "zeroCustomBucket",
-				"this.zeroCustomBucket = config.storedAsCustom;",
+				"this.zeroCustomBucket = storedAsCustom;",
 				"ComplianceRollup.zeroRetiredCustom(stats);",
 				"stitcher.pushStats(vcEntry.resourceId, stats,",
 				"zeroCustomBucket = false;");
