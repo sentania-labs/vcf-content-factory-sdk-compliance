@@ -168,6 +168,12 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   valid XML. The Custom profile CSV choice still works in this release
   but is deprecated; [docs/overrides.md](docs/overrides.md) says how to
   move.
+- **VMs that use a dvfilter on purpose now fail `vm.dvfilter`.** (Build
+  90.) The pack now finds `ethernet*.filter*.name` settings, so a VM with a
+  dvfilter attached (for example an NSX for vSphere distributed firewall or
+  an older agentless security appliance) fails this control and its score
+  drops; if that is intended, add `<Skip control="vm.dvfilter"/>` to your
+  [overrides file](docs/overrides.md#skip-turn-a-control-off).
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored

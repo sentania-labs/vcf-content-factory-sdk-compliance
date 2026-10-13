@@ -92,6 +92,10 @@ The control is not checked and not pushed. It leaves the score. What
 happens to its existing metric is under
 [What happens to a skipped control](#what-happens-to-a-skipped-control).
 
+A common case: VMs that use a dvfilter on purpose (for example an NSX for
+vSphere distributed firewall) fail `vm.dvfilter` from build 90, and
+`<Skip control="vm.dvfilter"/>` turns that control off.
+
 ### Override: score against your value
 
 ```xml
