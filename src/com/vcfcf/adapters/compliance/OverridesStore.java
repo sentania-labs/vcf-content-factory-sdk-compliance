@@ -17,11 +17,26 @@ import java.util.regex.Pattern;
  * file it does not have with HTTP 400 (apiErrorCode 1501), not 404 (the
  * factory's knowledge/context/investigations/vcommunity-solutionconfig-400-2026-06-16.md).
  *
+ * <p>Only a 400 that carries apiErrorCode 1501 means "absent"; any other
+ * 400 (request validation, a version-specific API error, an intermediary)
+ * is a fetch failure and keeps the last good parse. The framework's Suite
+ * API GET does not expose the response body today (factory issue #201): its
+ * error text is {@code "... HTTP 400"} with no apiErrorCode. Trade-off until
+ * #201 lands: a missing file reads as {@code fetch failed: HTTP 400 (...)}
+ * rather than {@code absent}. With no copy in force that still raises the
+ * alert on the first cycle; with a copy in force (the file was deleted after
+ * it loaded) the copy stays in force until the adapter restarts or the name
+ * changes, and the alert fires after {@value #FETCH_FAILURE_ALERT_CYCLES}
+ * cycles. Keeping a known policy on an ambiguous answer beats dropping the
+ * operator's overrides on a 400 that may not mean "absent". HTTP 404 is
+ * always absent.
+ *
  * <ul>
  *   <li><b>No name set:</b> no fetch, no overrides, status none.</li>
- *   <li><b>Absent</b> (HTTP 400 or 404): no overrides, and the last good
- *       parse is dropped. An instance that names a file the store does not
- *       have runs on the guide alone, never on a stale guess.</li>
+ *   <li><b>Absent</b> (HTTP 404, or HTTP 400 with apiErrorCode 1501 in the
+ *       error text): no overrides, and the last good parse is dropped. An
+ *       instance that names a file the store does not have runs on the
+ *       guide alone, never on a stale guess.</li>
  *   <li><b>Fetch failed</b> (any other error, or no Suite API channel): the
  *       last good parse is kept. The alert flag is raised when there is no
  *       copy in force, or after {@value #FETCH_FAILURE_ALERT_CYCLES}
@@ -147,17 +162,47 @@ public final class OverridesStore {
 		}
 	}
 
+	/**
+	 * Local time with the numeric UTC offset ({@code 2026-10-13 14:05
+	 * -05:00}). An offset comes from the zone rules alone; a zone name
+	 * ({@code z}) depends on the JDK's locale-provider data and renders
+	 * {@code CDT} on one JDK and {@code GMT-05:00} on another. {@code xxx}
+	 * writes {@code +00:00} for UTC, never {@code Z}.
+	 */
 	private static final DateTimeFormatter TIME = DateTimeFormatter
-			.ofPattern("yyyy-MM-dd HH:mm z", Locale.ROOT);
+			.ofPattern("yyyy-MM-dd HH:mm xxx", Locale.ROOT);
 
 	static String formatTime(Instant t, ZoneId zone) {
 		return TIME.format(t.atZone(zone == null ? ZoneId.systemDefault()
 				: zone));
 	}
 
-	/** The store's "no such file" answer, as the Suite API client reports it. */
-	private static final Pattern ABSENT_STATUS =
-			Pattern.compile("\\bHTTP 40[04]\\b");
+	/** HTTP 404: no such file, whatever the body says. */
+	private static final Pattern HTTP_404 = Pattern.compile("\\bHTTP 404\\b");
+
+	/** HTTP 400: absent only together with {@link #API_ERROR_1501}. */
+	private static final Pattern HTTP_400 = Pattern.compile("\\bHTTP 400\\b");
+
+	/**
+	 * The store's "no such file" code as it appears in the JSON body
+	 * ({@code "apiErrorCode":1501}) or an error text that carries it. Keyed
+	 * on the field name so a file name or URL that contains 1501 does not
+	 * match.
+	 */
+	private static final Pattern API_ERROR_1501 = Pattern.compile(
+			"(?i)\"?apiErrorCode\"?\\s*[:=]\\s*\"?1501\\b");
+
+	/**
+	 * True when a failed fetch's error text means the store has no such
+	 * file: HTTP 404, or HTTP 400 with apiErrorCode 1501. A 400 without the
+	 * code is a fetch failure (see the class comment for the trade-off).
+	 */
+	static boolean isAbsent(String msg) {
+		if (msg == null) return false;
+		if (HTTP_404.matcher(msg).find()) return true;
+		return HTTP_400.matcher(msg).find()
+				&& API_ERROR_1501.matcher(msg).find();
+	}
 
 	/** Any HTTP status in a Suite API client error message. */
 	private static final Pattern HTTP_STATUS =
@@ -167,8 +212,11 @@ public final class OverridesStore {
 	 * The short status-text reason for a failed fetch. VCF Operations
 	 * answered a 401 or 403 (the channel's identity was refused, for example
 	 * one without the configuration-file read privilege), so that is
-	 * "refused", not "did not answer". Another HTTP status is named as is;
-	 * an error without one (timeout, connection) is "no answer".
+	 * "refused", not "did not answer". A 400 that reached here carried no
+	 * apiErrorCode 1501, so it may be a missing file the framework could
+	 * not identify (factory issue #201) or a bad request; the reason says
+	 * both. Another HTTP status is named as is; an error without one
+	 * (timeout, connection) is "no answer".
 	 */
 	static String fetchReason(Exception e) {
 		String msg = e == null ? "" : String.valueOf(e.getMessage());
@@ -177,6 +225,9 @@ public final class OverridesStore {
 			String code = m.group(1);
 			if ("401".equals(code) || "403".equals(code)) {
 				return "refused (HTTP " + code + ")";
+			}
+			if ("400".equals(code)) {
+				return "HTTP 400 (no such file, or a bad request)";
 			}
 			return "HTTP " + code;
 		}
@@ -250,7 +301,7 @@ public final class OverridesStore {
 				Thread.currentThread().interrupt();
 			}
 			String msg = String.valueOf(e.getMessage());
-			if (ABSENT_STATUS.matcher(msg).find()) {
+			if (isAbsent(msg)) {
 				lastGood = null;
 				lastGoodAt = null;
 				fetchFailures = 0;

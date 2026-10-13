@@ -205,7 +205,7 @@ counted.
 | `none` | Overrides file is empty. No overrides. |
 | `OK` | The file loaded and every entry applied. |
 | `N rejected` | The file loaded. N entries were rejected; the rest applied. |
-| `absent` | No file with that name exists. The account runs with no overrides. |
+| `absent` | No file with that name exists (VCF Operations answered HTTP 404, or HTTP 400 with error code 1501). The account runs with no overrides. |
 | `parse failed, last good from <time>` | The file is not valid XML. The copy read at that time stays in force. |
 | `parse failed, no previous copy` | The file is not valid XML and was never read. No overrides. |
 | `fetch failed: <reason>, last good from <time>` | The file could not be read this cycle. The copy read at that time stays in force. |
@@ -217,11 +217,32 @@ The reason is one of:
 | Reason | Meaning |
 |---|---|
 | `refused (HTTP 401)`, `refused (HTTP 403)` | VCF Operations answered and refused the identity the adapter uses to read the file. |
+| `HTTP 400 (no such file, or a bad request)` | VCF Operations answered HTTP 400. See the note below the table. |
 | `HTTP <status>` | VCF Operations answered with that error, for example `HTTP 503`. |
 | `no Suite API channel` | The adapter has no connection to VCF Operations on this collector. The status then reaches Compliance World only: it is not written to the vCenter object, so the alert cannot fire. |
 | `no answer (<error>)` | VCF Operations was not reached, for example a timeout. |
 
-The time is the collector's local time.
+**HTTP 400 and a missing file.** VCF Operations reports a missing
+file as HTTP 400 with error code 1501 in the response. The adapter's
+connection to VCF Operations cannot read that code yet, and any other
+HTTP 400 (a rejected request, an API change, a proxy) looks the same.
+So the pack treats every HTTP 400 as a failed read, never as `absent`:
+it does not drop overrides that loaded earlier on an answer that might
+not mean "missing". What you see:
+
+- A misspelled or never-created file: `fetch failed: HTTP 400 (no such
+  file, or a bad request), no copy in force`. No overrides, and the
+  alert fires on the first collection, the same as `absent`.
+- A file deleted after it loaded: the copy read earlier stays in force,
+  the status reads `fetch failed ... last good from <time>`, and the
+  alert fires after 3 collections. The old copy stays until you restart
+  the adapter instance or change the Overrides file setting.
+
+Once the adapter can read the error code, a 400 with code 1501 reads
+`absent` and other 400s stay `fetch failed`.
+
+The time is the collector's local time with its offset from UTC, for
+example `2026-10-13 14:05 -05:00`.
 
 The pack's Compliance World object shows the same keys under Summary.
 Every account shares that object, so it shows the last account to
@@ -262,7 +283,9 @@ Reasons you can see:
 The alert **VCF Content Factory Compliance Alert: Compliance overrides
 file not loaded** fires on the vCenter object when:
 
-- the account names a file that does not exist (status `absent`),
+- the account names a file that does not exist (status `absent`, or
+  `fetch failed: HTTP 400 ...` while the error code is unreadable, see
+  above),
 - the file is not valid XML (status `parse failed`),
 - the file could not be read and no earlier copy is in force (status
   `fetch failed: <reason>, no copy in force`), or
