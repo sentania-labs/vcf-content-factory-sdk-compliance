@@ -36,7 +36,14 @@ by their ESX version, VMs by their host's version, and everything else by
 the vCenter version. The SCG for 6.7, 7.0, 8.0, 9.0 and 9.1 is bundled.
 If an object runs a version with no guide yet, it's reported as "no
 benchmark" rather than scored against the wrong one. You can also pin
-every object to one guide, or bring your own list of controls as a CSV.
+every object to one guide.
+
+**Lets you tune it to your site.** One file in VCF Operations
+(Administration > Configuration Files) turns controls off, sets your own
+expected values (say 5 failed logons instead of the guide's number), and
+pins the guide version per object kind. Nothing is staged on a
+collector, and one file can serve several vCenters. See
+[Tuning controls and thresholds](docs/overrides.md).
 
 **Turns failures into a to-do list.** Each failing control raises its own
 alert, named after the control and prefixed "VCF Content Factory
@@ -149,6 +156,16 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   Supervisor Pods, which VCF Operations lists as Pods, not VMs) are out of
   scope: they are skipped and counted in
   `VCF-CF Compliance|Rollup|VM|skipped_pods`.
+- **Your overrides file shows whether it loaded.** (Build 90.) Each
+  vCenter object carries `VCF-CF Compliance|Summary|overrides_file`,
+  `overrides_status` (`none`, `OK`, `N rejected`, `absent`, or
+  `parse failed, last good from <time>`), `overrides_skipped` and
+  `overrides_overridden`; the Compliance World shows the same keys for
+  the last account to collect. The alert "Compliance overrides file not
+  loaded" fires on the vCenter when the named file is missing or is not
+  valid XML. The Custom profile CSV choice still works in this release
+  but is deprecated; [docs/overrides.md](docs/overrides.md) says how to
+  move.
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored
@@ -183,11 +200,12 @@ All open issues are on the
   picked, the full list of metrics and properties, and the alert
   definitions.
 - [Installing and configuring](docs/installing.md)
+- [Tuning controls and thresholds](docs/overrides.md): turn controls
+  off, use your own expected values, pin the guide version.
 - [Generated reference](REFERENCE.md) and the
   [inventory tree](docs/inventory-tree.md) (the pack's own object types
   and settings, generated from `describe.xml`)
 - [Building from source](docs/building.md)
-- [Custom profile format](CANONICAL_SCHEMA.md)
 - [Changelog](CHANGELOG.md)
 
 The bundled benchmarks come from VMware's

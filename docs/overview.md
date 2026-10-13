@@ -43,8 +43,11 @@ Bundled profiles cover SCG 6.7, 7.0, 8.0, 9.0, and 9.1. The default,
 `Auto (by version)`, scores each object against the SCG for its own
 version (hosts by ESX version, VMs by their host's ESX version,
 everything else by the vCenter version); an object whose version has no
-bundled SCG is reported as "no benchmark" and not scored. A fixed SCG or
-a custom canonical-schema CSV can be forced instead.
+bundled SCG is reported as "no benchmark" and not scored. A fixed SCG can
+be forced instead. Since build 90 an overrides file in the VCF Operations
+configuration-file store can turn controls off, replace expected values
+and pin the SCG version per object kind (see [overrides.md](overrides.md));
+the custom CSV choice is deprecated.
 
 ### Resource kinds
 
