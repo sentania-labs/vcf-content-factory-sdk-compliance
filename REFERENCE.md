@@ -23,9 +23,14 @@ Generated from `describe.xml` and `resources.properties`.
 | Field | Key | Default | Required |
 |---|---|---|---|
 | vCenter Host / IP | `vcenter_host` | — | Yes |
-| Compliance Profile | `benchmark_profile` | Auto (by version) | Yes |
-| Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | — | No |
+| Compliance Profile (Custom is deprecated, use Overrides file) | `benchmark_profile` | Auto (by version) | Yes |
+| Custom Profile CSV Path (deprecated, use Overrides file; required if profile is Custom) | `custom_profile_path` | - | No |
+| Overrides file (name of your copy in Administration > Configuration Files, no extension) | `overrides_file` | - | No |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | false | No |
+| Read vCenter appliance settings (true needs the account in SSO group SystemConfiguration.Administrators, which also grants appliance write access) | `read_appliance_settings` | false | No |
+
+The Overrides file setting (build 90) names your copy of
+`compliance_overrides_template`; see [docs/overrides.md](docs/overrides.md).
 
 ---
 
@@ -40,6 +45,16 @@ Generated from `describe.xml` and `resources.properties`.
 | Key | Label | Type | Unit | Monitored |
 |---|---|---|---|---|
 | `last_scan_timestamp` | Last Scan Timestamp | property | — | — |
+| `overrides_file` | Overrides File | property | - | - |
+| `overrides_status` | Overrides Status | property | - | - |
+| `overrides_skipped` | Overrides Skipped | metric | - | yes |
+| `overrides_overridden` | Overrides Overridden | metric | - | yes |
+| `overrides_not_loaded` | Overrides Not Loaded | metric | - | yes |
+
+The `overrides_*` keys (build 90) show the overrides file of the last
+adapter instance to collect, because every instance shares the Compliance
+World. Each vCenter object carries its own instance's copy under
+`VCF-CF Compliance|Summary|`.
 
 #### Rollup > Environment
 

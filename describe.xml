@@ -33,17 +33,26 @@
         <enum value="VMware_SCG_9.1" displayOrder="6"/>
         <enum value="Custom" displayOrder="7"/>
       </ResourceIdentifier>
+      <!-- Build 90: Custom and custom_profile_path are deprecated (one
+           release behind a WARN); the overrides file replaces them. -->
       <ResourceIdentifier key="custom_profile_path" nameKey="8" type="string"
                           required="false" dispOrder="3" default=""/>
+      <!-- Build 90: the name of the user's copy of
+           compliance_overrides_template in the central configuration-file
+           store (no path, no extension). Empty: no overrides, no fetch.
+           identType 2: a setting, not part of the instance's identity. -->
+      <ResourceIdentifier key="overrides_file" nameKey="11" type="string"
+                          required="false" dispOrder="4" default=""
+                          identType="2"/>
       <ResourceIdentifier key="allowInsecure" nameKey="9" type="string"
-                          required="false" dispOrder="4" default="false"/>
+                          required="false" dispOrder="5" default="false"/>
       <!-- HOLD (build 74, owner decision pending): read the vCenter
            appliance (VAMI) settings. Off = those controls are manual review
            for this instance. Default must match
            ComplianceConfig.DEFAULT_READ_APPLIANCE. identType 2: a setting,
            not part of the instance's identity. -->
       <ResourceIdentifier key="read_appliance_settings" nameKey="10" type="string"
-                          required="false" dispOrder="5" default="false"
+                          required="false" dispOrder="6" default="false"
                           identType="2" enum="true">
         <enum value="false" displayOrder="1"/>
         <enum value="true" displayOrder="2"/>
@@ -73,6 +82,22 @@
       <ResourceGroup key="Summary" nameKey="22" instanced="false">
         <ResourceAttribute key="last_scan_timestamp" nameKey="27"
                            dataType="string" isProperty="true"/>
+        <!-- Build 90: the overrides file of the last instance to collect
+             (the world is shared; each vCenter object carries its own
+             instance's copy under VCF-CF Compliance|Summary|). -->
+        <ResourceAttribute key="overrides_file" nameKey="23"
+                           dataType="string" isProperty="true"/>
+        <ResourceAttribute key="overrides_status" nameKey="24"
+                           dataType="string" isProperty="true"/>
+        <ResourceAttribute key="overrides_skipped" nameKey="25"
+                           dataType="float" isProperty="false"
+                           defaultMonitored="true"/>
+        <ResourceAttribute key="overrides_overridden" nameKey="26"
+                           dataType="float" isProperty="false"
+                           defaultMonitored="true"/>
+        <ResourceAttribute key="overrides_not_loaded" nameKey="28"
+                           dataType="float" isProperty="false"
+                           defaultMonitored="true"/>
       </ResourceGroup>
       <ResourceGroup key="Rollup" nameKey="30" instanced="false">
         <ResourceGroup key="Environment" nameKey="31" instanced="false">
@@ -1920,6 +1945,18 @@
                        cancelCycle="1">
       <State severity="Immediate">
         <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+                   operator="=" value="1"
+                   valueType="numeric" thresholdType="static"/>
+      </State>
+    </SymptomDefinition>
+    <SymptomDefinition id="vcfcf_compliance_overrides_vcenter_not_loaded"
+                       nameKey="2040"
+                       adapterKind="VMWARE"
+                       resourceKind="VMwareAdapter Instance"
+                       waitCycle="1"
+                       cancelCycle="1">
+      <State severity="Warning">
+        <Condition type="metric" key="VCF-CF Compliance|Summary|overrides_not_loaded"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -4109,6 +4146,23 @@
         </Recommendations>
       </State>
     </AlertDefinition>
+    <AlertDefinition id="vcfcf_compliance_overrides_vcenter"
+                     nameKey="2041"
+                     adapterKind="VMWARE"
+                     resourceKind="VMwareAdapter Instance"
+                     type="15" subType="21"
+                     waitCycle="1" cancelCycle="1">
+      <State severity="Automatic">
+        <Impact type="badge" key="risk"/>
+        <SymptomSets operator="or">
+          <SymptomSet ref="vcfcf_compliance_overrides_vcenter_not_loaded" operator="and"
+                      aggregation="any" applyOn="self" negateCondition="false"/>
+        </SymptomSets>
+        <Recommendations>
+          <Recommendation ref="vcfcf_compliance_overrides_check" priority="1"/>
+        </Recommendations>
+      </State>
+    </AlertDefinition>
     <!-- END GENERATED by scripts/generate_compliance_alerts.py: alerts -->
 
   </AlertDefinitions>
@@ -4538,6 +4592,9 @@
     </Recommendation>
     <Recommendation key="vcfcf_compliance_collection_check">
       <Description nameKey="2100"/>
+    </Recommendation>
+    <Recommendation key="vcfcf_compliance_overrides_check">
+      <Description nameKey="2042"/>
     </Recommendation>
     <!-- END GENERATED by scripts/generate_compliance_alerts.py: recommendations -->
 
