@@ -35,10 +35,14 @@ public final class OverridesTest {
 		valueChecks(all);
 		resolveAgainstProfiles(all);
 		overrideScoring(all);
+		overrideDropsOrUndefined(all);
+		inForceCounts(all);
 		siteOverrideProps();
 		skipRoutesToStaleKeyPath(all);
 		pinPrecedence(all);
 		store();
+		fetchFailureAlert();
+		adapterWiringSourcePins();
 		System.out.println("OverridesTest: all assertions passed");
 	}
 
@@ -309,6 +313,95 @@ public final class OverridesTest {
 		T.eq(1, unread.unreadableCount, "unreadable counted");
 	}
 
+	/**
+	 * Review of build 90, W1 (DEF-022): an Override that drops "or
+	 * Undefined" from an advanced setting makes the rule stricter, so an
+	 * object with the key unset now FAILS with Actual "(undefined)". Before
+	 * the DEF-022 fix it vanished from the control (pass 0, fail 0, total 0)
+	 * and its old pass was retired to -1: a stricter rule, a higher score.
+	 */
+	static void overrideDropsOrUndefined(Map<String, BenchmarkProfile> all)
+			throws Exception {
+		String id = "vm.deactivate-console-copy";
+		BenchmarkProfile guide = all.get("VMware_SCG_9.0");
+		T.check(ControlEvaluator.allowsUndefined(find(guide, id).expectedValue),
+				"fixture: the guide's value allows undefined");
+		ComplianceOverrides.Resolved r = ComplianceOverrides.resolve(parse(
+				"<Override control=\"" + id + "\" expected=\"TRUE\"/>"),
+				all.values());
+		T.eq(Collections.singletonMap(id, "TRUE"), r.overridden,
+				"the stricter Override is accepted");
+		Map<String, String> unset = new HashMap<>();   // a successful read
+		ControlEvaluator.ComplianceResult atGuide = ControlEvaluator
+				.evaluateControls(Collections.singletonList(find(guide, id)),
+						unset, "vm1");
+		T.eq(1, atGuide.passCount, "unset passes the guide's TRUE or Undefined");
+		BenchmarkProfile site = r.adjust(guide);
+		ControlEvaluator.ComplianceResult atSite = ControlEvaluator
+				.evaluateControls(Collections.singletonList(find(site, id)),
+						unset, "vm1");
+		T.eq(0, atSite.passCount, "unset is not a pass under the site TRUE");
+		T.eq(1, atSite.failCount, "unset FAILS under the site TRUE");
+		T.eq(1, atSite.totalCount, "and stays in the denominator");
+		T.eq("(undefined)", atSite.controlResults.get(0).actual,
+				"Actual (undefined)");
+		Map<String, String> set = new HashMap<>();
+		set.put(find(site, id).parameter, "TRUE");
+		T.eq(1, ControlEvaluator.evaluateControls(Collections.singletonList(
+				find(site, id)), set, "vm1").passCount, "set TRUE passes");
+	}
+
+	/**
+	 * Review of build 90, N1: overrides_skipped and overrides_overridden
+	 * count entries in force for the instance's own profiles (its mode's,
+	 * or the pinned one for a pinned kind), not entries accepted against
+	 * any bundled profile.
+	 */
+	static void inForceCounts(Map<String, BenchmarkProfile> all)
+			throws Exception {
+		String old67 = "esx.account-lockout";   // 6.7 / 7.0 / 8.0, not 9.0
+		BenchmarkProfile p90 = all.get("VMware_SCG_9.0");
+		T.eq(null, find(p90, old67), "fixture: not in 9.0");
+		T.check(find(all.get("VMware_SCG_8.0"), old67) != null,
+				"fixture: in 8.0");
+		T.eq(null, find(all.get("VMware_SCG_8.0"), LOCKOUT),
+				"fixture: 9.0's lockout id is not in 8.0");
+		ComplianceOverrides.Resolved r = ComplianceOverrides.resolve(parse(
+				"<Skip control=\"" + old67 + "\"/>"
+				+ "<Override control=\"" + LOCKOUT + "\" expected=\"3\"/>"),
+				all.values());
+		T.eq(2, r.applied.size(), "both accepted against the bundled set");
+		Map<BenchmarkSelector.Kind, BenchmarkProfile> noPins =
+				Collections.emptyMap();
+
+		// Fixed to SCG 9.0: the Skip changes nothing here.
+		List<BenchmarkProfile> fixed90 = Collections.singletonList(p90);
+		T.check(r.skippedIn(fixed90, noPins).isEmpty(),
+				"a skip of a control 9.0 lacks is not in force on 9.0");
+		T.eq(new TreeSet<>(Arrays.asList(LOCKOUT)),
+				r.overriddenIn(fixed90, noPins), "the 9.0 override is");
+
+		// Hosts pinned to 8.0: 8.0 governs host controls, so the 8.0 skip
+		// is in force and the 9.0-only override is not.
+		ComplianceOverrides.Resolved pinned = ComplianceOverrides.resolve(
+				parse("<Profile kind=\"HostSystem\" version=\"SCG 8.0\"/>"
+						+ "<Skip control=\"" + old67 + "\"/>"
+						+ "<Override control=\"" + LOCKOUT
+						+ "\" expected=\"3\"/>"), all.values());
+		Map<BenchmarkSelector.Kind, BenchmarkProfile> pins = pinned.pins(all);
+		T.eq(new TreeSet<>(Arrays.asList(old67)),
+				pinned.skippedIn(fixed90, pins), "pinned 8.0 skip in force");
+		T.check(pinned.overriddenIn(fixed90, pins).isEmpty(),
+				"9.0 host override not in force under an 8.0 host pin");
+
+		// Auto: every bundled profile is the instance's own.
+		T.eq(1, r.skippedIn(all.values(), noPins).size(), "Auto: skip counts");
+		T.eq(1, r.overriddenIn(all.values(), noPins).size(),
+				"Auto: override counts");
+		T.check(ComplianceOverrides.Resolved.EMPTY.skippedIn(all.values(),
+				noPins).isEmpty(), "empty: nothing in force");
+	}
+
 	static void siteOverrideProps() {
 		ControlEvaluator.ComplianceResult cr = new ControlEvaluator
 				.ComplianceResult("h", 0, 1, 1, 1, 0.0, Arrays.asList(
@@ -509,15 +602,15 @@ public final class OverridesTest {
 				s.statusText(0, zone), "parse failed text, local time");
 		T.check(s.notLoaded(), "parse failure raises the alert");
 
-		// Transient fetch failure: previous parse kept, no alert.
+		// One fetch failure with a copy in force: kept, no alert yet.
 		f.fail = new java.io.IOException(
 				"Suite API GET https://localhost/suite-api/x HTTP 503");
 		s = st.refresh("site-a", f, t2);
 		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "fetch failed");
 		T.eq("a", s.parsed.entries.get(0).control, "kept on fetch failure");
-		T.eq("fetch failed, last good from 2026-10-13 14:05 CDT",
+		T.eq("fetch failed: HTTP 503, last good from 2026-10-13 14:05 CDT",
 				s.statusText(0, zone), "fetch failed text");
-		T.check(!s.notLoaded(), "a transient failure is not 'not loaded'");
+		T.check(!s.notLoaded(), "one failure with a copy in force: no alert");
 
 		// Interrupted: the thread's interrupt flag is restored.
 		f.fail = new InterruptedException("stop");
@@ -541,7 +634,9 @@ public final class OverridesTest {
 		f.fail = new java.io.IOException("x HTTP 503");
 		s = st.refresh("site-a", f, t2);
 		T.check(s.parsed == null, "the dropped copy does not come back");
-		T.eq("fetch failed", s.statusText(0, zone), "fetch failed, no copy");
+		T.eq("fetch failed: HTTP 503, no copy in force", s.statusText(0, zone),
+				"fetch failed, no copy");
+		T.check(s.notLoaded(), "no copy in force raises the alert");
 
 		// A new name never inherits another file's parse.
 		f.fail = null;
@@ -572,6 +667,200 @@ public final class OverridesTest {
 		want.put("VCF-CF Compliance|Summary|overrides_overridden", 1.0);
 		want.put("VCF-CF Compliance|Summary|overrides_not_loaded", 1.0);
 		T.eq(want, vs, "vCenter stat keys");
+	}
+
+	/**
+	 * Review of build 90, W2: a fetch failure raises overrides_not_loaded
+	 * when no copy is in force (first cycle after a restart, or a failure
+	 * from the start), and after 3 straight failures even with one. A 401
+	 * or 403 is "refused", not "did not answer".
+	 */
+	static void fetchFailureAlert() {
+		ZoneId zone = ZoneId.of("America/Chicago");
+		Instant t1 = Instant.parse("2026-10-13T19:05:00Z");
+		Instant t2 = Instant.parse("2026-10-13T19:10:00Z");
+		String good =
+				"<ComplianceOverrides><Skip control=\"a\"/></ComplianceOverrides>";
+
+		// Refused from the start: no copy, alert on the first cycle.
+		OverridesStore st = new OverridesStore();
+		FakeFetcher f = new FakeFetcher();
+		f.fail = new java.io.IOException(
+				"Suite API GET https://localhost/suite-api/x HTTP 403");
+		OverridesStore.Snapshot s = st.refresh("site-a", f, t1);
+		T.eq(OverridesStore.Status.FETCH_FAILED, s.status, "403 fetch failed");
+		T.check(s.parsed == null, "no copy");
+		T.check(s.notLoaded(), "403 with no copy raises the alert");
+		T.eq("fetch failed: refused (HTTP 403), no copy in force",
+				s.statusText(0, zone), "403 says refused");
+		f.fail = new java.io.IOException("x HTTP 401");
+		T.eq("fetch failed: refused (HTTP 401), no copy in force",
+				st.refresh("site-a", f, t1).statusText(0, zone),
+				"401 says refused");
+
+		// No channel and a timeout, with no copy: alert, reason named.
+		s = new OverridesStore().refresh("site-a", null, t1);
+		T.check(s.notLoaded(), "no channel, no copy: alert");
+		T.eq("fetch failed: no Suite API channel, no copy in force",
+				s.statusText(0, zone), "no channel text");
+		FakeFetcher to = new FakeFetcher();
+		to.fail = new java.net.SocketTimeoutException("Read timed out");
+		s = new OverridesStore().refresh("site-a", to, t1);
+		T.check(s.notLoaded(), "timeout, no copy: alert");
+		T.eq("fetch failed: no answer (SocketTimeoutException), no copy in "
+				+ "force", s.statusText(0, zone), "timeout text");
+
+		// A copy in force: no alert for 2 failures, alert on the 3rd.
+		st = new OverridesStore();
+		f = new FakeFetcher();
+		f.body = good;
+		st.refresh("site-a", f, t1);
+		f.fail = new java.io.IOException("x HTTP 503");
+		s = st.refresh("site-a", f, t2);
+		T.eq(1, s.fetchFailures, "1st failure");
+		T.check(!s.notLoaded(), "1st failure, copy in force: no alert");
+		s = st.refresh("site-a", f, t2);
+		T.check(!s.notLoaded(), "2nd failure, copy in force: no alert");
+		s = st.refresh("site-a", f, t2);
+		T.eq(OverridesStore.FETCH_FAILURE_ALERT_CYCLES, s.fetchFailures,
+				"3rd failure");
+		T.check(s.parsed != null, "the copy stays in force");
+		T.check(s.notLoaded(), "3rd straight failure raises the alert");
+		T.eq("fetch failed 3 cycles: HTTP 503, last good from 2026-10-13 "
+				+ "14:05 CDT", s.statusText(0, zone), "3 cycles text");
+		s = st.refresh("site-a", null, t2);
+		T.check(s.notLoaded(), "a 4th (no channel) still alerts");
+		T.eq(4, s.fetchFailures, "and counts on");
+
+		// A good fetch resets the run; a parse failure also ends it (the
+		// fetch worked) and raises its own alert.
+		f.fail = null;
+		s = st.refresh("site-a", f, t2);
+		T.eq(OverridesStore.Status.OK, s.status, "recovered");
+		T.check(!s.notLoaded(), "recovered: no alert");
+		f.fail = new java.io.IOException("x HTTP 503");
+		s = st.refresh("site-a", f, t2);
+		T.eq(1, s.fetchFailures, "the run starts over");
+		T.check(!s.notLoaded(), "one failure after recovery: no alert");
+		f.fail = null;
+		f.body = "not xml";
+		st.refresh("site-a", f, t2);
+		f.fail = new java.io.IOException("x HTTP 503");
+		T.eq(1, st.refresh("site-a", f, t2).fetchFailures,
+				"a parse failure ends the run");
+
+		// A new name starts the count over.
+		st = new OverridesStore();
+		f = new FakeFetcher();
+		f.body = good;
+		st.refresh("site-a", f, t1);
+		f.fail = new java.io.IOException("x HTTP 503");
+		st.refresh("site-a", f, t2);
+		st.refresh("site-a", f, t2);
+		f.fail = null;
+		st.refresh("site-b", f, t2);
+		f.fail = new java.io.IOException("x HTTP 503");
+		T.eq(1, st.refresh("site-b", f, t2).fetchFailures,
+				"a new name counts from 1");
+
+		T.eq("refused (HTTP 403)", OverridesStore.fetchReason(
+				new java.io.IOException("GET x HTTP 403")), "reason 403");
+		T.eq("HTTP 500", OverridesStore.fetchReason(
+				new java.io.IOException("GET x HTTP 500")), "reason 500");
+	}
+
+	/**
+	 * Review of build 90, N5: the adapter wiring needs the SDK jar this
+	 * runner leaves off the classpath, so it is pinned in the source (the
+	 * build 88 idiom in ComplianceDecisionsTest). Without these, a skipped
+	 * control could stop reaching the cleanup plan and keep a stale 0 or 1
+	 * with every other test green.
+	 */
+	static void adapterWiringSourcePins() {
+		String ca = readSrc(
+				"src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
+
+		// The file is fetched before the selector is built from it, and the
+		// status is pushed after the rollup.
+		inOrder(body(ca, "private void collectWorldCycle("),
+				"collectWorldCycle",
+				"cycleOverridesSnap = refreshOverrides();",
+				"BenchmarkSelector selector = buildSelector(cycleConfDir, "
+						+ "cycleOverridesSnap.parsed);",
+				"pushRollup(vcEntry, rollup);",
+				"pushOverridesStatus(vcEntry, out);");
+
+		// The selector applies the resolved file and records it.
+		inOrder(body(ca, "private BenchmarkSelector buildSelector("),
+				"buildSelector",
+				"ComplianceOverrides.resolve(parsed, known.values());",
+				"cycleOverrides = r;",
+				"r.adjust(baseProfiles);",
+				"selector.withPins(pins);");
+
+		// The skip list reaches the cleanup plan and the orphan text.
+		String clean = body(ca, "private void cleanBatch(");
+		inOrder(clean, "cleanBatch",
+				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
+						+ "bundled, cycleOverrides.skipped);",
+				"ComplianceDecisions.orphanProps(stale, p.profileName, "
+						+ "cycleOverrides.skipped, config.overridesFile)");
+
+		// The push marks site-overridden controls.
+		inOrder(body(ca, "private void pushComplianceViaClient("),
+				"pushComplianceViaClient",
+				"ComplianceDecisions.complianceProps(cr, profileName, "
+						+ "siteOverriddenFor(profileName))");
+
+		// The counts are the in-force ones, and the alert flag is the
+		// snapshot's (which covers fetch failures, W2).
+		inOrder(body(ca, "private void pushOverridesStatus("),
+				"pushOverridesStatus",
+				"int skipped = cycleSkippedInForce;",
+				"int overridden = cycleOverriddenInForce;",
+				"boolean notLoaded = snap.notLoaded();",
+				".overridesStats(\"\", skipped, overridden, notLoaded)",
+				"ComplianceDecisions.overridesStats(ComplianceDecisions.K, "
+						+ "skipped, overridden, notLoaded)");
+	}
+
+	/** Each fragment occurs in {@code src}, in this order. */
+	static void inOrder(String src, String where, String... fragments) {
+		int from = 0;
+		for (String f : fragments) {
+			int at = src.indexOf(f, from);
+			T.check(at >= 0, where + ": expected, in order: " + f);
+			from = at + f.length();
+		}
+	}
+
+	static String readSrc(String path) {
+		try {
+			return new String(Files.readAllBytes(Paths.get(path)),
+					StandardCharsets.UTF_8);
+		} catch (java.io.IOException e) {
+			throw new AssertionError("read " + path + ": " + e);
+		}
+	}
+
+	/**
+	 * The body of the first method whose declaration starts with
+	 * {@code signature}, comments removed and whitespace collapsed.
+	 */
+	static String body(String src, String signature) {
+		int at = src.indexOf(signature);
+		T.check(at >= 0, "found " + signature);
+		int open = src.indexOf('{', at);
+		int depth = 0;
+		int i = open;
+		for (; i < src.length(); i++) {
+			char ch = src.charAt(i);
+			if (ch == '{') depth++;
+			else if (ch == '}' && --depth == 0) break;
+		}
+		String b = src.substring(open + 1, i);
+		b = b.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
+		return b.replaceAll("\\s+", " ").trim();
 	}
 
 	static BenchmarkProfile.Control find(BenchmarkProfile p, String id) {

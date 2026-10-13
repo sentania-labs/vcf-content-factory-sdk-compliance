@@ -137,18 +137,26 @@ VCF-CF Compliance|Summary|overrides_file        property: the instance's Overrid
 VCF-CF Compliance|Summary|overrides_status      property: none | OK | N rejected | absent |
                                                 parse failed, last good from <time> |
                                                 parse failed, no previous copy |
-                                                fetch failed, last good from <time> | fetch failed
-                                                (<time> is the collector's local time)
-VCF-CF Compliance|Summary|overrides_skipped     Skip entries in force
-VCF-CF Compliance|Summary|overrides_overridden  Override entries in force
-VCF-CF Compliance|Summary|overrides_not_loaded  1 when the status is absent or parse failed
-                                                (raises "Compliance overrides file not loaded"), else 0
+                                                fetch failed: <reason>, last good from <time> |
+                                                fetch failed N cycles: <reason>, last good from <time> |
+                                                fetch failed: <reason>, no copy in force
+                                                (<time> is the collector's local time; <reason> is
+                                                refused (HTTP 401|403) | HTTP <status> |
+                                                no Suite API channel | no answer (<error>))
+VCF-CF Compliance|Summary|overrides_skipped     Skip entries in force for the instance's guide
+                                                versions (its mode's, or the pinned one per kind)
+VCF-CF Compliance|Summary|overrides_overridden  Override entries in force, counted the same way
+VCF-CF Compliance|Summary|overrides_not_loaded  1 when the status is absent, parse failed, fetch
+                                                failed with no copy in force, or fetch failed 3
+                                                or more cycles in a row (raises "Compliance
+                                                overrides file not loaded"), else 0
 ```
 
 `absent` means the configuration-file store has no file by that name:
 no overrides apply, and any copy read earlier is dropped. `parse failed`
-and `fetch failed` keep the last copy read, when there is one. A
-transient fetch failure does not raise the alert.
+and `fetch failed` keep the last copy read, when there is one. One or two
+fetch failures in a row with a copy in force do not raise the alert; a
+fetch failure with no copy in force does at once.
 
 **The rollup counts only objects with a VCF Ops resource (build 88).**
 An object counts in `scored`, `non_compliant`, `no_benchmark`,

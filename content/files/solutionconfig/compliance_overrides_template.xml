@@ -26,6 +26,10 @@
   (profiles/canonical/scg_*.csv, column control_id). They are also the
   middle part of each metric under VCF-CF Compliance on the object.
 
+  Control ids, element names (Skip, Override, Profile) and attribute
+  names (control, expected, version, kind) are case-sensitive:
+  ESX.ACCOUNT-LOCKOUT-DURATION or <skip> is rejected, not applied.
+
   A wrong entry (unknown control id, bad value, unknown version) is
   rejected and reported. The rest of the file still applies.
   -->
@@ -46,10 +50,18 @@
   These forms also work:
     (non-empty)       compliant when the setting has any value
     not:X             compliant when the setting has a value other than X
+    vmx-N or higher   compliant when the VM hardware version is vmx-N or
+                      later, for example vmx-19 or higher (text controls
+                      only; "or newer" also works)
     X or Undefined    compliant when the setting is X or not set
                       (advanced settings only)
+    X or Not Present  the same as X or Undefined (advanced settings only)
     Not Present       compliant only when the setting is not set
                       (advanced settings only)
+  On an advanced setting, a plain value (X without "or Undefined") means
+  an object where the setting is not set FAILS. Many guide values for VM
+  advanced settings read "TRUE or Undefined"; overriding one with plain
+  TRUE makes the rule stricter, and unset VMs then fail.
   A value that does not suit the control is rejected and the guide's
   value is kept. The control's Expected property reads
   "<value> (site override)".

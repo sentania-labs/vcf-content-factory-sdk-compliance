@@ -70,7 +70,8 @@ adapter never pushes):
   file not loaded", type 15 subType 21, impact badge risk, one Warning
   symptom `VCF-CF Compliance|Summary|overrides_not_loaded = 1` (the
   instance names an overrides file that the configuration-file store does
-  not have, or that does not parse), its own recommendation. Wait 1,
+  not have, or that does not parse, or that could not be fetched with no
+  copy in force or for 3 cycles in a row), its own recommendation. Wait 1,
   cancel 1, like the collection alerts. Ids use the
   `vcfcf_compliance_overrides_` prefix; nameKeys 2040 to 2042.
 * Title, priority and remediation come from the NEWEST profile in which
@@ -146,21 +147,30 @@ OVERRIDES_NAMEKEY = 2040   # +0 symptom, +1 alert, +2 recommendation
 OVERRIDES_METRIC = "VCF-CF Compliance|Summary|overrides_not_loaded"
 OVERRIDES_REC_TEXT = (
     "This compliance adapter instance names an overrides file that it could "
-    "not load: either the configuration-file store has no file by that name, "
-    "or the file is not valid XML with a ComplianceOverrides root. When the "
-    "file is missing, the instance runs with no overrides (the guide's "
-    "values only). When the file does not parse, the instance keeps the last "
-    "copy it read, if it read one. The vCenter object's VCF-CF "
-    "Compliance|Summary|overrides_status property says which (absent, or "
-    "parse failed with the time of the copy in use), and the adapter log "
-    "names the problem. To fix it: open Administration > Configuration "
-    "Files > Management Packs Configuration and check that a file with "
-    "exactly the name in the instance's Overrides file setting exists (the "
-    "name without .xml). If it does not, copy compliance_overrides_template "
-    "and give the copy that name, or correct the setting under "
-    "Administration > Integrations > Accounts. If it does, open it and fix "
-    "the XML. The alert clears on the first collection cycle that loads the "
-    "file.")
+    "not load. There are three causes: the configuration-file store has no "
+    "file by that name; the file is not valid XML with a ComplianceOverrides "
+    "root; or the file could not be read from VCF Operations, either with "
+    "no earlier copy in force or for 3 collection cycles in a row. When the "
+    "file is missing, or could not be read and no copy is in force, the "
+    "instance runs with no overrides (the guide's values only). Otherwise "
+    "it keeps the last copy it read. The vCenter object's VCF-CF "
+    "Compliance|Summary|overrides_status property says which: absent; "
+    "parse failed, with the time of the copy in use; or fetch failed, with "
+    "the reason, where refused (HTTP 401 or 403) means VCF Operations "
+    "answered and refused the identity the adapter uses for it, any other "
+    "HTTP status "
+    "is an error VCF Operations returned, and no answer means it was not "
+    "reached. The adapter log names the problem. To fix a missing file: "
+    "open Administration > Configuration Files > Management Packs "
+    "Configuration and check that a file with exactly the name in the "
+    "instance's Overrides file setting exists (the name without .xml, same "
+    "case). If it does not, copy compliance_overrides_template and give the "
+    "copy that name, or correct the setting under Administration > "
+    "Integrations > Accounts. If the file does not parse, open it and fix "
+    "the XML. If it was refused, the collector log names the VCF Operations "
+    "identity the adapter uses when it starts; that identity must be able "
+    "to read configuration files. The alert clears on the first collection "
+    "cycle that loads the file.")
 
 # Per-kind "Compliance data not collected" alerts (build 63).
 # canonical resource_kind -> (id slug, label used in names)

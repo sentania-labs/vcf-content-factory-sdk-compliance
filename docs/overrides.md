@@ -40,7 +40,9 @@ You cannot:
 
 Do not edit the template itself. An upgrade of the pack can replace the
 template. Your copy has a name the pack never uses, so no upgrade
-touches it.
+touches it. Choose a name that differs from the template in more than
+letter case: VCF Operations treats `Compliance_Overrides_Template` as
+the template itself.
 
 ## Step 2: Point the account at your copy
 
@@ -62,6 +64,12 @@ example `esx.account-lockout-max-attempts`. Control ids are in
 [REFERENCE.md](../REFERENCE.md) and in the bundled profiles. On an
 object, each control id is the middle part of its metric name under
 VCF-CF Compliance.
+
+Control ids, element names (`Skip`, `Override`, `Profile`) and
+attribute names (`control`, `expected`, `version`, `kind`) are
+case-sensitive. `ESX.ACCOUNT-LOCKOUT-DURATION` or `<skip>` is rejected
+with a WARN line (see [When an entry is rejected](#when-an-entry-is-rejected)),
+not applied. Spaces around a control id are ignored.
 
 A file with all three entry types:
 
@@ -105,8 +113,18 @@ These forms also work:
 |---|---|
 | `(non-empty)` | the setting has any value |
 | `not:X` | the setting has a value other than X |
+| `vmx-N or higher` | the VM hardware version is vmx-N or later, for example `vmx-19 or higher` (text controls only; `or newer` also works) |
 | `X or Undefined` | the setting is X or is not set (advanced settings only) |
+| `X or Not Present` | the same as `X or Undefined` (advanced settings only) |
 | `Not Present` | the setting is not set (advanced settings only) |
+
+**Unset advanced settings.** On an advanced setting, a plain value
+(`TRUE`, `5`) means an object where the setting is not set fails, with
+Actual `(undefined)`. Only the `or Undefined`, `or Not Present` and
+`Not Present` forms let an unset setting pass. Many guide values for VM
+advanced settings read `TRUE or Undefined`. Overriding one with plain
+`TRUE` makes the rule stricter: VMs where the setting was never set now
+fail.
 
 The override applies under every guide version that has the control.
 On the object, the control's Expected property reads
@@ -153,8 +171,16 @@ under VCF-CF Compliance, Summary:
 |---|---|
 | `VCF-CF Compliance\|Summary\|overrides_file` | the file name the account is set to |
 | `VCF-CF Compliance\|Summary\|overrides_status` | whether it loaded (below) |
-| `VCF-CF Compliance\|Summary\|overrides_skipped` | how many Skip entries are in force |
-| `VCF-CF Compliance\|Summary\|overrides_overridden` | how many Override entries are in force |
+| `VCF-CF Compliance\|Summary\|overrides_skipped` | how many Skip entries are in force for this account's guide versions |
+| `VCF-CF Compliance\|Summary\|overrides_overridden` | how many Override entries are in force for this account's guide versions |
+| `VCF-CF Compliance\|Summary\|overrides_not_loaded` | 1 when the file is not loaded and the alert fires (below), else 0 |
+
+"In force" counts only entries for controls that a guide version this
+account uses actually checks: every bundled version under Auto (by
+version), the chosen version under a fixed guide, and the pinned
+version for a pinned kind. An entry for a control only another version
+has is accepted (it is valid) but changes nothing here, so it is not
+counted.
 
 `overrides_status` reads one of:
 
@@ -166,8 +192,18 @@ under VCF-CF Compliance, Summary:
 | `absent` | No file with that name exists. The account runs with no overrides. |
 | `parse failed, last good from <time>` | The file is not valid XML. The copy read at that time stays in force. |
 | `parse failed, no previous copy` | The file is not valid XML and was never read. No overrides. |
-| `fetch failed, last good from <time>` | VCF Operations did not answer this cycle. The copy read at that time stays in force. |
-| `fetch failed` | VCF Operations did not answer and the file was never read. No overrides. |
+| `fetch failed: <reason>, last good from <time>` | The file could not be read this cycle. The copy read at that time stays in force. |
+| `fetch failed N cycles: <reason>, last good from <time>` | The file could not be read for N cycles in a row (3 or more). The old copy stays in force, and the alert fires. |
+| `fetch failed: <reason>, no copy in force` | The file could not be read and no copy was read earlier (for example the first collection after a restart). No overrides, and the alert fires. |
+
+The reason is one of:
+
+| Reason | Meaning |
+|---|---|
+| `refused (HTTP 401)`, `refused (HTTP 403)` | VCF Operations answered and refused the identity the adapter uses to read the file. |
+| `HTTP <status>` | VCF Operations answered with that error, for example `HTTP 503`. |
+| `no Suite API channel` | The adapter has no connection to VCF Operations on this collector. |
+| `no answer (<error>)` | VCF Operations was not reached, for example a timeout. |
 
 The time is the collector's local time.
 
@@ -179,7 +215,7 @@ collect. Use the vCenter object to check a specific account.
 applied:
 
 ```
-Overrides file 'compliance_overrides_vc01': 3 entries applied: skip esx.account-lockout-duration; override esx.account-lockout-max-attempts expected 5; profile VMware_SCG_8.0 for VM
+Overrides file 'compliance_overrides_vc01': 3 entries applied: skip esx.account-lockout-duration; override esx.account-lockout-max-attempts expected 5; profile VMware_SCG_8.0 for VM (in force for this instance's profiles: 1 skipped, 1 overridden)
 ```
 
 ## When an entry is rejected
@@ -208,13 +244,22 @@ Reasons you can see:
 The alert **VCF Content Factory Compliance Alert: Compliance overrides
 file not loaded** fires on the vCenter object when:
 
-- the account names a file that does not exist (status `absent`), or
-- the file is not valid XML (status `parse failed`).
+- the account names a file that does not exist (status `absent`),
+- the file is not valid XML (status `parse failed`),
+- the file could not be read and no earlier copy is in force (status
+  `fetch failed: <reason>, no copy in force`), or
+- the file could not be read for 3 collections in a row, even with an
+  earlier copy in force (status `fetch failed N cycles: ...`).
 
 A missing file means no overrides at all. The pack never keeps using an
-old copy of a file that is gone. A broken file keeps the last copy the
-pack read, if there is one. The adapter log names the problem. The alert
-clears on the first collection that loads the file.
+old copy of a file that is gone. A broken or unreadable file keeps the
+last copy the pack read, if there is one. One or two failed reads with a
+copy in force do not raise the alert. The adapter log names the problem.
+For `refused (HTTP 401)` or `refused (HTTP 403)`, the collector log
+names the VCF Operations identity the adapter uses when it starts (see
+[installing.md](installing.md)); that identity must be able to read
+configuration files. The alert clears on the first collection that
+loads the file.
 
 ## One copy for several vCenters
 

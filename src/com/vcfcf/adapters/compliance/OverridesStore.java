@@ -23,7 +23,10 @@ import java.util.regex.Pattern;
  *       parse is dropped. An instance that names a file the store does not
  *       have runs on the guide alone, never on a stale guess.</li>
  *   <li><b>Fetch failed</b> (any other error, or no Suite API channel): the
- *       last good parse is kept.</li>
+ *       last good parse is kept. The alert flag is raised when there is no
+ *       copy in force, or after {@value #FETCH_FAILURE_ALERT_CYCLES}
+ *       straight failures even with one (review of build 90, W2): a
+ *       persistent 401, 403 or 5xx is not transient.</li>
  *   <li><b>Parse failed:</b> the last good parse is kept.</li>
  *   <li><b>A new name</b> starts from nothing: another file's last good
  *       parse is never applied.</li>
@@ -41,6 +44,13 @@ public final class OverridesStore {
 
 	public enum Status { NONE, OK, ABSENT, PARSE_FAILED, FETCH_FAILED }
 
+	/**
+	 * Straight fetch failures, with a copy in force, after which the alert
+	 * flag is raised anyway. With no copy in force it is raised on the
+	 * first failure.
+	 */
+	public static final int FETCH_FAILURE_ALERT_CYCLES = 3;
+
 	/** This cycle's outcome. */
 	public static final class Snapshot {
 		/** The file name as configured (normalised), "" when none. */
@@ -52,32 +62,59 @@ public final class OverridesStore {
 		public final Instant lastGood;
 		/** Why it was not read this cycle (absent, parse or fetch error). */
 		public final String detail;
+		/**
+		 * FETCH_FAILED only: the short reason for the status text, for
+		 * example {@code HTTP 503}, {@code refused (HTTP 403)} or {@code no
+		 * Suite API channel}. Null otherwise.
+		 */
+		public final String fetchReason;
+		/** FETCH_FAILED only: straight fetch failures, this one included. */
+		public final int fetchFailures;
 
 		Snapshot(String fileName, Status status,
 				ComplianceOverrides.Parsed parsed, Instant lastGood,
 				String detail) {
+			this(fileName, status, parsed, lastGood, detail, null, 0);
+		}
+
+		Snapshot(String fileName, Status status,
+				ComplianceOverrides.Parsed parsed, Instant lastGood,
+				String detail, String fetchReason, int fetchFailures) {
 			this.fileName = fileName;
 			this.status = status;
 			this.parsed = parsed;
 			this.lastGood = lastGood;
 			this.detail = detail;
+			this.fetchReason = fetchReason;
+			this.fetchFailures = fetchFailures;
 		}
 
 		/**
-		 * 1 when the named file could not be loaded this cycle because the
-		 * store does not have it or it does not parse (raises "Compliance
-		 * overrides file not loaded"); 0 otherwise.
+		 * 1 (raises "Compliance overrides file not loaded") when the named
+		 * file could not be loaded this cycle because the store does not
+		 * have it or it does not parse, or when the fetch failed and no copy
+		 * is in force, or when the fetch has failed
+		 * {@value OverridesStore#FETCH_FAILURE_ALERT_CYCLES} cycles in a row
+		 * even with a copy in force; 0 otherwise.
 		 */
 		public boolean notLoaded() {
-			return status == Status.ABSENT || status == Status.PARSE_FAILED;
+			if (status == Status.ABSENT || status == Status.PARSE_FAILED) {
+				return true;
+			}
+			return status == Status.FETCH_FAILED && (parsed == null
+					|| fetchFailures >= FETCH_FAILURE_ALERT_CYCLES);
 		}
 
 		/**
 		 * The {@code Summary|overrides_status} text: {@code none},
 		 * {@code OK}, {@code N rejected}, {@code absent},
 		 * {@code parse failed, last good from <local time>} (or {@code
-		 * parse failed, no previous copy}), {@code fetch failed, last good
-		 * from <local time>} (or {@code fetch failed}).
+		 * parse failed, no previous copy}), {@code fetch failed: <reason>,
+		 * last good from <local time>} ({@code fetch failed N cycles:
+		 * <reason>, last good from <local time>} once N reaches
+		 * {@link OverridesStore#FETCH_FAILURE_ALERT_CYCLES}), or {@code fetch failed: <reason>, no copy in force}. The
+		 * reason is {@code HTTP <status>}, {@code refused (HTTP 401|403)},
+		 * {@code no Suite API channel}, or {@code no answer (<error>)}.
 		 *
 		 * @param rejected rejected entries this cycle (OK only)
 		 * @param zone     the collector's time zone
@@ -96,10 +133,16 @@ public final class OverridesStore {
 									+ formatTime(lastGood, zone)
 							: "parse failed, no previous copy";
 				default:
-					return lastGood != null
-							? "fetch failed, last good from "
-									+ formatTime(lastGood, zone)
-							: "fetch failed";
+					String reason = fetchReason != null ? fetchReason
+							: "no answer";
+					if (parsed == null) {
+						return "fetch failed: " + reason + ", no copy in force";
+					}
+					return "fetch failed"
+							+ (fetchFailures >= FETCH_FAILURE_ALERT_CYCLES
+									? " " + fetchFailures + " cycles" : "")
+							+ ": " + reason + ", last good from "
+							+ formatTime(lastGood, zone);
 			}
 		}
 	}
@@ -116,9 +159,36 @@ public final class OverridesStore {
 	private static final Pattern ABSENT_STATUS =
 			Pattern.compile("\\bHTTP 40[04]\\b");
 
+	/** Any HTTP status in a Suite API client error message. */
+	private static final Pattern HTTP_STATUS =
+			Pattern.compile("\\bHTTP (\\d{3})\\b");
+
+	/**
+	 * The short status-text reason for a failed fetch. VCF Operations
+	 * answered a 401 or 403 (the channel's identity was refused, for example
+	 * one without the configuration-file read privilege), so that is
+	 * "refused", not "did not answer". Another HTTP status is named as is;
+	 * an error without one (timeout, connection) is "no answer".
+	 */
+	static String fetchReason(Exception e) {
+		String msg = e == null ? "" : String.valueOf(e.getMessage());
+		java.util.regex.Matcher m = HTTP_STATUS.matcher(msg);
+		if (m.find()) {
+			String code = m.group(1);
+			if ("401".equals(code) || "403".equals(code)) {
+				return "refused (HTTP " + code + ")";
+			}
+			return "HTTP " + code;
+		}
+		return "no answer (" + (e == null ? "unknown error"
+				: e.getClass().getSimpleName()) + ")";
+	}
+
 	private String lastName = "";
 	private ComplianceOverrides.Parsed lastGood;
 	private Instant lastGoodAt;
+	/** Straight FETCH_FAILED cycles for the current name. */
+	private int fetchFailures;
 
 	/**
 	 * The configured name without path noise: trimmed, and a trailing
@@ -154,20 +224,23 @@ public final class OverridesStore {
 			lastName = name;
 			lastGood = null;
 			lastGoodAt = null;
+			fetchFailures = 0;
 		}
 		if (name.isEmpty()) {
+			fetchFailures = 0;
 			return new Snapshot("", Status.NONE, null, null, null);
 		}
 		if (name.contains("/") || name.contains("\\")) {
 			lastGood = null;
 			lastGoodAt = null;
+			fetchFailures = 0;
 			return new Snapshot(name, Status.ABSENT, null, null,
 					"the name must not contain a path (enter only the name "
 							+ "of your copy)");
 		}
 		if (fetcher == null) {
-			return keep(name, Status.FETCH_FAILED,
-					"no Suite API channel on this collector");
+			return fetchFailed(name, "no Suite API channel on this collector",
+					"no Suite API channel");
 		}
 		String body;
 		try {
@@ -180,13 +253,15 @@ public final class OverridesStore {
 			if (ABSENT_STATUS.matcher(msg).find()) {
 				lastGood = null;
 				lastGoodAt = null;
+				fetchFailures = 0;
 				return new Snapshot(name, Status.ABSENT, null, null,
 						"the configuration-file store has no file named '"
 								+ name + "' (" + msg + ")");
 			}
-			return keep(name, Status.FETCH_FAILED,
-					e.getClass().getSimpleName() + ": " + msg);
+			return fetchFailed(name, e.getClass().getSimpleName() + ": " + msg,
+					fetchReason(e));
 		}
+		fetchFailures = 0;
 		ComplianceOverrides.Parsed parsed;
 		try {
 			parsed = ComplianceOverrides.parse(body);
@@ -200,6 +275,12 @@ public final class OverridesStore {
 
 	private Snapshot keep(String name, Status status, String detail) {
 		return new Snapshot(name, status, lastGood, lastGoodAt, detail);
+	}
+
+	private Snapshot fetchFailed(String name, String detail, String reason) {
+		fetchFailures++;
+		return new Snapshot(name, Status.FETCH_FAILED, lastGood, lastGoodAt,
+				detail, reason, fetchFailures);
 	}
 
 	private static String enc(String s) {

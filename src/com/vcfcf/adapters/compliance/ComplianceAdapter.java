@@ -82,6 +82,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile OverridesStore.Snapshot cycleOverridesSnap;
 	private volatile ComplianceOverrides.Resolved cycleOverrides =
 			ComplianceOverrides.Resolved.EMPTY;
+	// Build 90 (review N1): Skip and Override entries in force for this
+	// instance's own profile set this cycle (Summary|overrides_skipped and
+	// overrides_overridden), not every entry accepted against any bundled
+	// profile.
+	private volatile int cycleSkippedInForce;
+	private volatile int cycleOverriddenInForce;
 
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
@@ -595,6 +601,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		if (parsed == null || parsed.isEmpty()) {
 			cycleOverrides = ComplianceOverrides.Resolved.EMPTY;
+			cycleSkippedInForce = 0;
+			cycleOverriddenInForce = 0;
 			profilesByName = baseProfiles;
 			return base;
 		}
@@ -609,6 +617,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		ComplianceOverrides.Resolved r =
 				ComplianceOverrides.resolve(parsed, known.values());
 		cycleOverrides = r;
+		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> rawPins =
+				r.pins(bundled);
+		cycleSkippedInForce =
+				r.skippedIn(baseProfiles.values(), rawPins).size();
+		cycleOverriddenInForce =
+				r.overriddenIn(baseProfiles.values(), rawPins).size();
 
 		java.util.Map<String, BenchmarkProfile> effBase = r.adjust(baseProfiles);
 		java.util.Map<String, BenchmarkProfile> effBundled = r.adjust(bundled);
@@ -662,7 +676,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				break;
 			case FETCH_FAILED:
 				logWarn("Overrides file '" + snap.fileName + "' could not be "
-						+ "fetched this cycle: " + snap.detail + ". "
+						+ "fetched this cycle (" + snap.fetchReason + ", "
+						+ snap.fetchFailures + " cycle"
+						+ (snap.fetchFailures == 1 ? "" : "s")
+						+ " in a row): " + snap.detail + ". "
 						+ (snap.parsed != null
 								? "Keeping the copy read at "
 										+ OverridesStore.formatTime(
@@ -670,6 +687,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 												java.time.ZoneId.systemDefault())
 								: "No earlier copy to keep: running with no "
 										+ "overrides")
+						+ (snap.notLoaded()
+								? "; the overrides-not-loaded alert is raised"
+								: "")
 						+ ".");
 				break;
 			default:
@@ -697,6 +717,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 									+ (r.applied.size() == 1 ? "y" : "ies")
 									+ " applied: "
 									+ String.join("; ", r.applied))
+					+ (r.changesProfiles()
+							? " (in force for this instance's profiles: "
+									+ cycleSkippedInForce + " skipped, "
+									+ cycleOverriddenInForce + " overridden)"
+							: "")
 					+ (r.rejected.isEmpty() ? ""
 							: " (" + r.rejected.size() + " rejected, see the "
 									+ "WARN lines)"));
@@ -707,8 +732,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		String status = snap.statusText(r.rejected.size(),
 				java.time.ZoneId.systemDefault());
-		int skipped = r.skipped.size();
-		int overridden = r.overridden.size();
+		int skipped = cycleSkippedInForce;
+		int overridden = cycleOverriddenInForce;
 		boolean notLoaded = snap.notLoaded();
 
 		long ts = System.currentTimeMillis();

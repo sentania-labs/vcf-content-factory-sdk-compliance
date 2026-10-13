@@ -534,6 +534,53 @@ public final class ComplianceOverrides {
 		}
 
 		/**
+		 * Build 90 (review N1): the skipped ids in force for this instance.
+		 * A control kind is scored from its pinned profile when the file pins
+		 * that kind, otherwise from the instance's own profiles ({@code
+		 * base}: every bundled one in Auto, the one chosen otherwise). An id
+		 * counts when one of those profiles scores it for its kind. Both
+		 * arguments are the profiles BEFORE adjustment, since a skip removes
+		 * the control. A Skip accepted only because some other bundled
+		 * profile carries the control changes nothing here and is not
+		 * counted.
+		 *
+		 * @param base the instance's own profiles, unadjusted
+		 * @param pins the pinned profile per kind, unadjusted (may be empty)
+		 */
+		public Set<String> skippedIn(Collection<BenchmarkProfile> base,
+				Map<BenchmarkSelector.Kind, BenchmarkProfile> pins) {
+			return inForce(skipped, base, pins);
+		}
+
+		/** As {@link #skippedIn}, for the overridden ids. */
+		public Set<String> overriddenIn(Collection<BenchmarkProfile> base,
+				Map<BenchmarkSelector.Kind, BenchmarkProfile> pins) {
+			return inForce(overridden.keySet(), base, pins);
+		}
+
+		private static Set<String> inForce(Set<String> ids,
+				Collection<BenchmarkProfile> base,
+				Map<BenchmarkSelector.Kind, BenchmarkProfile> pins) {
+			Set<String> out = new TreeSet<>();
+			if (ids.isEmpty()) return out;
+			List<BenchmarkProfile> candidates = new ArrayList<>();
+			if (base != null) candidates.addAll(base);
+			if (pins != null) candidates.addAll(pins.values());
+			for (BenchmarkProfile p : candidates) {
+				if (p == null) continue;
+				for (BenchmarkProfile.Control c : p.controls) {
+					if (!ids.contains(c.controlId) || !scored(c)) continue;
+					BenchmarkSelector.Kind k = kindOfControl(c);
+					BenchmarkProfile pinned = pins == null ? null : pins.get(k);
+					boolean governs = pinned != null ? pinned == p
+							: base != null && base.contains(p);
+					if (governs) out.add(c.controlId);
+				}
+			}
+			return out;
+		}
+
+		/**
 		 * Copies of {@code in} with the skipped controls removed and the
 		 * overridden expected values in place. {@code in} itself is returned
 		 * when nothing changes the profiles. Names and order are kept.
