@@ -440,10 +440,12 @@ public final class OverridesTest {
 				"actual carries the site value");
 		T.eq("3 (site override)", props.get(k + LOCKOUT + "|Expected"),
 				"expected marked");
-		T.eq("(unreadable)", props.get(k + "esx.other|Actual"),
-				"unreadable actual untouched");
-		T.eq("3 (site override)", props.get(k + "esx.other|Expected"),
-				"unreadable expected still marked");
+		// Build 95: an unreadable control is not pushed at all, so its
+		// last Actual and Expected stay as they were.
+		T.check(!props.containsKey(k + "esx.other|Actual"),
+				"unreadable actual not pushed");
+		T.check(!props.containsKey(k + "esx.other|Expected"),
+				"unreadable expected not pushed");
 		T.eq("1", props.get(k + "esx.plain|Actual"), "plain control untouched");
 		T.eq("1", props.get(k + "esx.plain|Expected"), "plain expected");
 		T.eq(props, ComplianceDecisions.complianceProps(cr, "VMware_SCG_9.0",

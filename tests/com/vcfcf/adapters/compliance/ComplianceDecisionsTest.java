@@ -80,7 +80,9 @@ public final class ComplianceDecisionsTest {
 		T.near(0, cs.get(K + "pass_count"), "pass zeroed when nothing scored");
 		T.near(0, cs.get(K + "fail_count"), "fail zeroed when nothing scored");
 		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
-		T.near(-1, cs.get(K + "esx.x|Compliant"), "unreadable Compliant=-1");
+		// Build 95: an unreadable control is not pushed (was -1).
+		T.check(!cs.containsKey(K + "esx.x|Compliant"),
+				"unreadable control not pushed");
 
 		// Partial unreadable lowers the score; fail and unreadable stay apart.
 		ControlEvaluator.ComplianceResult partial =

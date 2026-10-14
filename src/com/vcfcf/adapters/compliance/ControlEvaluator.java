@@ -471,8 +471,8 @@ public final class ControlEvaluator {
 	 * {@code unreadableCount}, are NEVER compliant, and are not in pass,
 	 * fail or total; since build 63 they count as failing in the score
 	 * ({@link #score}). They are recorded as a {@link ControlResult} with
-	 * {@code unreadable=true} and {@code actual="(unreadable)"}, pushed as
-	 * Compliant = -1 (no per-control violation alert).
+	 * {@code unreadable=true} and {@code actual="(unreadable)"}; build 95
+	 * does not push them (no per-control value, no violation alert).
 	 */
 	public static ComplianceResult evaluateVimProperties(
 			List<BenchmarkProfile.Control> controls,
@@ -847,10 +847,9 @@ public final class ControlEvaluator {
 		public final boolean compliant;
 		public final String description;
 		// v3 (build 57): explicit unreadable marker. An unreadable control
-		// is never compliant, and it is not a failure either: the push
-		// writes Compliant=-1 for it (not 0), so the per-control
-		// "Compliant == 0" compliance alert never fires a remediation
-		// runbook for a setting the adapter could not read.
+		// is never compliant, and it is not a failure either. Build 95: it
+		// is not pushed at all (builds 57 to 94 pushed Compliant=-1), so
+		// its last value and any per-control alert stay as they were.
 		public final boolean unreadable;
 
 		public ControlResult(String scgId, String actual, String expected,

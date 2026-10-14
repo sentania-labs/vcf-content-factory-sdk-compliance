@@ -2465,7 +2465,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * resource. Keys are profile-free
 	 * ({@code VCF-CF Compliance|<control_id>|...}); the payload is built by
 	 * {@link ComplianceDecisions#complianceStats} /
-	 * {@link ComplianceDecisions#complianceProps}: Compliant 1 / 0 / -1,
+	 * {@link ComplianceDecisions#complianceProps}: Compliant 1 / 0 for
+	 * every control read (build 95: an unreadable control is not pushed),
 	 * score whenever a control was attempted (build 63: unreadable counts
 	 * as failing),
 	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.

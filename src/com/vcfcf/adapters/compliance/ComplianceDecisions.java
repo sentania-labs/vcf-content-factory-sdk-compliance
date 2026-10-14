@@ -143,9 +143,15 @@ public final class ComplianceDecisions {
 			ControlEvaluator.ComplianceResult cr) {
 		Map<String, Double> stats = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
-			stats.put(K + ctrl.scgId + "|Compliant", ctrl.unreadable
-					? ComplianceAdapterConstants.COMPLIANT_NOT_EVALUATED
-					: (ctrl.compliant ? 1.0 : 0.0));
+			// Build 95 (Scott 2026-10-14, "if we have missing data we just
+			// don't log it"): a control that could not be read this cycle
+			// is not pushed at all, for every cause (a host vCenter reports
+			// not responding included). Its last value, and any alert on
+			// it, stay as they were; the object's has_unreadable flag says
+			// the data is not current. Before build 95 it was pushed as -1.
+			if (ctrl.unreadable) continue;
+			stats.put(K + ctrl.scgId + "|Compliant",
+					ctrl.compliant ? 1.0 : 0.0);
 		}
 		if (cr.attempted() > 0) {
 			stats.put(K + "score", cr.score);
@@ -187,23 +193,26 @@ public final class ComplianceDecisions {
 	 * {@code siteOverridden} (its expected value comes from the overrides
 	 * file) Expected reads {@code "<v> (site override)"} and a read Actual
 	 * reads {@code "<actual>, expected <v> (site override)"}, so the object
-	 * and the published guide never silently disagree. An unreadable
-	 * control's Actual stays {@code (unreadable)}.
+	 * and the published guide never silently disagree. Build 95: an
+	 * unreadable control is left out entirely (its keys keep their last
+	 * values).
 	 */
 	public static Map<String, String> complianceProps(
 			ControlEvaluator.ComplianceResult cr, String profileName,
 			Set<String> siteOverridden) {
 		Map<String, String> props = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
+			// Build 95: an unreadable control's Actual, Expected and
+			// Description are not pushed, so its last read Actual is not
+			// overwritten with "(unreadable)" (see complianceStats).
+			if (ctrl.unreadable) continue;
 			String base = K + ctrl.scgId;
 			boolean site = siteOverridden != null
 					&& siteOverridden.contains(ctrl.scgId);
 			String actual = ctrl.actual;
 			String expected = ctrl.expected;
 			if (site) {
-				if (!ctrl.unreadable) {
-					actual = actual + ", expected " + expected + SITE_OVERRIDE;
-				}
+				actual = actual + ", expected " + expected + SITE_OVERRIDE;
 				expected = expected + SITE_OVERRIDE;
 			}
 			props.put(base + "|Actual", actual);
@@ -583,7 +592,13 @@ public final class ComplianceDecisions {
 		return unreadableCount > 0;
 	}
 
-	/** Control ids whose Compliant value a result pushes. */
+	/**
+	 * Control ids the stale-key cleanup must leave alone for one object:
+	 * every control with a result this cycle. Build 95: that includes an
+	 * unreadable control, which is not pushed but is held at its last
+	 * value on purpose; the cleanup must not retire it to -1 either (a
+	 * control of the current benchmark missing from this set would be).
+	 */
 	public static Set<String> pushedIds(ControlEvaluator.ComplianceResult cr) {
 		Set<String> out = new TreeSet<>();
 		if (cr == null) return out;
