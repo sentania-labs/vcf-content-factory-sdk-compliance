@@ -10,14 +10,15 @@ list to find the data:
 | VMWARE object | What the pack pushes onto it |
 |---|---|
 | HostSystem, VirtualMachine, VMwareAdapter Instance (vCenter), ClusterComputeResource, VmwareDistributedVirtualSwitch, DistributedVirtualPortgroup | Per control: `VCF-CF Compliance\|<control_id>\|{Actual, Expected, Description}` (properties) and `...\|Compliant` (1 / 0 / -1 not evaluated). Per object: `profile_name`, `score`, `pass_count`, `fail_count`, `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark`, `collection_failed` (1 when nothing could be read on the object). |
-| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score}`, `Rollup\|<kind>\|unmatched` per kind (build 88), `Rollup\|VM\|skipped_pods` (build 88), `Rollup\|incomplete`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
+| VMwareAdapter Instance (vCenter) | Per-vCenter rollup: `VCF-CF Compliance\|Rollup\|<All, Host, VM, vCenter, Cluster, vDS, Portgroup>\|{scored, non_compliant, no_benchmark, score_sum, avg_score, controls_evaluated, controls_passed, controls_unreadable, pass_rate}` (the last four build 95), `Rollup\|<kind>\|unmatched` per kind (build 88), `Rollup\|VM\|skipped_pods` (build 88), `Rollup\|incomplete`, and `Rollup\|Benchmark\|<SCG_6.7 ... SCG_9.1, none, unknown>\|objects`. |
 | The same six kinds | 143 alert definitions, all type Compliance (subType 21): 136 per-control alerts, one per scored SCG control, named `VCF Content Factory Compliance Alert: <control_id>: <title>`, raised when that control's `Compliant` is 0, each with the SCG remediation as its recommendation; 6 "VCF Content Factory Compliance Alert: Compliance data not collected (<kind>)" alerts, one per kind, severity Immediate, raised when `unreadable_count` > 0 or `collection_failed` = 1, with a recommendation on what unreadable means and what to check; and 1 "VCF Content Factory Compliance Alert: Host Compliance Score Degraded" alert on HostSystem (score below 95 / 80). Every alert name starts with that prefix (build 86), so all of the pack's alerts sort and filter together. |
 
 The full key list, with when each key is pushed, is in
 [data-reference.md](data-reference.md) under "Keys pushed onto VMWARE resources".
 
 The pack's own `ComplianceWorld` carries the environment totals,
-`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score}`
+`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score,
+controls_evaluated, controls_passed, controls_unreadable, pass_rate}`
 (no `VCF-CF Compliance` group on the world), which VCF Operations computes from the per-vCenter rollups
 (see "Resource kinds" below).
 
@@ -69,8 +70,26 @@ The Compliance World carries two kinds of data:
   vCenter's `VCF-CF Compliance|Rollup|All|*` keys across the Compliance
   World's `VMwareAdapter Instance` children. `avg_score` is the summed
   `score_sum` over the summed `scored`, a weighted average, never an
-  average of per-vCenter averages. This is how VMWARE fills vSphere
-  World's own summary counts.
+  average of per-vCenter averages. Build 95 adds `controls_evaluated`,
+  `controls_passed`, `controls_unreadable` (sums) and `pass_rate`, the
+  summed `controls_passed` over the summed `controls_evaluated` times
+  100: the percentage the dashboards show. This is how VMWARE fills
+  vSphere World's own summary counts.
+
+**Why the percentage is controls passing (build 95).** An average of
+object scores weighs every object the same, so a port group with 7
+evaluated controls (SCG 9.1) counted as much as a host with 56, and 58 port groups at about
+93% and 103 VMs at about 74% lifted prod's environment to 79.9% while
+vCenters scored 50 and vDS 75. The pass rate counts every evaluated
+control once: controls passed over controls evaluated, per kind, per
+vCenter and for the environment. Two numbers now answer two questions:
+the pass rate says how much of the guide is met; the object counts
+(`scored`, `non_compliant`) say how many objects have work to do.
+Unreadable controls are neither passes nor in the denominator; they are
+counted in `controls_unreadable` so missing data is never hidden behind a
+good rate (a host's own `score` still counts them as failing). With
+nothing evaluated, no pass rate is pushed, never 100. `avg_score` is still
+pushed but no dashboard shows it.
 
 Because no instance writes a total, any number of adapter instances can
 share the world without overwriting each other (the reason per-instance
@@ -105,10 +124,12 @@ On every evaluated VMWARE object: the per-control
 `total_count`, `unreadable_count`, `non_compliant`, `no_benchmark` and the
 `profile_name` property. On each vCenter (`VMwareAdapter Instance`): the
 per-vCenter rollup `VCF-CF Compliance|Rollup|<kind>|{scored,
-non_compliant, no_benchmark, score_sum, avg_score}` for All, Host, VM,
+non_compliant, no_benchmark, score_sum, avg_score, controls_evaluated,
+controls_passed, controls_unreadable, pass_rate}` for All, Host, VM,
 vCenter, Cluster, vDS and Portgroup, plus objects per benchmark. On the
 Compliance World: the engine-computed environment totals
-`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score}` and
+`Rollup|Environment|{scored, non_compliant, no_benchmark, avg_score,
+controls_evaluated, controls_passed, controls_unreadable, pass_rate}` and
 `Summary|last_scan_timestamp`. The full key list is in
 [data-reference.md](data-reference.md).
 
@@ -116,7 +137,7 @@ Compliance World: the engine-computed environment totals
 
 | Dashboard | What it is for |
 |---|---|
-| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
+| [VCF Content Factory] Compliance Environment Overview | The landing page: environment controls passing, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
 | [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
@@ -135,7 +156,7 @@ collected" alerts and the Host Compliance Score Degraded alert alike. The
 widget has no filter that separates them, and pinning all 143 alert
 definitions per widget was ruled out.
 
-The Environment Overview's four score tiles (Average Score, Non-Compliant
+The Environment Overview's four tiles (Controls Passing, Non-Compliant
 Objects, Objects Without Benchmark, Objects Scored) and its score trend
 read the engine-computed `Rollup|Environment|*` metrics on the pack's own
 Compliance World (build 86). **Nothing needs enabling in a policy**, and
@@ -251,6 +272,13 @@ collection continues; compliance is never failed over a stitch error.
   prefix is matched: no vendor list of every CRX guest id was found, and
   devel Pods show guest "VMware CRX Pod 1 (64-bit)" (`crxPod1Guest`).
 
+- **No pass rate when nothing was evaluated (build 95).**
+  `Rollup|<K>|pass_rate` is pushed only when `Rollup|<K>|controls_evaluated`
+  > 0; the three control counts are pushed every cycle (held back with the
+  kind when its listing fails). A kind whose every control was unreadable
+  shows `controls_unreadable` > 0, `controls_evaluated` 0 and no rate;
+  the table cell then keeps the last rate it had, so read it with the
+  Controls Unreadable column and the kind's non-compliant count.
 - **Per-vCenter averages when nothing was scored.** `Rollup|<K>|avg_score`
   is pushed only when `Rollup|<K>|scored` > 0; `scored` itself is pushed
   every cycle, 0 when nothing of that kind was scored. An `avg_score` next
@@ -290,7 +318,9 @@ collection continues; compliance is never failed over a stitch error.
 
 - **Unreadable objects are non-compliant and in the averages.** An object
   with any unreadable control has `non_compliant` = 1 and its real score
-  (0 when nothing was read) in its vCenter's rollup averages. The pre-63
+  (0 when nothing was read) in its vCenter's rollup averages. Its
+  unreadable controls are not in the pass rate (build 95); they are
+  counted in `controls_unreadable`. The pre-63
   "last-known score" carry-forward for unreadable hosts and the
   `Rollup|Host|scored_stale` key are retired.
 

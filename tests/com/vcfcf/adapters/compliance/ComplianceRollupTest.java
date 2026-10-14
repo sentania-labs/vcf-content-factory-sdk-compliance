@@ -116,6 +116,10 @@ public final class ComplianceRollupTest {
 		build88Pods();
 		build88DevelWorkedExample();
 		build92RetiredCustom();
+		build95PassRate();
+		build95HeldBack();
+		build95NothingEvaluated();
+		build95ProdWorkedExample();
 
 		System.out.println("ComplianceRollupTest: all assertions passed");
 	}
@@ -339,5 +343,225 @@ public final class ComplianceRollupTest {
 				"incomplete: Benchmark keys held back, Custom not zeroed");
 		T.check(!is.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
 				"incomplete: no Custom key");
+	}
+
+	/**
+	 * Build 95: a vCenter with a mix of kinds. Per kind and for All,
+	 * pass_rate = controls_passed / controls_evaluated * 100; unreadable
+	 * controls are in neither count and are counted on their own.
+	 */
+	static void build95PassRate() {
+		ComplianceRollup r = new ComplianceRollup();
+		// Hosts: 9 of 10, 8 of 8 with 2 unreadable, all 40 unreadable.
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 1, 0,
+				ControlEvaluator.score(9, 1, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 8, 0, 2,
+				ControlEvaluator.score(8, 0, 2));
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
+				ControlEvaluator.score(0, 0, 40));
+		// VMs: 15 of 19, twice.
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
+				ControlEvaluator.score(15, 4, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
+				ControlEvaluator.score(15, 4, 0));
+		// vCenter: 15 of 20, 1 unreadable.
+		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 20, 5, 1,
+				ControlEvaluator.score(15, 5, 1));
+		// Non-vSAN cluster: nothing attempted. Port group: 12 of 12.
+		r.recordEvaluated(BenchmarkSelector.Kind.CLUSTER, "SCG_9.1", 0, 0, 0,
+				ControlEvaluator.score(0, 0, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.PORTGROUP, "SCG_9.1", 12, 0,
+				0, ControlEvaluator.score(12, 0, 0));
+		// A no-benchmark host and a version-unreadable VM add no controls.
+		r.recordNoBenchmark(BenchmarkSelector.Kind.HOST);
+		r.recordVersionUnreadable(BenchmarkSelector.Kind.VM);
+		Map<String, Double> s = r.toStats();
+
+		T.near(18, s.get(P + "Host|controls_evaluated"), "host evaluated 10+8+0");
+		T.near(17, s.get(P + "Host|controls_passed"), "host passed 9+8+0");
+		T.near(42, s.get(P + "Host|controls_unreadable"), "host unreadable 2+40");
+		T.near(1700.0 / 18, s.get(P + "Host|pass_rate"),
+				"host pass_rate = passed / evaluated");
+		T.near(38, s.get(P + "VM|controls_evaluated"), "vm evaluated");
+		T.near(30, s.get(P + "VM|controls_passed"), "vm passed");
+		T.near(0, s.get(P + "VM|controls_unreadable"), "vm unreadable");
+		T.near(3000.0 / 38, s.get(P + "VM|pass_rate"), "vm pass_rate");
+		T.near(20, s.get(P + "vCenter|controls_evaluated"), "vc evaluated");
+		T.near(15, s.get(P + "vCenter|controls_passed"), "vc passed");
+		T.near(1, s.get(P + "vCenter|controls_unreadable"), "vc unreadable");
+		T.near(75, s.get(P + "vCenter|pass_rate"),
+				"vc pass_rate 15/20, unreadable not in the denominator");
+		T.near(100, s.get(P + "Portgroup|pass_rate"), "pg pass_rate");
+		T.near(0, s.get(P + "Cluster|controls_evaluated"), "cluster none");
+		T.check(!s.containsKey(P + "Cluster|pass_rate"),
+				"cluster: nothing evaluated, no pass_rate");
+		T.check(!s.containsKey(P + "vDS|pass_rate"), "vDS: no pass_rate");
+		T.near(0, s.get(P + "vDS|controls_evaluated"), "vDS counts pushed 0");
+
+		T.near(88, s.get(P + "All|controls_evaluated"), "all evaluated");
+		T.near(74, s.get(P + "All|controls_passed"), "all passed");
+		T.near(43, s.get(P + "All|controls_unreadable"), "all unreadable");
+		T.near(7400.0 / 88, s.get(P + "All|pass_rate"),
+				"All pass_rate is the ratio of sums");
+		// The object mean is unchanged and differs from the pass rate.
+		double mean = s.get(P + "All|score_sum") / s.get(P + "All|scored");
+		T.near(mean, s.get(P + "All|avg_score"), "avg_score still the mean");
+		T.check(Math.abs(mean - s.get(P + "All|pass_rate")) > 1,
+				"pass_rate is not the object mean");
+		// Per-kind sums add up to All.
+		double ev = 0, pa = 0, un = 0;
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			ev += s.get(P + k.rollupName + "|controls_evaluated");
+			pa += s.get(P + k.rollupName + "|controls_passed");
+			un += s.get(P + k.rollupName + "|controls_unreadable");
+		}
+		T.near(88, ev, "kinds sum to All evaluated");
+		T.near(74, pa, "kinds sum to All passed");
+		T.near(43, un, "kinds sum to All unreadable");
+		T.check(ComplianceRollup.passRate(0, 0) == null, "passRate(0,0) null");
+		T.near(50, ComplianceRollup.passRate(1, 2), "passRate(1,2)");
+	}
+
+	/**
+	 * Build 95: a kind whose listing failed holds its control counts and
+	 * pass_rate back with its other keys, and All's with it (build 78/88).
+	 */
+	static void build95HeldBack() {
+		ComplianceRollup r = new ComplianceRollup();
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 1, 0,
+				ControlEvaluator.score(9, 1, 0));
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
+				ControlEvaluator.score(15, 4, 0));
+		r.markIncomplete(BenchmarkSelector.Kind.VM);
+		Map<String, Double> s = r.toStats();
+		for (String k : new String[] {"controls_evaluated", "controls_passed",
+				"controls_unreadable", "pass_rate"}) {
+			T.check(!s.containsKey(P + "VM|" + k), "VM|" + k + " held back");
+			T.check(!s.containsKey(P + "All|" + k), "All|" + k + " held back");
+		}
+		T.near(10, s.get(P + "Host|controls_evaluated"),
+				"other kinds still pushed");
+		T.near(90, s.get(P + "Host|pass_rate"), "host pass_rate pushed");
+		T.near(1, s.get(ComplianceRollup.INCOMPLETE_KEY), "incomplete = 1");
+	}
+
+	/**
+	 * Build 95: nothing evaluated means no pass_rate (never 100), with the
+	 * counts still pushed; all-unreadable controls are counted, not passed.
+	 */
+	static void build95NothingEvaluated() {
+		Map<String, Double> e = new ComplianceRollup().toStats();
+		T.near(0, e.get(P + "All|controls_evaluated"), "empty evaluated 0");
+		T.near(0, e.get(P + "All|controls_passed"), "empty passed 0");
+		T.near(0, e.get(P + "All|controls_unreadable"), "empty unreadable 0");
+		T.check(!e.containsKey(P + "All|pass_rate"), "empty: no pass_rate");
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			T.check(!e.containsKey(P + k.rollupName + "|pass_rate"),
+					"empty: no " + k.rollupName + "|pass_rate");
+		}
+
+		ComplianceRollup u = new ComplianceRollup();
+		u.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
+				ControlEvaluator.score(0, 0, 40));
+		u.recordVersionUnreadable(BenchmarkSelector.Kind.VM);
+		Map<String, Double> us = u.toStats();
+		T.near(0, us.get(P + "Host|controls_evaluated"), "unreadable: 0 eval");
+		T.near(40, us.get(P + "Host|controls_unreadable"), "40 unreadable");
+		T.check(!us.containsKey(P + "Host|pass_rate"),
+				"all unreadable: no pass_rate, never 100");
+		T.check(!us.containsKey(P + "All|pass_rate"), "All: no pass_rate");
+		T.near(0, us.get(P + "All|avg_score"),
+				"the object mean still reads 0 (build 63 rule unchanged)");
+	}
+
+	/**
+	 * Build 95 worked example: the prod table of 2026-10-14 (scored
+	 * objects and object-mean scores per vCenter and kind), with a FIXED
+	 * evaluated-control count per kind (the SCG 9.1 evaluable controls:
+	 * host 56, VM 22, vCenter 10, cluster 2, vDS 7, port group 7) and no
+	 * unreadable controls, so each kind's per-object mean is passed /
+	 * evaluated. Passed per vCenter and kind is round(mean * count *
+	 * objects), spread over the objects. Environment = the ComputedMetric
+	 * ratio of the vCenters' All sums. Prod object-weighted mean: 79.87.
+	 */
+	@SuppressWarnings("unchecked")
+	static void build95ProdWorkedExample() {
+		BenchmarkSelector.Kind[] kinds = {BenchmarkSelector.Kind.HOST,
+				BenchmarkSelector.Kind.VM, BenchmarkSelector.Kind.CLUSTER,
+				BenchmarkSelector.Kind.VCENTER, BenchmarkSelector.Kind.VDS,
+				BenchmarkSelector.Kind.PORTGROUP};
+		int[] controls = {56, 22, 2, 10, 7, 7};
+		int[][] objects = {{6, 2, 2}, {46, 25, 32}, {1, 0, 0}, {1, 1, 1},
+				{1, 1, 1}, {12, 32, 14}};
+		double[][] means = {{65.28, 72.92, 71.88}, {74.41, 73.64, 74.43},
+				{100, 0, 0}, {50, 50, 50}, {75, 75, 75},
+				{90.48, 95.54, 90.82}};
+		ComplianceRollup[] vc = {new ComplianceRollup(),
+				new ComplianceRollup(), new ComplianceRollup()};
+		long[] kindPassed = new long[kinds.length];
+		long[] kindEval = new long[kinds.length];
+		for (int k = 0; k < kinds.length; k++) {
+			for (int v = 0; v < 3; v++) {
+				int n = objects[k][v];
+				if (n == 0) continue;
+				int c = controls[k];
+				long passed = Math.round(means[k][v] / 100.0 * c * n);
+				for (int i = 0; i < n; i++) {
+					int p = (int) (passed / n + (i < passed % n ? 1 : 0));
+					vc[v].recordEvaluated(kinds[k], "SCG_9.1", c, c - p, 0,
+							ControlEvaluator.score(p, c - p, 0));
+				}
+				kindPassed[k] += passed;
+				kindEval[k] += (long) c * n;
+			}
+		}
+		Map<String, Double>[] st = new Map[3];
+		for (int v = 0; v < 3; v++) st[v] = vc[v].toStats();
+		double envPassed = 0, envEval = 0, envScored = 0, envSum = 0;
+		for (int v = 0; v < 3; v++) {
+			envPassed += st[v].get(P + "All|controls_passed");
+			envEval += st[v].get(P + "All|controls_evaluated");
+			envScored += st[v].get(P + "All|scored");
+			envSum += st[v].get(P + "All|score_sum");
+		}
+		T.near(178, envScored, "prod objects scored");
+		// Whole controls per object round the means slightly (a vDS
+		// cannot pass 75% of 7), so the mean lands within 0.1 of prod.
+		T.check(Math.abs(79.87 - envSum / envScored) < 0.1,
+				"object-weighted mean reproduces prod 79.87: "
+				+ envSum / envScored);
+		for (int k = 0; k < kinds.length; k++) {
+			double sumP = 0, sumE = 0;
+			for (int v = 0; v < 3; v++) {
+				String n = kinds[k].rollupName;
+				sumP += st[v].get(P + n + "|controls_passed");
+				sumE += st[v].get(P + n + "|controls_evaluated");
+			}
+			T.near((double) kindPassed[k], sumP, kinds[k] + " passed");
+			T.near((double) kindEval[k], sumE, kinds[k] + " evaluated");
+		}
+		double env = envPassed / envEval * 100.0;
+		// Pinned: 2475 of 3285 controls pass (75.34%), below the 79.87
+		// object mean: a host's 56 controls now weigh 8 times a port
+		// group's 7, and the 58 port groups no longer carry the number.
+		T.near(3285, envEval, "environment controls evaluated");
+		T.near(2475, envPassed, "environment controls passed");
+		T.near(247500.0 / 3285, env, "environment pass_rate");
+		if (Boolean.getBoolean("rollup.print")) {
+			for (int k = 0; k < kinds.length; k++) {
+				System.out.printf("%s passed %d / evaluated %d = %.2f%%%n",
+						kinds[k].rollupName, kindPassed[k], kindEval[k],
+						100.0 * kindPassed[k] / kindEval[k]);
+			}
+			for (int v = 0; v < 3; v++) {
+				System.out.printf("vCenter %d All pass_rate %.2f (%s/%s)%n",
+						v + 1, st[v].get(P + "All|pass_rate"),
+						st[v].get(P + "All|controls_passed"),
+						st[v].get(P + "All|controls_evaluated"));
+			}
+			System.out.printf("Environment pass_rate %.2f (%.0f/%.0f), "
+					+ "object mean %.2f%n", env, envPassed, envEval,
+					envSum / envScored);
+		}
 	}
 }

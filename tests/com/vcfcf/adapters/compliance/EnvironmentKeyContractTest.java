@@ -173,6 +173,16 @@ public final class EnvironmentKeyContractTest {
 		wantRefs.put("Rollup|Environment|avg_score",
 				List.of(all + "score_sum", all + "scored"));
 		wantShape.put("Rollup|Environment|avg_score", sumRatio);
+		// Build 95: control counts summed; pass_rate is summed passed over
+		// summed evaluated, in that order, times 100 (a ratio of sums).
+		for (String c : List.of("controls_evaluated", "controls_passed",
+				"controls_unreadable")) {
+			wantRefs.put("Rollup|Environment|" + c, List.of(all + c));
+			wantShape.put("Rollup|Environment|" + c, sumOne);
+		}
+		wantRefs.put("Rollup|Environment|pass_rate",
+				List.of(all + "controls_passed", all + "controls_evaluated"));
+		wantShape.put("Rollup|Environment|pass_rate", sumRatio + "*100");
 
 		T.eq(wantRefs.keySet(), computed,
 				"pinned environment keys match the declared ComputedMetrics");

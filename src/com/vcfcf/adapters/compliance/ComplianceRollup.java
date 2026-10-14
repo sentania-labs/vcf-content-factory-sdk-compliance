@@ -25,6 +25,14 @@ import java.util.Map;
  * VCF-CF Compliance|Rollup|&lt;K&gt;|unmatched       per kind, not All (build 88): objects with
  *                                                no matching VCF Ops resource, not counted
  *                                                anywhere else
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|controls_evaluated   build 95: controls passed plus failed,
+ *                                                summed over the kind's scored objects
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|controls_passed      build 95: controls passed
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|controls_unreadable  build 95: controls the adapter could not
+ *                                                read (in neither count above)
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|pass_rate            build 95: controls_passed /
+ *                                                controls_evaluated * 100, omitted when
+ *                                                controls_evaluated == 0
  * VCF-CF Compliance|Rollup|VM|skipped_pods        vSphere Pod VMs (guest id crx*), out of scope
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
@@ -52,6 +60,19 @@ import java.util.Map;
  * visible as {@code Rollup|<K>|unmatched} (0 when none) and in
  * {@link #unmatchedLogLine}. vSphere Pod VMs are out of scope and are
  * recorded with {@link #recordSkippedPod} only ({@code Rollup|VM|skipped_pods}).
+ *
+ * <p>Pass rate rule (build 95, Scott 2026-10-14 "compliance percentage is
+ * basically: Total passing controls/total controls evaluated"): the
+ * percentage shown for a kind, a vCenter and the environment is controls
+ * passed over controls evaluated, so a port group no longer weighs as much
+ * as a vCenter. Evaluated is passed plus failed; unreadable controls are in
+ * neither count (never a pass, never in the denominator) and are reported
+ * as {@code controls_unreadable} so missing data stays visible. Manual
+ * review and override-skipped controls never reach the counts. A
+ * version-unreadable object adds no controls (nothing was attempted; it
+ * stays visible in non_compliant and the unknown bucket). With nothing
+ * evaluated, pass_rate is omitted, never 100. The object-mean keys
+ * (score_sum, avg_score) are unchanged.
  *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
@@ -100,6 +121,9 @@ public final class ComplianceRollup {
 		int noBenchmark;
 		double scoreSum;
 		int unmatched;   // build 88: per kind only, never summed into All
+		long controlsEvaluated;   // build 95: passed + failed
+		long controlsPassed;      // build 95
+		long controlsUnreadable;  // build 95: in neither count above
 	}
 
 	private final Map<BenchmarkSelector.Kind, Tally> byKind =
@@ -243,6 +267,13 @@ public final class ComplianceRollup {
 			t.scored++;
 			t.scoreSum += score;
 		}
+		// Build 95: control counts. totalCount is passed + failed
+		// (ComplianceResult), unreadable is in neither.
+		int evaluated = Math.max(0, totalCount);
+		int failed = Math.min(Math.max(0, failCount), evaluated);
+		t.controlsEvaluated += evaluated;
+		t.controlsPassed += evaluated - failed;
+		t.controlsUnreadable += Math.max(0, unreadableCount);
 	}
 
 	private void bump(String bucket) {
@@ -259,6 +290,9 @@ public final class ComplianceRollup {
 			all.nonCompliant += t.nonCompliant;
 			all.noBenchmark += t.noBenchmark;
 			all.scoreSum += t.scoreSum;
+			all.controlsEvaluated += t.controlsEvaluated;
+			all.controlsPassed += t.controlsPassed;
+			all.controlsUnreadable += t.controlsUnreadable;
 		}
 		boolean complete = incomplete.isEmpty();
 		// Build 79 (review of build 78, WARNING): pushed EVERY cycle, never
@@ -305,5 +339,23 @@ public final class ComplianceRollup {
 		if (t.scored > 0) {
 			out.put(p + "avg_score", t.scoreSum / t.scored);
 		}
+		// Build 95: control counts and the pass rate. Same no-sentinel
+		// contract: no pass_rate without at least one evaluated control.
+		out.put(p + "controls_evaluated", (double) t.controlsEvaluated);
+		out.put(p + "controls_passed", (double) t.controlsPassed);
+		out.put(p + "controls_unreadable", (double) t.controlsUnreadable);
+		Double rate = passRate(t.controlsPassed, t.controlsEvaluated);
+		if (rate != null) {
+			out.put(p + "pass_rate", rate);
+		}
+	}
+
+	/**
+	 * Build 95: passed / evaluated * 100, or null when nothing was
+	 * evaluated (no data, never a substituted 100).
+	 */
+	public static Double passRate(long passed, long evaluated) {
+		if (evaluated <= 0) return null;
+		return (double) passed / evaluated * 100.0;
 	}
 }

@@ -70,7 +70,9 @@ Summary tab shows the environment tiles, the per-vCenter table, the score
 trend, the SCG version spread and the open compliance alerts on one page.
 These screenshots come from a lab with three vCenters.
 
-**Environment Overview** is the landing page: the average score, how many
+**Environment Overview** is the landing page: the share of controls
+passing across the environment (controls passed over controls evaluated,
+build 95; unreadable controls are counted separately, never as passes), how many
 objects are non-compliant, how many have no guide for their version, how
 many were scored (so a 0 non-compliant reading is never shown without its
 denominator), and how each vCenter is doing broken down by object type. Further down it
@@ -151,6 +153,19 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   re-imported by the same upgrade. Existing alerts are renamed in place
   (alert ids and start times are kept) and existing symptom and alert
   definitions take the new wait and cancel cycles. See [installing.md](docs/installing.md#upgrading).
+- **The percentages are controls passing, not an average of objects.**
+  (Build 95.) Every percentage on the dashboards is controls passed over
+  controls evaluated, so each control on each object counts once (a host
+  has several times the controls of a port group); before, each object counted once whatever its
+  size, which let many port groups and VMs lift the environment number
+  above every low-count kind. Each vCenter object carries, per kind and
+  for All, `VCF-CF Compliance|Rollup|<kind>|controls_evaluated`,
+  `controls_passed`, `controls_unreadable` and `pass_rate`; the Compliance
+  World carries the environment sums and
+  `Rollup|Environment|pass_rate`. Unreadable controls are never passes and
+  never in the denominator; they show in the Controls Unreadable column.
+  With nothing evaluated there is no percentage, never 100. The old
+  averages (`avg_score`) are still collected but no longer shown.
 - **The counts cover only objects VCF Operations knows about.** (Build
   88.) A host, VM, cluster, switch or portgroup that vCenter lists but that
   has no matching object in VCF Operations is not scored and not counted

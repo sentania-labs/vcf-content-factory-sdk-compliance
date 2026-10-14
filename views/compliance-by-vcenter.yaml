@@ -3,13 +3,18 @@ name: "[VCF Content Factory] Compliance by vCenter and Object Type"
 description: >
   Per-vCenter compliance rollup by object kind (Host, VM, Cluster, vDS,
   Portgroup) from the VCF-CF Compliance adapter (per-vCenter rollups
-  stitched onto VMWARE VMwareAdapter Instance). Each kind shows its
-  average score beside the objects it was computed from (scored) and how
-  many are non-compliant, so a retained average (scored = 0, avg_score
-  holding a prior cycle's value) is identifiable at a glance. Feeds
-  Environment Overview W3 (Compliance by vCenter and Object Type).
-  Sort by the vCenter's own Compliance Score ascending in the dashboard
-  widget to surface the worst vCenter first.
+  stitched onto VMWARE VMwareAdapter Instance). Build 95: each kind shows
+  Controls Passing (controls passed over controls evaluated on that kind's
+  objects; unreadable controls are in neither count) beside the objects
+  scored and how many are non-compliant. A kind with no evaluated control
+  shows no percentage, never 100. Controls Unreadable counts the controls
+  the adapter could not read, across every kind. The totals row sums the
+  count columns, which are the same per-vCenter keys the Environment
+  totals sum; percentages are not summed (the environment Controls
+  Passing is on the Compliance World tile). Feeds Environment Overview W3
+  (Compliance by vCenter and Object Type). Sort by vCenter Controls
+  Passing ascending in the dashboard widget to surface the worst vCenter
+  first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VMwareAdapter Instance
@@ -18,14 +23,14 @@ columns:
     display_name: "vCenter Version"
     is_property: true
     is_string_attribute: true
-  - attribute: VCF-CF Compliance|score
-    display_name: "vCenter Compliance Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|vCenter|pass_rate
+    display_name: "vCenter Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
     ascending_range: true
-  - attribute: VCF-CF Compliance|Rollup|Host|avg_score
-    display_name: "Host Avg Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|Host|pass_rate
+    display_name: "Host Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
@@ -34,8 +39,8 @@ columns:
     display_name: "Host Scored"
   - attribute: VCF-CF Compliance|Rollup|Host|non_compliant
     display_name: "Host Non-Compliant"
-  - attribute: VCF-CF Compliance|Rollup|VM|avg_score
-    display_name: "VM Avg Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|VM|pass_rate
+    display_name: "VM Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
@@ -44,8 +49,8 @@ columns:
     display_name: "VM Scored"
   - attribute: VCF-CF Compliance|Rollup|VM|non_compliant
     display_name: "VM Non-Compliant"
-  - attribute: VCF-CF Compliance|Rollup|Cluster|avg_score
-    display_name: "Cluster Avg Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|Cluster|pass_rate
+    display_name: "Cluster Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
@@ -54,8 +59,8 @@ columns:
     display_name: "Cluster Scored"
   - attribute: VCF-CF Compliance|Rollup|Cluster|non_compliant
     display_name: "Cluster Non-Compliant"
-  - attribute: VCF-CF Compliance|Rollup|vDS|avg_score
-    display_name: "vDS Avg Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|vDS|pass_rate
+    display_name: "vDS Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
@@ -64,8 +69,8 @@ columns:
     display_name: "vDS Scored"
   - attribute: VCF-CF Compliance|Rollup|vDS|non_compliant
     display_name: "vDS Non-Compliant"
-  - attribute: VCF-CF Compliance|Rollup|Portgroup|avg_score
-    display_name: "Portgroup Avg Score (%)"
+  - attribute: VCF-CF Compliance|Rollup|Portgroup|pass_rate
+    display_name: "Portgroup Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
@@ -76,11 +81,13 @@ columns:
     display_name: "Portgroup Non-Compliant"
   - attribute: VCF-CF Compliance|Rollup|All|no_benchmark
     display_name: "No Benchmark"
+  - attribute: VCF-CF Compliance|Rollup|All|controls_unreadable
+    display_name: "Controls Unreadable"
 
 summary:
   display_name: "Environment Totals"
   aggregation: SUM
-  columns: [3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 17]
+  columns: [3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 17, 18]
 
 released: false
 version: "1.0.0"

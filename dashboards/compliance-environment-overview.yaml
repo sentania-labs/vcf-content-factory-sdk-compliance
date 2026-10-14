@@ -39,7 +39,9 @@ widgets:
       resource_kind: ComplianceWorld
     box_columns: 4
     metrics:
-      # Average Score: lower is worse. Scoreboard color thresholds are
+      # Controls Passing (build 95, was Average Score): controls passed
+      # over controls evaluated, environment-wide (a ratio of sums, see
+      # describe.xml). Lower is worse. Scoreboard color thresholds are
       # ascending-only (>= yellow/orange/red = worse; see loader
       # MetricSpec docstring and knowledge/lessons/
       # scoreboard-partial-bounds-render-unknown.md), so the wireframe's
@@ -47,9 +49,9 @@ widgets:
       # Left uncolored (color_method: 1). Reported as a TOOLSET GAP.
       - adapter_kind: vcfcf_compliance
         resource_kind: ComplianceWorld
-        metric_key: "Rollup|Environment|avg_score"
-        metric_name: "Average Score"
-        label: "Average Score"
+        metric_key: "Rollup|Environment|pass_rate"
+        metric_name: "Controls Passing"
+        label: "Controls Passing"
         unit: "%"
         color_method: 1
       # Non-Compliant Objects: higher is worse, matches Scoreboard's
@@ -92,6 +94,11 @@ widgets:
     title: "About This Dashboard"
     coords: {x: 9, y: 1, w: 4, h: 4}
     text: >
+      <p><b>Controls Passing</b> is controls passed over controls
+      evaluated, across every object, so each control counts once and a
+      port group weighs no more than its controls. Controls the adapter
+      could not read are in neither count; the table shows them as
+      Controls Unreadable.</p>
       <p><b>Non-compliant</b> means an object has at least one failing
       or unreadable control. Unreadable counts as non-compliant, never
       as passing.</p>
@@ -141,8 +148,8 @@ widgets:
     metrics:
       - adapter_kind: vcfcf_compliance
         resource_kind: ComplianceWorld
-        metric_key: "Rollup|Environment|avg_score"
-        metric_name: "Average Score"
+        metric_key: "Rollup|Environment|pass_rate"
+        metric_name: "Controls Passing"
         color_method: 2
       - adapter_kind: vcfcf_compliance
         resource_kind: ComplianceWorld
