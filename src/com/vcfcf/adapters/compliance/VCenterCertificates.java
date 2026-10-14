@@ -18,7 +18,6 @@ import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509ExtendedTrustManager;
@@ -50,6 +49,14 @@ import javax.net.ssl.X509TrustManager;
  * credential is sent). The SOAP and esxcli connections additionally set
  * {@link #strictHostnameVerifier} through {@link #secure}, which makes
  * the JDK's own name check run after the handshake as well.
+ *
+ * <p>Build 94: the host the certificate must carry is the host the adapter
+ * dials (the account's vCenter Host / IP, port and IPv6 brackets removed),
+ * given to {@link #nameChecking} when the context is built, not the peer
+ * host the TLS provider reports. The BouncyCastle JSSE provider used by
+ * VCF Operations 9.1.1 collectors reports no peer host on the sockets
+ * {@code HttpsURLConnection} opens, so build 93's check failed every
+ * connection there with {@code certificate_unknown(46)}.
  */
 public final class VCenterCertificates {
 
@@ -214,12 +221,17 @@ public final class VCenterCertificates {
 	 *
 	 * @param platform the platform trust manager ({@code getAdapterTrustManager()})
 	 * @param keyManagers the platform key managers (may be null)
+	 * @param vcenterHost the host the clients using this context dial, as
+	 *        the account entered it (build 94); see {@link #expectedHost}.
+	 *        The certificate is matched against it on every handshake,
+	 *        whatever peer host the TLS provider reports. When it yields no
+	 *        host every handshake is refused (fail closed), never passed.
 	 * @throws IllegalArgumentException when {@code platform} is not an
 	 *         {@link X509TrustManager}
 	 * @throws IllegalStateException when the context cannot be built
 	 */
 	public static SSLContext nameChecking(TrustManager platform,
-			KeyManager[] keyManagers) {
+			KeyManager[] keyManagers, String vcenterHost) {
 		if (!(platform instanceof X509TrustManager)) {
 			throw new IllegalArgumentException("not an X509TrustManager: "
 					+ (platform == null ? "null"
@@ -228,7 +240,8 @@ public final class VCenterCertificates {
 		try {
 			SSLContext ctx = SSLContext.getInstance("TLS");
 			ctx.init(keyManagers, new TrustManager[] {
-					new NameCheckingTrustManager((X509TrustManager) platform)},
+					new NameCheckingTrustManager((X509TrustManager) platform,
+							expectedHost(vcenterHost))},
 					null);
 			return ctx;
 		} catch (java.security.GeneralSecurityException e) {
@@ -278,17 +291,48 @@ public final class VCenterCertificates {
 	}
 
 	/**
-	 * The platform trust manager plus a name check against the peer host
-	 * of the connection being validated. Extends
+	 * The host a certificate must carry for a connection to the account's
+	 * vCenter: {@code vcenterHost} trimmed, without a {@code :port}, without
+	 * the brackets of an IPv6 literal, lower case, no trailing dot. A bare
+	 * IPv6 literal (colons, no brackets) is taken whole. Null when blank or
+	 * not a host as entered (a scheme, a path, a space): the name check then
+	 * fails closed.
+	 */
+	static String expectedHost(String vcenterHost) {
+		if (vcenterHost == null) return null;
+		String h = vcenterHost.trim();
+		if (h.isEmpty()) return null;
+		Matcher m = HOST_PORT.matcher(h);
+		if (m.matches()) return normalizeHost(m.group(1));
+		if (BARE_IPV6.matcher(h).matches()) return normalizeHost(h);
+		return null;
+	}
+
+	private static final Pattern BARE_IPV6 =
+			Pattern.compile("^[0-9A-Fa-f]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*$");
+
+	/**
+	 * The platform trust manager plus a name check against the host the
+	 * adapter dialled, fixed when the context is built (build 94). Every
+	 * overload matches the certificate to that host and ignores the peer
+	 * host of the socket or engine, which some TLS providers (BouncyCastle
+	 * JSSE on 9.1.1 collectors) do not report. Extends
 	 * {@link X509ExtendedTrustManager} so JSSE uses it as is.
 	 */
 	static final class NameCheckingTrustManager
 			extends X509ExtendedTrustManager {
 
 		private final X509TrustManager platform;
+		private final String expectedHost;
 
-		NameCheckingTrustManager(X509TrustManager platform) {
+		/**
+		 * @param expectedHost the normalized host from
+		 *        {@link #expectedHost}; null refuses every handshake
+		 */
+		NameCheckingTrustManager(X509TrustManager platform,
+				String expectedHost) {
 			this.platform = platform;
+			this.expectedHost = expectedHost;
 		}
 
 		@Override
@@ -300,7 +344,7 @@ public final class VCenterCertificates {
 			} else {
 				platform.checkServerTrusted(chain, authType);
 			}
-			checkName(peerHost(socket), chain);
+			checkName(expectedHost, chain);
 		}
 
 		@Override
@@ -313,19 +357,19 @@ public final class VCenterCertificates {
 			} else {
 				platform.checkServerTrusted(chain, authType);
 			}
-			checkName(peerHost(engine), chain);
+			checkName(expectedHost, chain);
 		}
 
 		/**
-		 * No connection, so no host to match: refused. JSSE always calls
-		 * the socket or engine form for this class; nothing in the adapter
-		 * calls this one.
+		 * The chain check, then the name check against the dialled host,
+		 * as the socket and engine forms do. JSSE providers normally call
+		 * those forms for this class.
 		 */
 		@Override
 		public void checkServerTrusted(X509Certificate[] chain,
 				String authType) throws CertificateException {
 			platform.checkServerTrusted(chain, authType);
-			checkName(null, chain);
+			checkName(expectedHost, chain);
 		}
 
 		@Override
@@ -356,30 +400,17 @@ public final class VCenterCertificates {
 		}
 	}
 
-	private static String peerHost(Socket socket) {
-		if (socket instanceof SSLSocket) {
-			SSLSession hs = ((SSLSocket) socket).getHandshakeSession();
-			if (hs != null && hs.getPeerHost() != null) {
-				return hs.getPeerHost();
-			}
-		}
-		return null;
-	}
-
-	private static String peerHost(SSLEngine engine) {
-		if (engine == null) return null;
-		SSLSession hs = engine.getHandshakeSession();
-		if (hs != null && hs.getPeerHost() != null) {
-			return hs.getPeerHost();
-		}
-		return engine.getPeerHost();
-	}
+	/** The fail-closed text when there is no host to match (build 94). */
+	static final String NO_HOST_MESSAGE = "The vCenter certificate name "
+			+ "cannot be checked: the account has no usable vCenter host. "
+			+ "Edit the account and set vCenter Host / IP to the name or "
+			+ "address on the vCenter certificate (no https://, no path).";
 
 	/**
 	 * Throw unless the leaf of {@code chain} carries {@code host}. The text
 	 * starts "No subject alternative name matching", which {@link #classify}
-	 * reads as a name mismatch. No host at all is refused with its own text
-	 * (fail closed).
+	 * reads as a name mismatch. No host at all is refused with
+	 * {@link #NO_HOST_MESSAGE} (fail closed).
 	 */
 	static void checkName(String host, X509Certificate[] chain)
 			throws CertificateException {
@@ -387,8 +418,7 @@ public final class VCenterCertificates {
 			throw new CertificateException("vCenter sent no certificate");
 		}
 		if (normalizeHost(host) == null) {
-			throw new CertificateException("The vCenter certificate name "
-					+ "cannot be checked: the connection has no peer host");
+			throw new CertificateException(NO_HOST_MESSAGE);
 		}
 		if (!nameMatches(host, chain[0])) {
 			throw new CertificateException("No subject alternative name "
