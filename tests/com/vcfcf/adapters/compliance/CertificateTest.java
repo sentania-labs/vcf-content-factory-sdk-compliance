@@ -257,9 +257,10 @@ public final class CertificateTest {
 		// (the REST, VAMI and Test Connection clients dial baseUrl(), the
 		// SOAP and esxcli clients https://<vcenterHost>/sdk, both the
 		// config's vcenterHost).
-		OverridesTest.inOrder(ca, "REST client", "this.vcApi = new "
-				+ "VCenterApiClient(", "config.baseUrl(),",
-				"sslContextFor(config.vcenterHost));");
+		// Build 95 (issue #28): the unused collection REST client (vcApi)
+		// is gone; Test Connection's REST client is pinned below.
+		T.check(!OverridesTest.stripComments(ca).contains("vcApi"),
+				"no collection REST client");
 		OverridesTest.inOrder(ca, "SOAP client", "this.vsphere = new "
 				+ "VSphereClient(", "config.vcenterHost,",
 				"sslSocketFactoryFor(config.vcenterHost),");
@@ -270,16 +271,16 @@ public final class CertificateTest {
 		OverridesTest.inOrder(ca, "VAMI client", "new VamiApiClient(",
 				"config.baseUrl(),",
 				"sslContextFor(config.vcenterHost), this::logWarn);");
-		T.eq(4, OverridesTest.count(ca, "sslContextFor(config.vcenterHost)")
+		T.eq(3, OverridesTest.count(ca, "sslContextFor(config.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(testCfg.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(dialledHost)"),
 				"every context build names the dialled host");
 		T.eq(0, OverridesTest.count(ca, "sslContextFor()")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor()"),
 				"no context without a host");
-		T.eq(5, OverridesTest.count(ca, "sslContextFor(")
+		T.eq(4, OverridesTest.count(ca, "sslContextFor(")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor(") - 2,
-				"call sites: REST, SOAP, Test Connection, VAMI, and the "
+				"call sites: SOAP, Test Connection, VAMI, and the "
 						+ "factory's own (the two declarations excluded)");
 		String vc = read(
 				"src/com/vcfcf/adapters/compliance/VCenterCertificates.java");
