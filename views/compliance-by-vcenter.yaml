@@ -1,9 +1,8 @@
 id: e4838292-faf0-494a-a6af-fb92ada63585
 name: "[VCF Content Factory] Compliance by vCenter and Object Type"
 description: >
-  Per-vCenter compliance rollup by object kind (Host, VM, Cluster, vDS,
-  Portgroup) from the VCF-CF Compliance adapter, stitched onto VMWARE
-  VMwareAdapter Instance. All Controls Passing, Passed and Evaluated are the
+  Per-vCenter compliance rollup by object kind from the VCF-CF Compliance
+  adapter, on the VMWARE VMwareAdapter Instance. All Controls Passing, Passed and Evaluated are the
   vCenter's totals across every kind: summed down the totals row, Passed
   over Evaluated is the Environment Controls Passing tile. vCenter Appliance
   Controls Passing is the vCenter appliance kind only (its VAMI and vCenter
@@ -12,10 +11,8 @@ description: >
   nothing evaluated there is no percentage, never 100), objects scored,
   non-compliant, and Not in VCF Ops (listed by vCenter, no VCF Operations
   resource, so not scored). Controls Unreadable counts unreadable controls
-  across every kind. The totals row sums the counts, the same keys the
-  Environment totals sum; percentages are not summed (the environment
-  Controls Passing is on the Compliance World tile). Feeds Environment
-  Overview W3. Sort by All Controls Passing ascending to surface the
+  across every kind. The totals row sums the counts, never a percentage.
+  Feeds Environment Overview W3. Sort by All Controls Passing ascending to surface the
   worst vCenter first.
 subject:
   adapter_kind: VMWARE
