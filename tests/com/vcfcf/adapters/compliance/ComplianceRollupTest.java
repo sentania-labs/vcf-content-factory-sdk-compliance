@@ -80,8 +80,6 @@ public final class ComplianceRollupTest {
 		T.near(4, s.get(P + "Benchmark|SCG_9.1|objects"), "9.1 objects");
 		T.near(0, s.get(P + "Benchmark|SCG_6.7|objects"), "6.7 zero, pushed");
 		T.near(2, s.get(P + "Benchmark|none|objects"), "none objects");
-		T.check(!s.containsKey(P + "Benchmark|Custom|objects"),
-				"Custom only when used");
 		T.near(0, s.get(P + "Benchmark|unknown|objects"), "unknown pushed as 0");
 
 		// Benchmark buckets add up to every object recorded.
@@ -95,12 +93,6 @@ public final class ComplianceRollupTest {
 		Map<String, Double> e = new ComplianceRollup().toStats();
 		T.near(0, e.get(P + "All|scored"), "empty scored");
 		T.check(!e.containsKey(P + "All|avg_score"), "empty has no avg");
-
-		// Custom profile bucket appears when used.
-		ComplianceRollup c = new ComplianceRollup();
-		c.recordEvaluated(BenchmarkSelector.Kind.HOST,
-				BenchmarkSelector.bucketOf("Custom"), 1, 0, 0, 100.0);
-		T.near(1, c.toStats().get(P + "Benchmark|Custom|objects"), "custom");
 
 		// Review B2: version unreadable (no previous benchmark) is
 		// non-compliant and in the unknown bucket, never no_benchmark.
@@ -123,6 +115,7 @@ public final class ComplianceRollupTest {
 		build88Unmatched();
 		build88Pods();
 		build88DevelWorkedExample();
+		build92RetiredCustom();
 
 		System.out.println("ComplianceRollupTest: all assertions passed");
 	}
@@ -321,5 +314,30 @@ public final class ComplianceRollupTest {
 		T.near(140, w.get(P + "All|non_compliant")
 				+ o.get(P + "All|non_compliant"),
 				"build 88 environment Non-Compliant 140");
+	}
+
+	/**
+	 * Build 92 (review N2): an account stored as the removed Custom profile
+	 * zeroes Benchmark|Custom|objects once, only on a complete rollup.
+	 */
+	static void build92RetiredCustom() {
+		ComplianceRollup r = new ComplianceRollup();
+		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 10, 0, 0,
+				ControlEvaluator.score(10, 0, 0));
+		Map<String, Double> s = r.toStats();
+		T.check(!s.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
+				"no Custom bucket normally");
+		T.check(ComplianceRollup.zeroRetiredCustom(s), "complete: added");
+		T.near(0, s.get(ComplianceRollup.RETIRED_CUSTOM_KEY), "pushed as 0");
+		T.eq(P + "Benchmark|Custom|objects",
+				ComplianceRollup.RETIRED_CUSTOM_KEY, "the build 91 key");
+
+		ComplianceRollup inc = new ComplianceRollup();
+		inc.markIncomplete(BenchmarkSelector.Kind.VM);
+		Map<String, Double> is = inc.toStats();
+		T.check(!ComplianceRollup.zeroRetiredCustom(is),
+				"incomplete: Benchmark keys held back, Custom not zeroed");
+		T.check(!is.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
+				"incomplete: no Custom key");
 	}
 }

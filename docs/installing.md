@@ -13,9 +13,10 @@
   reads configuration; it performs no writes or remediation.
 - One or more **compliance benchmark profiles**. The pack bundles the
   VMware Security Configuration Guide (SCG) 6.7, 7.0, 8.0, 9.0, and 9.1
-  and by default (`Auto (by version)`) picks one per object by version;
-  a custom profile is supplied as a canonical-schema CSV staged on the
-  collector appliance.
+  and by default (`Auto (by version)`) picks one per object by version.
+  To tune controls and thresholds for your site, use an overrides file in
+  the VCF Operations configuration-file store (see
+  [overrides.md](overrides.md)); nothing is staged on the collector.
 
 ## Permissions Required
 
@@ -100,8 +101,8 @@ for:
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
 | vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object, or `Custom`. Existing instances keep their stored choice on upgrade. |
-| Custom Profile CSV Path (required if profile is Custom) | `custom_profile_path` | No | — | Filesystem path on the collector to an SCG-format CSV. Required only when the profile is `Custom`. |
+| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object. Existing instances keep their stored choice on upgrade, except `Custom` (removed in build 92), which runs as `Auto (by version)`. To pin one object kind to a version, use a `Profile` entry with `kind` in the overrides file. |
+| Overrides file (name of your copy in Management Packs Configuration, without .xml) | `overrides_file` | No | - | The name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides. See [overrides.md](overrides.md). |
 | Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
 | Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Privileges depend on Read vCenter appliance settings; see Permissions Required. |
@@ -112,8 +113,9 @@ for:
 1. Install the `.pak` file via **Administration > Integrations > Repository > Add**.
 2. After installation, open **Administration > Integrations > Accounts**.
 3. Click **Add Account** and select **VCF Content Factory Compliance**.
-4. Fill in the configuration fields above. Choose a bundled profile, or
-   `Custom` with a CSV path staged on the collector.
+4. Fill in the configuration fields above. Leave the profile at
+   `Auto (by version)` unless you need one SCG for every object. To tune
+   controls, set **Overrides file** later (see [overrides.md](overrides.md)).
 5. Resolve TLS: for a private-CA or self-signed vCenter, set
    `allowInsecure=true` (see the TLS section). Enter vCenter by the name
    on its certificate, not its IP.
@@ -174,6 +176,13 @@ for:
   (per-control and score ones wait 1 and cancel after 3; the collection
   ones stay 1 and 1). Nothing to edit by hand.
 
+- **The Custom profile CSV is removed (build 92).** The Compliance
+  Profile setting no longer offers `Custom`, and the Custom Profile CSV
+  Path setting is gone. An instance still set to `Custom` logs one WARN
+  each time it is configured and runs as `Auto (by version)`; edit it and
+  choose `Auto (by version)` or a bundled SCG to clear the warning. Site
+  changes go in an overrides file ([overrides.md](overrides.md)).
+
 ## Troubleshooting
 
 - **All of one host's esxcli-backed controls are unreadable for a cycle**
@@ -199,6 +208,13 @@ for:
   read errors naming the object; `unreadable_count` and the controls whose
   `Compliant` is -1 with Actual "(unreadable)" show which settings. The
   alert clears on the first cycle in which everything is read.
+- **"Compliance overrides file not loaded" alert** (build 90): the
+  account's Overrides file names a file that does not exist in
+  Infrastructure Operations > Configurations > Management Packs
+  Configuration,
+  or the file is not valid XML. The vCenter object's
+  `VCF-CF Compliance|Summary|overrides_status` says which, and the
+  adapter log names the problem. See [overrides.md](overrides.md).
 - **An object shows no compliance score / "no data"**: nothing was
   attempted on it (its version has no bundled SCG, `no_benchmark` = 1, or
   a non-vSAN cluster with no evaluable controls).

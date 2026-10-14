@@ -159,11 +159,39 @@ public final class ComplianceDecisions {
 	/** Properties for an evaluated object. */
 	public static Map<String, String> complianceProps(
 			ControlEvaluator.ComplianceResult cr, String profileName) {
+		return complianceProps(cr, profileName,
+				java.util.Collections.<String>emptySet());
+	}
+
+	/** Build 90: the suffix that marks an expected value from the overrides file. */
+	public static final String SITE_OVERRIDE = " (site override)";
+
+	/**
+	 * Properties for an evaluated object. Build 90: for a control in
+	 * {@code siteOverridden} (its expected value comes from the overrides
+	 * file) Expected reads {@code "<v> (site override)"} and a read Actual
+	 * reads {@code "<actual>, expected <v> (site override)"}, so the object
+	 * and the published guide never silently disagree. An unreadable
+	 * control's Actual stays {@code (unreadable)}.
+	 */
+	public static Map<String, String> complianceProps(
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			Set<String> siteOverridden) {
 		Map<String, String> props = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
 			String base = K + ctrl.scgId;
-			props.put(base + "|Actual", ctrl.actual);
-			props.put(base + "|Expected", ctrl.expected);
+			boolean site = siteOverridden != null
+					&& siteOverridden.contains(ctrl.scgId);
+			String actual = ctrl.actual;
+			String expected = ctrl.expected;
+			if (site) {
+				if (!ctrl.unreadable) {
+					actual = actual + ", expected " + expected + SITE_OVERRIDE;
+				}
+				expected = expected + SITE_OVERRIDE;
+			}
+			props.put(base + "|Actual", actual);
+			props.put(base + "|Expected", expected);
 			props.put(base + "|Description", ctrl.description);
 		}
 		props.put(K + "profile_name", profileName);
@@ -363,6 +391,29 @@ public final class ComplianceDecisions {
 		Set<String> zeroOnly = candidateControlIds(kind, current, allBundled);
 		zeroOnly.removeAll(live);
 		zeroOnly.removeAll(zeroOrOne);
+		return new CleanupPlan(zeroOrOne, zeroOnly);
+	}
+
+	/**
+	 * Build 90: the cleanup plan with the overrides file's skipped controls
+	 * added. A skipped control is not evaluated, so like a control of the
+	 * current benchmark that was not pushed, any lingering 0 OR 1 on it is
+	 * set to -1 (a skipped control that was passing must not keep showing
+	 * 1). Only a skipped control that some bundled profile evaluates for the
+	 * kind (or the base plan already queries) is affected; a key the object
+	 * never had is still never created.
+	 */
+	public static CleanupPlan cleanupPlan(BenchmarkSelector.Kind kind,
+			BenchmarkProfile current, Set<String> pushed,
+			Collection<BenchmarkProfile> allBundled, Set<String> skipped) {
+		CleanupPlan base = cleanupPlan(kind, current, pushed, allBundled);
+		if (skipped == null || skipped.isEmpty()) return base;
+		Set<String> zeroOrOne = new TreeSet<>(base.zeroOrOne);
+		Set<String> zeroOnly = new TreeSet<>(base.zeroOnly);
+		for (String id : skipped) {
+			if (pushed != null && pushed.contains(id)) continue;
+			if (zeroOnly.remove(id)) zeroOrOne.add(id);
+		}
 		return new CleanupPlan(zeroOrOne, zeroOnly);
 	}
 
@@ -574,12 +625,149 @@ public final class ComplianceDecisions {
 
 	public static Map<String, String> orphanProps(Set<String> ids,
 			String appliedName) {
+		return orphanProps(ids, appliedName,
+				java.util.Collections.<String>emptySet(), null);
+	}
+
+	/**
+	 * Build 90: as {@link #orphanProps(Set, String)}, but a control the
+	 * overrides file skips reads {@code "(skipped by override file <name>)"}.
+	 */
+	public static Map<String, String> orphanProps(Set<String> ids,
+			String appliedName, Set<String> skipped, String overridesFile) {
 		Map<String, String> props = new LinkedHashMap<>();
 		for (String id : ids) {
-			props.put(K + id + "|Actual", "(not in applied benchmark: "
-					+ appliedName + ")");
+			boolean skip = skipped != null && skipped.contains(id);
+			props.put(K + id + "|Actual", skip
+					? "(skipped by override file " + overridesFile + ")"
+					: "(not in applied benchmark: " + appliedName + ")");
 		}
 		return props;
+	}
+
+	// ----- Skip in force, pushed every cycle (build 92) --------------------
+
+	/**
+	 * Build 92 (adapter issue #41): what to push for one object's skipped
+	 * controls this cycle. Build 90/91 sent a skipped control through the
+	 * stale-key cleanup, which reads the latest value back and pushes -1
+	 * only over a 0 or a 1: the first cycle pushed -1 once, every later
+	 * cycle read -1 and pushed nothing, and a symptom on the key never saw
+	 * its cancel cycles, so the open alert stayed active. A Skip in force is
+	 * now pushed every cycle, -1 and the skip Actual text, with no read-back,
+	 * exactly like a scored control.
+	 *
+	 * <p>The ids are the skipped controls the object's benchmark evaluates
+	 * for its kind, taken from the benchmark BEFORE the overrides file was
+	 * applied (the Skip removes the control from the adjusted one). A Skip
+	 * of a control only another SCG version carries is not in force on this
+	 * object and pushes nothing here.
+	 */
+	public static final class SkipPush {
+		public final Set<String> ids;
+		public final Map<String, Double> stats;
+		public final Map<String, String> props;
+
+		SkipPush(Set<String> ids, String overridesFile) {
+			this.ids = java.util.Collections.unmodifiableSet(ids);
+			this.stats = java.util.Collections.unmodifiableMap(
+					orphanStats(ids));
+			this.props = java.util.Collections.unmodifiableMap(
+					orphanProps(ids, null, ids, overridesFile));
+		}
+
+		public boolean isEmpty() {
+			return ids.isEmpty();
+		}
+	}
+
+	/**
+	 * @param kind          the object's kind
+	 * @param unadjusted    the object's benchmark before the overrides file
+	 *                      (null: no benchmark, nothing to push)
+	 * @param skipped       the resolved Skip ids for this cycle
+	 * @param overridesFile the instance's Overrides file name, for the text
+	 */
+	public static SkipPush skipPush(BenchmarkSelector.Kind kind,
+			BenchmarkProfile unadjusted, Set<String> skipped,
+			String overridesFile) {
+		Set<String> ids = new TreeSet<>();
+		if (unadjusted != null && skipped != null && !skipped.isEmpty()) {
+			addEvaluated(ids, kind, unadjusted);
+			ids.retainAll(skipped);
+		}
+		return new SkipPush(ids, overridesFile);
+	}
+
+	/**
+	 * Build 92 review W3: where one object's per-cycle push goes. The
+	 * adapter's {@link ComplianceStitcher} in production; a counting sink in
+	 * the tests, which cannot load the SDK.
+	 */
+	public interface PushSink {
+		void pushProperties(String resourceId, Map<String, String> properties,
+				long timestamp);
+		void pushStats(String resourceId, Map<String, Double> stats,
+				long timestamp);
+	}
+
+	/**
+	 * Build 92 review W3: send one object's per-cycle payload with its
+	 * skipped controls in force ({@link #skipPush}) merged in, as ONE
+	 * properties call and ONE stats call. Before this the Skip went out in a
+	 * second pair of Suite API calls per object per cycle (one VM Skip on a
+	 * 5,000-VM vCenter: about 10,000 extra POSTs every cycle). A skipped
+	 * control is not in the adjusted benchmark, so its keys never collide
+	 * with a scored control's.
+	 *
+	 * @param skip null or empty: the payload is sent unchanged
+	 */
+	public static void pushObject(PushSink sink, String resourceId,
+			Map<String, String> props, Map<String, Double> stats,
+			SkipPush skip, long timestamp) {
+		Map<String, String> p = props;
+		Map<String, Double> s = stats;
+		if (skip != null && !skip.isEmpty()) {
+			p = new LinkedHashMap<>(props);
+			p.putAll(skip.props);
+			s = new LinkedHashMap<>(stats);
+			s.putAll(skip.stats);
+		}
+		sink.pushProperties(resourceId, p, timestamp);
+		sink.pushStats(resourceId, s, timestamp);
+	}
+
+	// ----- overrides file status (build 90) --------------------------------
+
+	/** Build 90: the overrides keys, under {@code Summary|}. */
+	public static final String OVR_FILE = "Summary|overrides_file";
+	public static final String OVR_STATUS = "Summary|overrides_status";
+	public static final String OVR_SKIPPED = "Summary|overrides_skipped";
+	public static final String OVR_OVERRIDDEN = "Summary|overrides_overridden";
+	public static final String OVR_NOT_LOADED = "Summary|overrides_not_loaded";
+
+	/**
+	 * Build 90: the overrides status properties. {@code prefix} is "" on
+	 * the pack's Compliance World and {@code "VCF-CF Compliance|"} on the
+	 * vCenter object. Pushed every cycle, "none" and 0 included, so a
+	 * removed file never leaves an old status behind.
+	 */
+	public static Map<String, String> overridesProps(String prefix,
+			String fileName, String statusText) {
+		Map<String, String> props = new LinkedHashMap<>();
+		props.put(prefix + OVR_FILE, fileName == null ? "" : fileName);
+		props.put(prefix + OVR_STATUS, statusText);
+		return props;
+	}
+
+	/** Build 90: the overrides counts and the not-loaded flag. */
+	public static Map<String, Double> overridesStats(String prefix,
+			int skipped, int overridden, boolean notLoaded) {
+		Map<String, Double> stats = new LinkedHashMap<>();
+		stats.put(prefix + OVR_SKIPPED, (double) skipped);
+		stats.put(prefix + OVR_OVERRIDDEN, (double) overridden);
+		stats.put(prefix + OVR_NOT_LOADED, notLoaded ? 1.0 : 0.0);
+		return stats;
 	}
 
 	public static java.util.List<BenchmarkProfile.Control> sliceFor(

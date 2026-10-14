@@ -44,6 +44,12 @@ python3 -m sdk_buildkit validate-sdk .   # cheap loop: compile-check
 python3 -m sdk_buildkit build-sdk .      # emits the .pak
 ```
 
+**Profile data contract.** The bundled profiles under
+`profiles/canonical/` follow [CANONICAL_SCHEMA.md](../CANONICAL_SCHEMA.md),
+the column-by-column contract between the normalizer scripts and the
+adapter. Read it before regenerating a profile or adding a read method.
+Site tuning does not need it: see [overrides.md](overrides.md).
+
 The kit carries everything else it needs (including the
 `vcfcf-adapter-base.jar` framework runtime that ends up in the pak's
 `lib/`). `validate-sdk` is the fast iteration loop; exhaust it before

@@ -62,7 +62,8 @@ import java.util.Map;
  *         ] } } ] }
  * </pre>
  */
-public final class ComplianceStitcher {
+public final class ComplianceStitcher
+		implements ComplianceDecisions.PushSink {
 
 	private final SuiteApiStitcher stitcher;
 	private final Logger logger;
@@ -533,12 +534,14 @@ public final class ComplianceStitcher {
 		return byName == null ? 0 : byName.size();
 	}
 
+	@Override
 	public void pushProperties(String resourceId,
 			Map<String, String> properties, long timestamp) {
 		if (properties.isEmpty()) return;
 		stitcher.pushProperties(resourceId, properties, timestamp);
 	}
 
+	@Override
 	public void pushStats(String resourceId,
 			Map<String, Double> stats, long timestamp) {
 		if (stats.isEmpty()) return;

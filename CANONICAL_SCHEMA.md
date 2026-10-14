@@ -1,5 +1,11 @@
 # Canonical Benchmark CSV Schema
 
+Contributor reference for the bundled profiles: how the shipped SCG
+CSVs under `profiles/canonical/` are laid out and read. Operators tune
+controls with the overrides file (docs/overrides.md), not by editing or
+supplying a CSV; since build 92 the adapter loads the bundled profiles
+only.
+
 The compliance adapter consumes benchmarks in a single, header-aware
 CSV format. Source benchmarks (VMware SCG 6.7, 7.0, 8.0, 9.0, 9.1) are
 normalized into this schema before being loaded by the
@@ -126,7 +132,7 @@ Rules:
   fetch can never be scored as "list empty → compliant".
 
 - `read_recipe` is **optional** and kept OUT of the loader's required-
-  column set, so older bundled or custom CSVs still load.
+  column set, so older canonical CSVs still load.
 - A `vim_property` or `esxcli` control with an **empty** `read_recipe`
   is **non-evaluable** (informational only): it loads and appears for
   traceability, and the evaluator skips it — it is *not* counted as
@@ -137,8 +143,7 @@ Rules:
 
 The bundled normalizers own the vim-path knowledge for the shipped
 profiles via the `_READ_RECIPE_BY_PARAMETER` map in
-`scripts/_compliance_normalize.py`. Custom-profile authors supply
-`read_recipe` directly in their CSV.
+`scripts/_compliance_normalize.py`.
 
 ### Unreadable outcome
 
@@ -239,6 +244,17 @@ informational-only.
 | `powercli_only` | Requires PowerCLI-specific cmdlet that has no direct vSphere SOAP equivalent. | no |
 | `manual_audit` | Has no machine-readable assessment command. Human review only. | no |
 
+**Key patterns (build 90).** An `advanced_setting` `parameter`
+containing `*` is a key pattern, not a literal key: each `*` matches one
+or more characters within one dot-separated segment, case-insensitive,
+against every key of the object's successful settings read. Matching
+keys with a non-empty value are the present values: bare `Not Present`
+fails on any match; other modes pass only when every match passes; no
+match takes the absent-key branch (Actual `(undefined)`). Actual lists
+the matches as `key=value; key=value`. A failed read is UNREADABLE as
+for any other `advanced_setting`. Today only `vm.dvfilter`
+(`ethernet*.filter*.name`, SCG 7.0 to 9.1) uses one.
+
 The "evaluable" flag is *derived*; there is no separate column.
 `advanced_setting` is always evaluable; `vim_property`, `esxcli`, and
 `vami_api` are evaluable only when `read_recipe` is non-empty (the recipe
@@ -323,11 +339,17 @@ read is **never** folded into a pass:
   setting manager; builds 77 and 78) is never an empty option list: every advanced_setting
   control of the object is UNREADABLE for that cycle (pushed as -1, counted
   in `unreadable_count`, never a pass, never touched by the stale cleanup).
-- For `advanced_setting`, an absent key is **skipped** (excluded from the
-  score denominator) by the existing absent-key branch *before* the
-  `not:` / `(non-empty)` comparison is consulted. In particular the
-  not-equal mode **never** treats a missing value as "not equal to X,
-  therefore compliant" — absence is an exclusion, not a pass.
+- For `advanced_setting`, an absent key (or a present key with an empty
+  value) is decided by the absent-key branch *before* the `not:` /
+  `(non-empty)` comparison is consulted. It is a **pass** with Actual
+  `(undefined)` only when the expected value allows absence (`X or
+  Undefined`, `X or Not Present`, bare `Not Present`); otherwise it is a
+  **fail** with Actual `(undefined)`, counted in the denominator (build 90,
+  DEF-022; before build 90 it was skipped, which raised the score of an
+  un-hardened object). The not-equal mode therefore **never** treats a
+  missing value as "not equal to X, therefore compliant". One exception: a
+  key present with an empty value against an explicitly empty expected
+  value (`""`, or `NULL` in SCG 6.7; `esx.network-dvfilter`) passes.
 
 ### `vmx-N or higher` / `vmx-N or newer` (build 57)
 
@@ -487,8 +509,8 @@ two groups of bundled-profile controls:
 
 The loader demotes each listed control, in the listed profile only, to
 `manual_audit` (no recipe): not evaluable, never pushed, never alerted,
-never a pass. The overlay is applied to bundled profiles, never to a
-Custom profile, and is kept outside the canonical CSVs so regenerating
+never a pass. The overlay is applied to every bundled profile, and is
+kept outside the canonical CSVs so regenerating
 a profile cannot silently undo it. Since build 70 a missing overlay file
 FAILS the bundled-profile load (the adapter goes Down with an actionable
 message): without it the standard-switch controls would be scored (a

@@ -94,7 +94,8 @@ public final class BenchmarkSelectorTest {
 			T.eq("VMware_SCG_9.0", s.profileName, "fixed 9.0 for " + v);
 			T.check(!s.noBenchmark(), "fixed never no-benchmark");
 		}
-		T.eq("Custom", BenchmarkSelector.bucketOf("Custom"), "custom bucket");
+		T.eq("SCG_9.0", BenchmarkSelector.bucketOf("VMware_SCG_9.0"),
+				"bundled bucket");
 
 		// evaluatedFor mirrors the collectors.
 		BenchmarkProfile.Control adv = control("HostSystem", "advanced_setting",

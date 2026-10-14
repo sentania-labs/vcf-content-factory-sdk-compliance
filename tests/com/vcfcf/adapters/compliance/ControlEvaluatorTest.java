@@ -91,6 +91,161 @@ public final class ControlEvaluatorTest {
 				"x", "(unreadable)", "1", true, "d", true);
 		T.check(!forced.compliant, "unreadable overrides compliant=true");
 
+		absentAdvancedSetting();
+		patternParameter();
+
 		System.out.println("ControlEvaluatorTest: all assertions passed");
+	}
+
+	private static BenchmarkProfile.Control advCtl(String id, String param,
+			String expected) {
+		return new BenchmarkProfile.Control(id, "P0", "VirtualMachine",
+				"VMWARE", param, "advanced_setting", "string", expected, "t",
+				"d", "SCG-9.0:x", "fix", "");
+	}
+
+	/**
+	 * Build 90 (DEF-022): on a successful read, an advanced setting absent
+	 * on the object is a FAIL with Actual "(undefined)" unless the expected
+	 * value allows absence. It used to be skipped (out of pass, fail and
+	 * total), which raised the object's score.
+	 */
+	private static void absentAdvancedSetting() {
+		BenchmarkProfile.Control lock = advCtl("vm.vmrc-lock",
+				"tools.guest.desktop.autolock", "TRUE");
+		BenchmarkProfile.Control copy = advCtl("vm.deactivate-console-copy",
+				"isolation.tools.copy.disable", "TRUE or Undefined");
+		BenchmarkProfile.Control notPresent = advCtl("vm.x-not-present",
+				"x.not.present", "Not Present");
+		BenchmarkProfile.Control orNotPresent = advCtl("vm.x-or-np",
+				"x.or.np", "FALSE or Not Present");
+		BenchmarkProfile.Control nonEmpty = advCtl("vm.x-nonempty",
+				"x.nonempty", "(non-empty)");
+		BenchmarkProfile.Control notEq = advCtl("vm.x-noteq", "x.noteq",
+				"not:/tmp/scratch");
+		java.util.List<BenchmarkProfile.Control> all = Arrays.asList(lock,
+				copy, notPresent, orNotPresent, nonEmpty, notEq);
+
+		// Every key absent: the read succeeded and nothing is set.
+		ControlEvaluator.ComplianceResult r = ControlEvaluator
+				.evaluateControls(all, new HashMap<>(), "vm1");
+		T.eq(6, r.controlResults.size(), "every control has a result, none skipped");
+		T.eq(3, r.passCount, "absence passes only where expected allows it");
+		T.eq(3, r.failCount, "value-required controls fail when unset");
+		T.eq(6, r.totalCount, "failing controls stay in the denominator");
+		T.eq(0, r.unreadableCount, "absent is not unreadable");
+		T.near(50, r.score, "score 3/6, not 3/3");
+		Map<String, ControlEvaluator.ControlResult> by = new HashMap<>();
+		for (ControlEvaluator.ControlResult c : r.controlResults) {
+			by.put(c.scgId, c);
+		}
+		T.check(!by.get("vm.vmrc-lock").compliant, "plain TRUE, unset: fail");
+		T.eq("(undefined)", by.get("vm.vmrc-lock").actual,
+				"Actual (undefined) on the fail");
+		T.check(!by.get("vm.vmrc-lock").unreadable, "a fail, not unreadable");
+		T.check(by.get("vm.deactivate-console-copy").compliant,
+				"X or Undefined, unset: pass");
+		T.check(by.get("vm.x-not-present").compliant, "Not Present, unset: pass");
+		T.check(by.get("vm.x-or-np").compliant, "X or Not Present, unset: pass");
+		T.check(!by.get("vm.x-nonempty").compliant, "(non-empty), unset: fail");
+		T.check(!by.get("vm.x-noteq").compliant,
+				"not:X, unset: fail (absence is never 'not equal')");
+
+		// Present-but-empty is the same as unset, except against an
+		// expected value that is itself explicitly empty.
+		Map<String, String> empty = new HashMap<>();
+		empty.put("tools.guest.desktop.autolock", "");
+		r = ControlEvaluator.evaluateControls(Arrays.asList(lock), empty, "vm1");
+		T.eq(1, r.failCount, "empty value against TRUE: fail");
+		BenchmarkProfile.Control dvf = new BenchmarkProfile.Control(
+				"esx.network-dvfilter", "P0", "HostSystem", "VMWARE",
+				"Net.DVFilterBindIpAddress", "advanced_setting", "string",
+				"\"\"", "t", "d", "SCG-9.0:x", "fix", "");
+		BenchmarkProfile.Control dvf67 = new BenchmarkProfile.Control(
+				"esx.network-dvfilter-67", "P0", "HostSystem", "VMWARE",
+				"Net.DVFilterBindIpAddress", "advanced_setting", "string",
+				"NULL", "t", "d", "SCG-6.7:x", "fix", "");
+		Map<String, String> host = new HashMap<>();
+		host.put("Net.DVFilterBindIpAddress", "");
+		r = ControlEvaluator.evaluateControls(Arrays.asList(dvf, dvf67), host,
+				"h1");
+		T.eq(2, r.passCount, "present and empty against \"\" / NULL: pass");
+		host.put("Net.DVFilterBindIpAddress", "10.0.0.1");
+		r = ControlEvaluator.evaluateControls(Arrays.asList(dvf), host, "h1");
+		T.eq(1, r.failCount, "a bound address against \"\": fail");
+		r = ControlEvaluator.evaluateControls(Arrays.asList(dvf),
+				new HashMap<>(), "h1");
+		T.eq(1, r.failCount, "absent against \"\": fail (undefined)");
+
+		// A present value still compares as before.
+		Map<String, String> set = new HashMap<>();
+		set.put("tools.guest.desktop.autolock", "TRUE");
+		set.put("isolation.tools.copy.disable", "FALSE");
+		r = ControlEvaluator.evaluateControls(Arrays.asList(lock, copy), set,
+				"vm1");
+		T.eq(1, r.passCount, "TRUE set: pass");
+		T.eq(1, r.failCount, "FALSE set against TRUE or Undefined: fail");
+	}
+
+	/**
+	 * Build 90 (W3): a parameter containing "*" is matched as a key
+	 * pattern. vm.dvfilter ("ethernet*.filter*.name", Not Present) used to
+	 * look the pattern up as a literal key and always passed.
+	 */
+	private static void patternParameter() {
+		BenchmarkProfile.Control dvf = advCtl("vm.dvfilter",
+				"ethernet*.filter*.name", "Not Present");
+		java.util.List<BenchmarkProfile.Control> one = Arrays.asList(dvf);
+
+		// No filter keys: pass, Actual (undefined).
+		Map<String, String> vm = new HashMap<>();
+		vm.put("ethernet0.virtualDev", "vmxnet3");
+		vm.put("ethernet0.present", "TRUE");
+		ControlEvaluator.ComplianceResult r = ControlEvaluator
+				.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.passCount, "no filter keys: pass");
+		T.eq(1, r.totalCount, "no filter keys: counted");
+		T.eq("(undefined)", r.controlResults.get(0).actual,
+				"no filter keys: Actual (undefined)");
+
+		// One filter key: fail, with the key named in Actual.
+		vm.put("ethernet0.filter0.name", "dvfilter-generic-vmware");
+		r = ControlEvaluator.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.failCount, "one filter key: fail");
+		T.eq(0, r.passCount, "one filter key: no pass");
+		T.check(!r.controlResults.get(0).compliant, "one filter key: not compliant");
+		T.eq("ethernet0.filter0.name=dvfilter-generic-vmware",
+				r.controlResults.get(0).actual, "Actual names the matched key");
+
+		// Several, case-insensitive, sorted, listed together.
+		vm.put("Ethernet1.Filter2.name", "nsx-dvfilter");
+		r = ControlEvaluator.evaluateControls(one, vm, "vm1");
+		T.eq(1, r.failCount, "two filter keys: one fail");
+		T.eq("Ethernet1.Filter2.name=nsx-dvfilter; "
+				+ "ethernet0.filter0.name=dvfilter-generic-vmware",
+				r.controlResults.get(0).actual, "Actual lists every match");
+
+		// A matching key with an empty value is unset, like a literal key.
+		Map<String, String> blank = new HashMap<>();
+		blank.put("ethernet0.filter0.name", "");
+		r = ControlEvaluator.evaluateControls(one, blank, "vm1");
+		T.eq(1, r.passCount, "empty filter name: unset, pass");
+
+		// A non-matching key does not count.
+		Map<String, String> near = new HashMap<>();
+		near.put("ethernet0.filter0.name.extra", "x");
+		near.put("ethernet0.filter.name", "x");
+		r = ControlEvaluator.evaluateControls(one, near, "vm1");
+		T.eq(1, r.passCount, "keys outside the pattern: pass");
+
+		// A failed read stays unreadable: never a pass.
+		r = ControlEvaluator.evaluateControlsUnreadable(one, "vm1");
+		T.eq(1, r.unreadableCount, "read failure: unreadable");
+		T.eq(0, r.passCount, "read failure: no pass");
+		T.check(r.controlResults.get(0).unreadable, "read failure: marked unreadable");
+		T.check(!r.controlResults.get(0).compliant, "read failure: not compliant");
+
+		T.check(ControlEvaluator.keyPattern("ethernet*.filter*.name")
+				.matcher("ethernet12.filter3.name").matches(), "pattern multi-digit");
 	}
 }

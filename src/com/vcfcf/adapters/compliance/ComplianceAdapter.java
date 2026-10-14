@@ -75,6 +75,28 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private volatile java.util.Map<String, BenchmarkProfile> profilesByName;
 	private volatile String cycleConfDir;
 
+	// Build 90: the overrides file (central configuration-file store). The
+	// store keeps the last good parse across cycles and instance edits; a
+	// changed file name starts from nothing (see OverridesStore).
+	private final OverridesStore overridesStore = new OverridesStore();
+	private volatile OverridesStore.Snapshot cycleOverridesSnap;
+	private volatile ComplianceOverrides.Resolved cycleOverrides =
+			ComplianceOverrides.Resolved.EMPTY;
+	// Build 92: this cycle's profiles by name BEFORE the overrides file is
+	// applied (empty when the file has nothing), so a skipped control in
+	// force on an object can be found and pushed every cycle.
+	private volatile java.util.Map<String, BenchmarkProfile> cycleUnadjusted =
+			java.util.Collections.emptyMap();
+	// Build 90 (review N1): Skip and Override entries in force for this
+	// instance's own profile set this cycle (Summary|overrides_skipped and
+	// overrides_overridden), not every entry accepted against any bundled
+	// profile.
+	private volatile int cycleSkippedInForce;
+	// Build 92 (review N2): the account is stored as the removed Custom
+	// profile; zero its retired rollup bucket on the next complete rollup.
+	private volatile boolean zeroCustomBucket;
+	private volatile int cycleOverriddenInForce;
+
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
 	}
@@ -108,16 +130,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ResourceConfig resourceConfig) {
 		String vcenterHost = getIdentifier(resourceConfig, "vcenter_host");
 		String profile = getIdentifier(resourceConfig, "benchmark_profile");
-		String customPath = getIdentifier(resourceConfig, "custom_profile_path");
 		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
 		String readAppliance = getIdentifier(resourceConfig,
 				ComplianceConfig.READ_APPLIANCE_KEY);
+		String overridesFile = getIdentifier(resourceConfig,
+				ComplianceConfig.OVERRIDES_FILE_KEY);
 		String username = getCredentialField(resourceConfig, "username");
 		String password = getCredentialField(resourceConfig, "password");
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, customPath, allowInsecure, readAppliance);
+				profile, allowInsecure, readAppliance, overridesFile);
+		this.zeroCustomBucket = config.storedAsCustom;
+		if (config.storedAsCustom) {
+			// Build 92: the Custom profile CSV is removed. One WARN per
+			// configure; the instance runs as Auto (by version).
+			logWarn("Compliance Profile 'Custom' was removed in build 92 "
+					+ "(the profile CSV on the collector and its "
+					+ "custom_profile_path setting are no longer read). This "
+					+ "instance runs as " + BenchmarkSelector.AUTO + ". Edit "
+					+ "the instance and choose " + BenchmarkSelector.AUTO
+					+ " or a bundled SCG version to clear this warning. Skip, "
+					+ "Override and per-kind Profile entries go in the "
+					+ "Overrides file (see docs/overrides.md).");
+		}
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
@@ -163,6 +199,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " profile=" + config.benchmarkProfile
 				+ " allowInsecure=" + config.allowInsecure
 				+ " readApplianceSettings=" + config.readApplianceSettings
+				+ " overridesFile="
+				+ (config.overridesFile.isEmpty() ? "(none)"
+						: config.overridesFile)
 				+ " stitcher=" + (stitcher != null));
 	}
 
@@ -263,7 +302,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			ComplianceConfig testCfg = new ComplianceConfig(
 					vcenterHost, username, password,
-					/*profile*/ null, /*customPath*/ null, allowInsecure);
+					/*profile*/ null, allowInsecure);
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
@@ -424,7 +463,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				.getParent();   // <adaptersHome>/<kind>/conf
 		cycleConfDir = confDir.toString();
 		cycleReasons = new UnreadableReasons();
-		BenchmarkSelector selector = buildSelector(cycleConfDir);
+		// Build 90: the overrides file, fetched once per cycle (no fetch when
+		// the setting is empty), applied while the selector is built.
+		cycleOverridesSnap = refreshOverrides();
+		BenchmarkSelector selector = buildSelector(cycleConfDir,
+				cycleOverridesSnap.parsed);
 		pendingCleanup.clear();
 
 		logInfo("stitcher=" + (stitcher != null));
@@ -459,6 +502,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		// Forget applied-profile history for objects no longer in inventory.
 		memory.retain(seen);
+		if (cs.skipPushedKeys > 0) {
+			// Build 92: the skipped controls are pushed every cycle, so the
+			// symptom on each key sees its cancel cycles.
+			logInfo("Overrides file '" + config.overridesFile + "': "
+					+ cs.skipPushedKeys + " skipped control key(s) set to -1 "
+					+ "(not evaluated) on " + cs.skipPushedObjects
+					+ " object(s) this cycle");
+		}
 		cleanStaleControls(cs);
 		if (cycleReasons.total() > 0) {
 			// Build 74: why controls were unreadable, once per cycle (the
@@ -477,6 +528,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		pushRollup(vcEntry, rollup);
+		pushOverridesStatus(vcEntry, out);
 		// Known limitation: this edge is added, never removed. A vCenter whose
 		// compliance instance is deleted stays a ComplianceWorld child. See
 		// knowledge/designs/sdk-adapters/compliance-environment-computed-metrics.md
@@ -521,35 +573,212 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * Build the per-cycle benchmark selector. {@code Auto (by version)}
 	 * loads every bundled profile once (cached by the loader) and selects
 	 * per object; any other value forces that profile for every object.
+	 *
+	 * <p>Build 90: the overrides file ({@code parsed}, null for none) is
+	 * applied on top: skipped controls are removed from every loaded
+	 * profile, overridden expected values replace the SCG values, and
+	 * Profile pins replace the mode for the kinds they name. Auto and the
+	 * manual-review overlay keep working underneath. The result is kept in
+	 * {@link #cycleOverrides} for the push, the cleanup and the status keys.
 	 */
-	private BenchmarkSelector buildSelector(String confDir) {
+	private BenchmarkSelector buildSelector(String confDir,
+			ComplianceOverrides.Parsed parsed) {
+		BenchmarkSelector base;
+		java.util.Map<String, BenchmarkProfile> baseProfiles;
 		if (config.isAuto()) {
 			java.util.Map<String, BenchmarkProfile> all =
 					benchmarkLoader.loadAll(confDir);
-			profilesByName = all;
+			baseProfiles = all;
 			logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
 					+ all.size() + " bundled profiles loaded; "
 					+ benchmarkLoader.lastManualReviewApplied()
 					+ " controls set to manual review (prose expected values, standard-switch controls))");
-			return BenchmarkSelector.auto(all);
+			base = BenchmarkSelector.auto(all);
+		} else {
+			BenchmarkProfile profile = benchmarkLoader.load(
+					config.benchmarkProfile, confDir);
+			if (!profile.name.equals(config.benchmarkProfile)) {
+				logWarn("Profile load divergence: requested='"
+						+ config.benchmarkProfile + "' resolved='"
+						+ profile.name + "': profile_name will use the resolved "
+						+ "name");
+			}
+			java.util.Map<String, BenchmarkProfile> one =
+					new java.util.LinkedHashMap<>();
+			one.put(profile.name, profile);
+			baseProfiles = one;
+			logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
+					+ "object (" + benchmarkLoader.lastManualReviewApplied()
+					+ " controls set to manual review (prose expected values, standard-switch controls))");
+			base = BenchmarkSelector.fixed(profile);
 		}
-		BenchmarkProfile profile = benchmarkLoader.load(
-				config.benchmarkProfile,
-				config.customProfilePath,
-				confDir);
-		if (!profile.name.equals(config.benchmarkProfile)) {
-			logWarn("Profile load divergence: requested='"
-					+ config.benchmarkProfile + "' resolved='"
-					+ profile.name + "': profile_name will use the resolved "
-					+ "name");
+		if (parsed == null || parsed.isEmpty()) {
+			cycleUnadjusted = java.util.Collections.emptyMap();
+			cycleOverrides = ComplianceOverrides.Resolved.EMPTY;
+			cycleSkippedInForce = 0;
+			cycleOverriddenInForce = 0;
+			profilesByName = baseProfiles;
+			return base;
 		}
-		java.util.Map<String, BenchmarkProfile> one = new java.util.HashMap<>();
-		one.put(profile.name, profile);
-		profilesByName = one;
-		logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
-				+ "object (" + benchmarkLoader.lastManualReviewApplied()
-				+ " controls set to manual review (prose expected values, standard-switch controls))");
-		return BenchmarkSelector.fixed(profile);
+
+		// Every profile the file can name: all bundled ones (cached). Since
+		// build 92 the instance's own profiles are always bundled ones.
+		java.util.Map<String, BenchmarkProfile> bundled =
+				benchmarkLoader.loadAll(confDir);
+		java.util.Map<String, BenchmarkProfile> known =
+				new java.util.LinkedHashMap<>(bundled);
+		known.putAll(baseProfiles);
+		ComplianceOverrides.Resolved r =
+				ComplianceOverrides.resolve(parsed, known.values());
+		cycleOverrides = r;
+		cycleUnadjusted = java.util.Collections.unmodifiableMap(known);
+		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> rawPins =
+				r.pins(bundled);
+		cycleSkippedInForce =
+				r.skippedIn(baseProfiles.values(), rawPins).size();
+		cycleOverriddenInForce =
+				r.overriddenIn(baseProfiles.values(), rawPins).size();
+
+		java.util.Map<String, BenchmarkProfile> effBase = r.adjust(baseProfiles);
+		java.util.Map<String, BenchmarkProfile> effBundled = r.adjust(bundled);
+		BenchmarkSelector selector = config.isAuto()
+				? BenchmarkSelector.auto(effBase)
+				: BenchmarkSelector.fixed(effBase.values().iterator().next());
+		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> pins =
+				r.pins(effBundled);
+		selector = selector.withPins(pins);
+
+		// Profiles a decision may name this cycle (the B2 fallback looks the
+		// previous benchmark up here): the mode's own, plus every pin.
+		java.util.Map<String, BenchmarkProfile> byName =
+				new java.util.LinkedHashMap<>(effBase);
+		for (BenchmarkProfile p : pins.values()) byName.put(p.name, p);
+		profilesByName = byName;
+		return selector;
+	}
+
+	/**
+	 * Build 90: fetch this cycle's overrides file through the Suite API
+	 * channel (none when the setting is empty) and log what happened. Never
+	 * throws: every failure is a status.
+	 */
+	private OverridesStore.Snapshot refreshOverrides() {
+		final SuiteApiStitcher sas = suiteStitcher;
+		OverridesStore.Fetcher fetcher = sas == null ? null : sas::get;
+		OverridesStore.Snapshot snap = overridesStore.refresh(
+				config.overridesFile, fetcher, Instant.now());
+		switch (snap.status) {
+			case ABSENT:
+				logWarn("Overrides file '" + snap.fileName + "' not loaded: "
+						+ snap.detail + ". Running with no overrides (the "
+						+ "guide's values only). Copy "
+						+ "compliance_overrides_template in Infrastructure "
+						+ "Operations > Configurations > Management Packs "
+						+ "Configuration and save the copy under this name "
+						+ "plus .xml (it lands in User Defined), or correct the "
+						+ "instance's Overrides file setting.");
+				break;
+			case PARSE_FAILED:
+				logWarn("Overrides file '" + snap.fileName + "' could not be "
+						+ "parsed: " + snap.detail + ". "
+						+ (snap.parsed != null
+								? "Keeping the copy read at "
+										+ OverridesStore.formatTime(
+												snap.lastGood,
+												java.time.ZoneId.systemDefault())
+								: "No earlier copy to keep: running with no "
+										+ "overrides")
+						+ ".");
+				break;
+			case FETCH_FAILED:
+				logWarn("Overrides file '" + snap.fileName + "' could not be "
+						+ "fetched this cycle (" + snap.fetchReason + ", "
+						+ snap.fetchFailures + " cycle"
+						+ (snap.fetchFailures == 1 ? "" : "s")
+						+ " in a row): " + snap.detail + ". "
+						+ (snap.parsed != null
+								? "Keeping the copy read at "
+										+ OverridesStore.formatTime(
+												snap.lastGood,
+												java.time.ZoneId.systemDefault())
+								: "No earlier copy to keep: running with no "
+										+ "overrides")
+						+ (snap.notLoaded()
+								? "; the overrides-not-loaded alert is raised"
+								: "")
+						+ ".");
+				break;
+			default:
+				break;
+		}
+		return snap;
+	}
+
+	/**
+	 * Build 90: report the overrides file. One INFO line listing the
+	 * applied entries, one WARN per rejected entry, then the status keys on
+	 * the Compliance World (shared by every instance, so it shows the last
+	 * instance to collect) and on this instance's vCenter object. Pushed
+	 * every cycle, "none" and zeros included.
+	 */
+	private void pushOverridesStatus(ComplianceStitcher.HostEntry vcEntry,
+			List<MetricData> out) {
+		OverridesStore.Snapshot snap = cycleOverridesSnap;
+		if (snap == null) return;
+		ComplianceOverrides.Resolved r = cycleOverrides;
+		if (snap.parsed != null) {
+			logInfo("Overrides file '" + snap.fileName + "': "
+					+ (r.applied.isEmpty() ? "no entries applied"
+							: r.applied.size() + " entr"
+									+ (r.applied.size() == 1 ? "y" : "ies")
+									+ " applied: "
+									+ String.join("; ", r.applied))
+					+ (r.changesProfiles()
+							? " (in force for this instance's profiles: "
+									+ cycleSkippedInForce + " skipped, "
+									+ cycleOverriddenInForce + " overridden)"
+							: "")
+					+ (r.rejected.isEmpty() ? ""
+							: " (" + r.rejected.size() + " rejected, see the "
+									+ "WARN lines)"));
+			for (String rej : r.rejected) {
+				logWarn("Overrides file '" + snap.fileName + "': rejected "
+						+ rej);
+			}
+		}
+		String status = snap.statusText(r.rejected.size(),
+				java.time.ZoneId.systemDefault());
+		int skipped = cycleSkippedInForce;
+		int overridden = cycleOverriddenInForce;
+		boolean notLoaded = snap.notLoaded();
+
+		long ts = System.currentTimeMillis();
+		for (java.util.Map.Entry<String, String> e : ComplianceDecisions
+				.overridesProps("", snap.fileName, status).entrySet()) {
+			pushWorldProperty(out, e.getKey(), e.getValue());
+		}
+		for (java.util.Map.Entry<String, Double> e : ComplianceDecisions
+				.overridesStats("", skipped, overridden, notLoaded).entrySet()) {
+			out.add(new MetricData(new MetricKey(false, e.getKey()), ts,
+					e.getValue()));
+		}
+		if (stitcher != null && vcEntry != null) {
+			stitcher.pushProperties(vcEntry.resourceId,
+					ComplianceDecisions.overridesProps(ComplianceDecisions.K,
+							snap.fileName, status), ts);
+			stitcher.pushStats(vcEntry.resourceId,
+					ComplianceDecisions.overridesStats(ComplianceDecisions.K,
+							skipped, overridden, notLoaded), ts);
+		}
+	}
+
+	/** Build 90: control ids whose expected value is a site override. */
+	private java.util.Set<String> siteOverriddenFor(String profileName) {
+		java.util.Map<String, BenchmarkProfile> m = profilesByName;
+		BenchmarkProfile p = m == null || profileName == null ? null
+				: m.get(profileName);
+		return p == null ? java.util.Collections.<String>emptySet()
+				: p.siteOverriddenIds();
 	}
 
 	/** Push the per-vCenter rollup onto this instance's vCenter object. */
@@ -566,6 +795,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		java.util.Map<String, Double> stats = rollup.toStats();
+		boolean zeroedCustom = zeroCustomBucket
+				&& ComplianceRollup.zeroRetiredCustom(stats);
 		if (!rollup.incompleteKinds().isEmpty()) {
 			logWarn("Inventory listing failed this cycle for "
 					+ rollup.incompleteKinds() + " (the vCenter listing, or "
@@ -577,6 +808,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		stitcher.pushStats(vcEntry.resourceId, stats,
 				System.currentTimeMillis());
+		if (zeroedCustom) {
+			zeroCustomBucket = false;
+			logInfo("Account stored as Custom: "
+					+ ComplianceRollup.RETIRED_CUSTOM_KEY + " set to 0 once");
+		}
 		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
 				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")");
 	}
@@ -770,17 +1006,21 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			pushNoBenchmark(resourceId, d.profileName);
 		}
 		afterPush(kind, moid, d, resourceId, cs,
-				java.util.Collections.<String>emptySet());
+				java.util.Collections.<String>emptySet(), null);
 	}
 
 	/**
 	 * After an object with a decided benchmark (scored, or no benchmark):
 	 * remember the benchmark for the B2 fallback, and queue the object for
 	 * this cycle's stale-control cleanup when it was pushed.
+	 *
+	 * @param skip the skipped controls in force that went out in this
+	 *             object's push ({@link #skipInForce}); null or empty: none.
+	 *             They join the live set, so the cleanup leaves them alone.
 	 */
 	private void afterPush(BenchmarkSelector.Kind kind, String moid,
 			ComplianceDecisions.Decision d, String resourceId, CycleStats cs,
-			java.util.Set<String> pushed) {
+			java.util.Set<String> pushed, ComplianceDecisions.SkipPush skip) {
 		if (moid == null) return;
 		String prev = memory.record(LastBenchmarkMemory.key(kind, moid),
 				d.profileName);
@@ -789,9 +1029,37 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ prev + "' -> '" + d.profileName + "'");
 		}
 		if (resourceId != null && stitcher != null) {
+			java.util.Set<String> live = pushed;
+			if (skip != null && !skip.isEmpty()) {
+				cs.skipPushedObjects++;
+				cs.skipPushedKeys += skip.ids.size();
+				live = new java.util.TreeSet<>(pushed);
+				live.addAll(skip.ids);
+			}
 			pendingCleanup.add(new PendingCleanup(kind, resourceId, d.profile,
-					d.profileName, pushed));
+					d.profileName, live));
 		}
+	}
+
+	/**
+	 * Build 92 (adapter issue #41): Compliant = -1 and the skip Actual text
+	 * for every skipped control in force on this object, sent EVERY cycle
+	 * while the Skip is in the file ({@link ComplianceDecisions#skipPush}).
+	 * One -1 sample was not enough: the per-control symptom needs its cancel
+	 * cycles of fresh non-triggering samples before the alert cancels.
+	 * Removing the Skip empties this and the control is scored again on the
+	 * same cycle. Review W3: the result is merged into the object's own
+	 * push ({@link ComplianceDecisions#pushObject}), never a separate call.
+	 */
+	private ComplianceDecisions.SkipPush skipInForce(
+			BenchmarkSelector.Kind kind, ComplianceDecisions.Decision d) {
+		ComplianceOverrides.Resolved r = cycleOverrides;
+		if (d.profile == null || r == null || r.skipped.isEmpty()) {
+			return null;
+		}
+		return ComplianceDecisions.skipPush(kind,
+				cycleUnadjusted.get(d.profileName), r.skipped,
+				config.overridesFile);
 	}
 
 	/** One object queued for end-of-cycle cleanup. */
@@ -881,7 +1149,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		for (PendingCleanup p : batch) {
 			ComplianceDecisions.CleanupPlan plan =
 					ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed,
-							bundled);
+							bundled, cycleOverrides.skipped);
 			if (!plan.isEmpty()) {
 				plans.put(p.resourceId, plan);
 				allCandidates.addAll(plan.queryIds());
@@ -918,7 +1186,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					plan, latest.get(p.resourceId));
 			if (stale.isEmpty()) continue;
 			stitcher.pushProperties(p.resourceId,
-					ComplianceDecisions.orphanProps(stale, p.profileName), ts);
+					ComplianceDecisions.orphanProps(stale, p.profileName,
+							cycleOverrides.skipped,
+							config.overridesFile), ts);
 			stitcher.pushStats(p.resourceId,
 					ComplianceDecisions.orphanStats(stale), ts);
 			cs.cleanedObjects++;
@@ -1159,9 +1429,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				if (wholeHostUnreadable) cs.hostsWhollyUnreadable++;
 			}
 
-			pushComplianceViaClient(resourceId, cr, d.profileName);
+			ComplianceDecisions.SkipPush skip =
+					skipInForce(BenchmarkSelector.Kind.HOST, d);
+			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
-					ComplianceDecisions.pushedIds(cr));
+					ComplianceDecisions.pushedIds(cr), skip);
 		}
 		logInfo("Hosts scored this cycle: " + cs.hostsScored + " of "
 				+ cs.hosts + " (" + cs.hostsNonCompliant + " non-compliant, "
@@ -1273,9 +1545,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			pushComplianceViaClient(resourceId, cr, d.profileName);
+			ComplianceDecisions.SkipPush skip =
+					skipInForce(BenchmarkSelector.Kind.VM, d);
+			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
-					ComplianceDecisions.pushedIds(cr));
+					ComplianceDecisions.pushedIds(cr), skip);
 		}
 		logInfo("VM compliance: " + cs.vms + " VMs seen, "
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
@@ -1397,12 +1671,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER, d.bucket,
 				cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-		pushComplianceViaClient(resourceId, cr, d.profileName);
+		ComplianceDecisions.SkipPush skip =
+				skipInForce(BenchmarkSelector.Kind.VCENTER, d);
+		pushComplianceViaClient(resourceId, cr, d.profileName, skip);
 		logInfo("Pushed vCenter compliance data to " + he.hostName
 				+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
 				+ ")");
 		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs,
-				ComplianceDecisions.pushedIds(cr));
+				ComplianceDecisions.pushedIds(cr), skip);
 		return he;
 	}
 
@@ -1564,9 +1840,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 				cr.unreadableCount, cr.score);
-		pushOrProfileName(resourceId, cr, d.profileName);
+		ComplianceDecisions.SkipPush skip = skipInForce(kind, d);
+		pushOrProfileName(resourceId, cr, d.profileName, skip);
 		afterPush(kind, moid, d, resourceId, cs,
-				ComplianceDecisions.pushedIds(cr));
+				ComplianceDecisions.pushedIds(cr), skip);
 	}
 
 	/**
@@ -1613,11 +1890,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// ----- shared push / evaluation helpers -------------------------------
 
 	private void pushOrProfileName(String resourceId,
-			ControlEvaluator.ComplianceResult cr, String profileName) {
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			ComplianceDecisions.SkipPush skip) {
 		if (cr.totalCount > 0 || cr.unreadableCount > 0) {
-			pushComplianceViaClient(resourceId, cr, profileName);
+			pushComplianceViaClient(resourceId, cr, profileName, skip);
 		} else {
-			pushProfileNamePropertyOnly(resourceId, profileName);
+			pushProfileNamePropertyOnly(resourceId, profileName, skip);
 		}
 	}
 
@@ -1830,12 +2108,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * never linger. No score (never a sentinel).
 	 */
 	private void pushProfileNamePropertyOnly(String resourceId,
-			String profileName) {
-		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId,
-				ComplianceDecisions.profileNameProps(profileName), ts);
-		stitcher.pushStats(resourceId,
-				ComplianceDecisions.nothingEvaluatedStats(), ts);
+			String profileName, ComplianceDecisions.SkipPush skip) {
+		ComplianceDecisions.pushObject(stitcher, resourceId,
+				ComplianceDecisions.profileNameProps(profileName),
+				ComplianceDecisions.nothingEvaluatedStats(), skip,
+				System.currentTimeMillis());
 		logInfo("Pushed profile_name='" + profileName + "' to resource="
 				+ resourceId);
 	}
@@ -1865,12 +2142,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.
 	 */
 	private void pushComplianceViaClient(String resourceId,
-			ControlEvaluator.ComplianceResult cr, String profileName) {
-		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId,
-				ComplianceDecisions.complianceProps(cr, profileName), ts);
-		stitcher.pushStats(resourceId, ComplianceDecisions.complianceStats(cr),
-				ts);
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			ComplianceDecisions.SkipPush skip) {
+		ComplianceDecisions.pushObject(stitcher, resourceId,
+				ComplianceDecisions.complianceProps(cr, profileName,
+						siteOverriddenFor(profileName)),
+				ComplianceDecisions.complianceStats(cr), skip,
+				System.currentTimeMillis());
 	}
 
 	/** Per-cycle counters for the completion log line. */
@@ -1880,6 +2158,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
 		int cleanupQueried; int cleanupRequests; int cleanupValues;
+		int skipPushedObjects; int skipPushedKeys;
 	}
 
 	// -----------------------------------------------------------------------
