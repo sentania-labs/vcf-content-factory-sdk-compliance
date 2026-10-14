@@ -69,42 +69,82 @@ collector) and requires no additional outbound network configuration.
 
 ## TLS to vCenter: certificate trust
 
-Since build 50 the adapter **validates the vCenter certificate against the
-platform trust store by default** (strict TLS). Click **Validate
-Connection** with `allowInsecure` left at its default:
+The adapter always validates the vCenter certificate. There is no
+setting to turn validation off (build 93 removed Allow Insecure SSL).
+Two things are checked on every connection the adapter opens to vCenter
+(the vSphere SOAP session, esxcli, the vCenter REST API and the
+appliance API):
 
-1. **If validation succeeds**, the certificate is already trusted.
-   Nothing more to do.
-2. **If it fails with a certificate error** (for example
-   `certificate_unknown` or "Unable to construct a valid chain"), set
-   `allowInsecure=true` for now. Importing the CA under Fleet Management >
-   Certificates has not been shown to help, and the Validate Connection
-   dialog does not yet offer to accept the certificate (framework work in
-   progress). `allowInsecure=true` disables certificate validation
-   (trust-all) for this adapter instance. Only the literal string `true`
-   opts in; any other value, blank, or absent keeps strict validation.
-   The adapter logs a WARN at configure time when it is set.
+- **The chain:** the certificate must be issued by a CA in the VCF
+  Operations trust store, or be a certificate you accepted for this
+  account in the Validate Connection dialog.
+- **The name:** the certificate must carry the host you entered for
+  vCenter. Since build 93 the adapter checks this itself on every
+  connection, because the VCF Operations trust manager checks the chain
+  only.
 
-Either way, enter vCenter by the name on its certificate, not its IP.
+**Enter vCenter by the name on its certificate.** Use the FQDN (or the
+address) the vCenter certificate lists, not an IP or short name the
+certificate does not carry. Accepting a certificate does not fix a name
+mismatch: the error says the certificate was issued for a different
+name and tells you to re-enter the host.
 
-> **Upgrade note:** an instance pointed at a vCenter whose certificate is
-> not in the platform trust store must either import the certificate or
-> explicitly set `allowInsecure=true`, or vCenter SOAP collection will fail
-> TLS validation. The failure is loud and names the remedy in the collector
-> log.
+When you click **Validate Connection**:
+
+1. **The certificate is already trusted** (issued by a CA the VCF
+   Operations trust store holds): validation goes straight on to the
+   connection test. No dialog.
+2. **The certificate is not trusted** (self-signed, or a private CA VCF
+   Operations does not know): VCF Operations shows its **Review and
+   Accept Certificate** dialog with the vCenter certificate. Check the
+   details (issuer, validity, thumbprint against what vCenter shows) and
+   accept it. Validation then runs the connection test. The accepted
+   certificate is stored on this account and trusted on every collection
+   cycle; nothing is copied to the collector.
+3. **The connection test** logs in to the vCenter REST API and checks
+   the chain and the name. A vCenter entered by an IP or a name the
+   certificate does not list fails here with the name message, even
+   after you accept its certificate in step 2: edit the host and
+   validate again.
+
+If vCenter's certificate changes later (renewed, or replaced by a new
+CA), collection fails with a certificate error naming the vCenter. Open
+the account, click **Validate Connection**, and accept the new
+certificate. A renewed certificate that no longer lists the host you
+entered fails with the name message instead.
+
+A collection cycle that cannot reach vCenter (connection, login or
+certificate failure) collects nothing. Since build 93 it sets
+`VCF-CF Compliance|Rollup|incomplete` to 1 on the vCenter object, which
+raises **Compliance data not collected** on that vCenter, so the scores
+on the dashboards (which are from the last completed cycle) are not
+mistaken for current ones. The adapter finds the vCenter object without
+vCenter only when the host you entered equals that vCenter's address in
+VCF Operations (its VCURL), or when an earlier cycle since the account
+was last edited found it; otherwise the collector log says the marker
+was not pushed. The next completed cycle sets it back to 0.
+
+> **Upgrade note (build 93):** see the build 93 steps under Upgrading:
+> record the settings before you upgrade, then Validate Connection each
+> account that ran with Allow Insecure SSL `true`, and each account that
+> names vCenter by an IP or a name not on its certificate (those stop
+> collecting after the upgrade, even if they collected before, because
+> the name is now checked).
 
 ## Configuration Fields
 
 When adding a new adapter instance in VCF Operations, you will be prompted
-for:
+for the vCenter host, the credential and the collector. **Overrides file**
+and **Read vCenter appliance settings** are under **Advanced Settings** in
+the same dialog. The pack has no profile choice: every object is scored
+against the SCG for its own version (`Auto (by version)`); to pin a
+version, use the overrides file ([overrides.md](overrides.md)).
 
 | Field | Key | Required | Default | Notes |
 |-------|-----|----------|---------|-------|
-| vCenter Host / IP | `vcenter_host` | Yes | — | FQDN or IP of the target vCenter. |
-| Compliance Profile | `benchmark_profile` | Yes | Auto (by version) | `Auto (by version)` picks the SCG per object by version. Or force a bundled SCG (6.7 / 7.0 / 8.0 / 9.0 / 9.1) for every object. Existing instances keep their stored choice on upgrade, except `Custom` (removed in build 92), which runs as `Auto (by version)`. To pin one object kind to a version, use a `Profile` entry with `kind` in the overrides file. |
+| vCenter Host / IP | `vcenter_host` | Yes | - | The target vCenter, by the name on its certificate (see the TLS section). |
 | Overrides file (name of your copy in Management Packs Configuration, without .xml) | `overrides_file` | No | - | The name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides. See [overrides.md](overrides.md). |
 | Read vCenter appliance settings | `read_appliance_settings` | No | false | Off: the vCenter appliance (VAMI) controls are manual review. On: they are read and scored; the account must be in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (there is no read-only appliance role). Instances created before build 74 have no stored value and use the default. |
-| Allow Insecure SSL (true to disable cert validation; default false = validate against platform trust store) | `allowInsecure` | No | false | `true` disables vCenter certificate validation. See TLS section above. |
 | Username | `username` | Yes | — | vCenter account (SSO). Privileges depend on Read vCenter appliance settings; see Permissions Required. |
 | Password | `password` | Yes | — | vCenter account password (masked). |
 
@@ -113,13 +153,14 @@ for:
 1. Install the `.pak` file via **Administration > Integrations > Repository > Add**.
 2. After installation, open **Administration > Integrations > Accounts**.
 3. Click **Add Account** and select **VCF Content Factory Compliance**.
-4. Fill in the configuration fields above. Leave the profile at
-   `Auto (by version)` unless you need one SCG for every object. To tune
-   controls, set **Overrides file** later (see [overrides.md](overrides.md)).
-5. Resolve TLS: for a private-CA or self-signed vCenter, set
-   `allowInsecure=true` (see the TLS section). Enter vCenter by the name
-   on its certificate, not its IP.
-6. Click **Validate Connection**, then **Add**.
+4. Fill in the configuration fields above, entering vCenter by the name
+   on its certificate. To tune controls or pin a guide version, set
+   **Overrides file** under Advanced Settings later (see
+   [overrides.md](overrides.md)).
+5. Click **Validate Connection**. For a self-signed or private-CA
+   vCenter, VCF Operations shows the vCenter certificate for review:
+   accept it (see the TLS section).
+6. Click **Add**.
 7. On the first collection cycle the adapter discovers its Compliance
    World and begins pushing results onto the existing VMWARE hosts, VMs,
    vCenter, clusters, distributed switches and portgroups.
@@ -176,12 +217,46 @@ for:
   (per-control and score ones wait 1 and cancel after 3; the collection
   ones stay 1 and 1). Nothing to edit by hand.
 
-- **The Custom profile CSV is removed (build 92).** The Compliance
-  Profile setting no longer offers `Custom`, and the Custom Profile CSV
-  Path setting is gone. An instance still set to `Custom` logs one WARN
-  each time it is configured and runs as `Auto (by version)`; edit it and
-  choose `Auto (by version)` or a bundled SCG to clear the warning. Site
-  changes go in an overrides file ([overrides.md](overrides.md)).
+- **The Custom profile CSV is removed (build 92).** The Custom Profile
+  CSV Path setting is gone. Site changes go in an overrides file
+  ([overrides.md](overrides.md)).
+- **Build 93: before you upgrade, record each account's settings.**
+  Build 93 removes the Compliance Profile and Allow Insecure SSL
+  settings, and VCF Operations drops the stored value of a removed
+  setting on upgrade (seen on a lab upgrade to build 92: the removed
+  Custom Profile CSV Path was no longer stored on the three lab accounts
+  afterwards). Before installing build 93, write down each compliance
+  account's **Compliance Profile** and **Allow Insecure SSL** values,
+  from the account's edit dialog or from `GET /api/adapters/{id}`
+  (`resourceIdentifiers`, keys `benchmark_profile` and `allowInsecure`).
+  After the upgrade that record is the only reliable source.
+- **The Compliance Profile setting is removed (build 93).** Every
+  account runs `Auto (by version)` from the first cycle after the
+  upgrade, so the scores of an account that used a fixed SCG can move.
+  To keep scoring every object of an account against one SCG, add
+  `<Profile version="SCG 9.0"/>` (the version you recorded) to the
+  account's overrides file ([overrides.md](overrides.md)). An account
+  whose recorded profile is **blank** (accounts created before the pack
+  chose a guide by version) was scored against SCG 8.0 and now runs
+  Auto too; add `<Profile version="SCG 8.0"/>` to keep it on SCG 8.0. If
+  the platform still hands the adapter the stored value, it logs one
+  INFO line at configure time naming it and the entry to add; do not
+  count on that line, use your record. The account keeps its id and
+  history.
+- **Allow Insecure SSL is removed (build 93).** Right after the upgrade,
+  open each account that ran with Allow Insecure SSL `true`, click
+  **Validate Connection**, accept the vCenter certificate if VCF
+  Operations shows it, and check that the account's status is green.
+  Until you do, an untrusted certificate fails every collection (with
+  the "Compliance data not collected" alert on the vCenter where the
+  vCenter object can be found; see the TLS section). If the platform
+  still hands the adapter the stored value, it logs one WARN at
+  configure time; do not count on it, use your record.
+- **The certificate name is checked (build 93).** An account that names
+  vCenter by an IP or a name the certificate does not list stops
+  collecting after the upgrade, even if it collected before, and fails
+  with "presented a certificate issued for a different name". Edit the
+  host to the name on the certificate and click Validate Connection.
 
 ## Troubleshooting
 
@@ -197,9 +272,15 @@ for:
   87), and the host's score line is logged at INFO because it has
   unreadable controls. The host is tried again on the next cycle.
 
-- **vCenter SOAP fails with a TLS validation error** — the vCenter
-  certificate is not trusted. Set `allowInsecure=true` for now. See the
-  TLS section.
+- **"The certificate presented by vCenter ... is not trusted"** (on
+  Validate Connection or in the collector log): open the account, click
+  **Validate Connection** and accept the certificate when VCF Operations
+  shows it. See the TLS section.
+- **"vCenter ... presented a certificate issued for a different name"**
+  (on Validate Connection or in the collector log; since build 93 also on
+  accounts that collected before the upgrade): the account names vCenter
+  by an IP or name the certificate does not list. Edit the account, enter the name on the certificate, and click
+  Validate Connection. Accepting the certificate does not fix this.
 - **"Compliance data not collected" alert, or a host scoring 0** (build
   63): the adapter could not read some or all of the object's settings,
   and unreadable settings count as failing. A disconnected or
@@ -207,7 +288,11 @@ for:
   vCenter, the adapter account's read permissions, and the adapter log for
   read errors naming the object; `unreadable_count` and the controls whose
   `Compliant` is -1 with Actual "(unreadable)" show which settings. The
-  alert clears on the first cycle in which everything is read.
+  alert clears on the first cycle in which everything is read. On a
+  vCenter, the same alert with `VCF-CF Compliance|Rollup|incomplete` = 1
+  and the account in error means the last cycle could not reach vCenter
+  at all (build 93): the collector log and the account status give the
+  reason, and the scores shown are from the last completed cycle.
 - **"Compliance overrides file not loaded" alert** (build 90): the
   account's Overrides file names a file that does not exist in
   Infrastructure Operations > Configurations > Management Packs

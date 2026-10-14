@@ -26,6 +26,8 @@ import java.util.function.Function;
  *   <li>{@link #linkWorld}: whether and where this instance links its own
  *       vCenter object under ComplianceWorld (build 82; no cross-cycle
  *       cache since build 83).</li>
+ *   <li>{@link #markNotCollected}: where a cycle that could not reach
+ *       vCenter marks the rollup incomplete (build 93, review W1).</li>
  * </ul>
  */
 public final class ComplianceDecisions {
@@ -879,5 +881,47 @@ public final class ComplianceDecisions {
 			return new WorldLink(LinkOutcome.ACCEPTED, worldId);
 		}
 		return new WorldLink(LinkOutcome.ADD_FAILED, worldId);
+	}
+
+	// ----- Cycle that could not reach vCenter (build 93, review W1) -------
+
+	/**
+	 * The one stat a cycle that failed before any read pushes on the
+	 * vCenter object: {@code Rollup|incomplete} = 1. It raises "Compliance
+	 * data not collected (vCenter)" (symptom
+	 * {@code vcfcf_compliance_collection_vcenter_rollup_incomplete}), so the
+	 * last scores are not shown as current with no signal. Nothing else is
+	 * pushed: a count the adapter could not take is not a 0. The next
+	 * complete cycle pushes 0 with the full rollup.
+	 */
+	public static Map<String, Double> notCollectedStats() {
+		Map<String, Double> m = new LinkedHashMap<>();
+		m.put(ComplianceRollup.INCOMPLETE_KEY, 1.0);
+		return m;
+	}
+
+	/**
+	 * Push {@link #notCollectedStats} onto this instance's own vCenter
+	 * object without vCenter: the id resolved by the last cycle that
+	 * reached vCenter since the instance was configured, else
+	 * {@code resolveByHost} (the VMWARE vCenter object whose VCURL is the
+	 * entered host exactly, the only match possible with no vCenter UUID;
+	 * see {@link #matchVCenter}). Never another vCenter's object.
+	 *
+	 * @return the resource id pushed to, or null when none was resolved
+	 *         (nothing pushed)
+	 */
+	public static String markNotCollected(String lastResolvedId,
+			java.util.function.Supplier<String> resolveByHost,
+			java.util.function.BiConsumer<String, Map<String, Double>> push) {
+		String id = lastResolvedId;
+		if (id == null || id.trim().isEmpty()) {
+			id = resolveByHost.get();
+		}
+		if (id == null || id.trim().isEmpty()) {
+			return null;
+		}
+		push.accept(id, notCollectedStats());
+		return id;
 	}
 }

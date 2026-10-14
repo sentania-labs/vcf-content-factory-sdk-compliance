@@ -604,7 +604,8 @@ final class EsxcliSoapClient {
 	 * session cookie and return the parsed response Document, or
 	 * {@code null} on a non-2xx response (a SOAP fault HTTP 500 included
 	 * — the caller maps any failure to command-failed). Reuses the
-	 * adapter's trust-all SSL factory.
+	 * vCenter client's SSL factory (the platform trust path, name checked)
+	 * and the strict hostname verifier.
 	 */
 	private Document post(String soapBody, String soapAction) throws Exception {
 		String envelope =
@@ -618,8 +619,9 @@ final class EsxcliSoapClient {
 
 		URL url = new URL(sdkUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-		if (conn instanceof HttpsURLConnection && sslFactory != null) {
-			((HttpsURLConnection) conn).setSSLSocketFactory(sslFactory);
+		if (conn instanceof HttpsURLConnection) {
+			// Same chain and name checks as the vCenter session (build 93).
+			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
 		conn.setRequestMethod("POST");
 		conn.setDoOutput(true);

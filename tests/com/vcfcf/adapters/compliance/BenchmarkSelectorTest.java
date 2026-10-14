@@ -11,7 +11,6 @@ public final class BenchmarkSelectorTest {
 	public static void main(String[] args) {
 		Map<String, BenchmarkProfile> all = new BenchmarkLoader().loadAll(".");
 		BenchmarkSelector auto = BenchmarkSelector.auto(all);
-		T.check(auto.isAuto(), "auto selector reports auto");
 
 		// major.minor parsing.
 		T.eq("8.0", BenchmarkSelector.majorMinor("8.0.3"), "8.0 U3");
@@ -84,16 +83,6 @@ public final class BenchmarkSelectorTest {
 					.profileName, k + " follows vCenter 7.0");
 		}
 
-		// Fixed mode forces the profile regardless of version.
-		BenchmarkSelector fixed = BenchmarkSelector.fixed(
-				all.get("VMware_SCG_9.0"));
-		T.check(!fixed.isAuto(), "fixed selector is not auto");
-		for (String v : new String[] {"6.7.0", "8.0.3", "10.0.0", null}) {
-			BenchmarkSelector.Selection s =
-					fixed.select(BenchmarkSelector.Kind.HOST, v);
-			T.eq("VMware_SCG_9.0", s.profileName, "fixed 9.0 for " + v);
-			T.check(!s.noBenchmark(), "fixed never no-benchmark");
-		}
 		T.eq("SCG_9.0", BenchmarkSelector.bucketOf("VMware_SCG_9.0"),
 				"bundled bucket");
 

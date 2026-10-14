@@ -70,8 +70,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private final java.util.List<PendingCleanup> pendingCleanup =
 			new java.util.ArrayList<>();
 
-	// Profiles in use this cycle, by name (all bundled in Auto mode, the one
-	// fixed profile otherwise), and this cycle's conf dir.
+	// Profiles in use this cycle, by name (every bundled profile, plus the
+	// overrides file's pins), and this cycle's conf dir.
 	private volatile java.util.Map<String, BenchmarkProfile> profilesByName;
 	private volatile String cycleConfDir;
 
@@ -96,6 +96,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// profile; zero its retired rollup bucket on the next complete rollup.
 	private volatile boolean zeroCustomBucket;
 	private volatile int cycleOverriddenInForce;
+	// Build 93 (review W1): this instance's vCenter object as resolved by
+	// the last cycle that reached vCenter, for marking a later cycle that
+	// cannot reach it. Cleared on configure (the host may have changed).
+	private volatile String lastVcResourceId;
 
 	public ComplianceAdapter() {
 		super(ADAPTER_KIND);
@@ -129,8 +133,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	protected void configureAdapter(ResourceStatus status,
 			ResourceConfig resourceConfig) {
 		String vcenterHost = getIdentifier(resourceConfig, "vcenter_host");
-		String profile = getIdentifier(resourceConfig, "benchmark_profile");
-		String allowInsecure = getIdentifier(resourceConfig, "allowInsecure");
+		// Build 93: the Compliance Profile setting is removed (every instance
+		// runs Auto (by version)); a stored value is read only for the INFO
+		// below and the retired Custom rollup bucket.
+		String storedProfile = getIdentifier(resourceConfig,
+				ComplianceConfig.RETIRED_PROFILE_KEY);
+		// Build 93: Allow Insecure SSL is removed; read only for the WARN.
+		String storedAllowInsecure = getIdentifier(resourceConfig,
+				ComplianceConfig.RETIRED_ALLOW_INSECURE_KEY);
 		String readAppliance = getIdentifier(resourceConfig,
 				ComplianceConfig.READ_APPLIANCE_KEY);
 		String overridesFile = getIdentifier(resourceConfig,
@@ -140,39 +150,41 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.config = new ComplianceConfig(
 				vcenterHost, username, password,
-				profile, allowInsecure, readAppliance, overridesFile);
-		this.zeroCustomBucket = config.storedAsCustom;
-		if (config.storedAsCustom) {
-			// Build 92: the Custom profile CSV is removed. One WARN per
-			// configure; the instance runs as Auto (by version).
-			logWarn("Compliance Profile 'Custom' was removed in build 92 "
-					+ "(the profile CSV on the collector and its "
-					+ "custom_profile_path setting are no longer read). This "
-					+ "instance runs as " + BenchmarkSelector.AUTO + ". Edit "
-					+ "the instance and choose " + BenchmarkSelector.AUTO
-					+ " or a bundled SCG version to clear this warning. Skip, "
-					+ "Override and per-kind Profile entries go in the "
-					+ "Overrides file (see docs/overrides.md).");
+				readAppliance, overridesFile);
+		this.lastVcResourceId = null;
+		boolean storedAsCustom = ComplianceConfig.isCustomName(storedProfile);
+		this.zeroCustomBucket = storedAsCustom;
+		String profileNotice =
+				ComplianceConfig.retiredProfileNotice(storedProfile);
+		if (profileNotice != null) {
+			// Build 93: one INFO per configure naming the stored value.
+			logInfo(profileNotice);
+		}
+		String tlsNotice =
+				ComplianceConfig.retiredAllowInsecureNotice(storedAllowInsecure);
+		if (tlsNotice != null) {
+			// Build 93: one WARN per configure; validation is strict.
+			logWarn(tlsNotice);
 		}
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor(config));
+				sslContextFor());
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
-				sslSocketFactoryFor(config),
-				componentLogger(VSphereClient.class),
-				config.allowInsecure);
+				sslSocketFactoryFor(),
+				componentLogger(VSphereClient.class));
 
 		this.benchmarkLoader = new BenchmarkLoader();
 		// HOLD (owner decision pending): "Read vCenter appliance settings".
 		// Off = the vami_api controls load as manual review for this
 		// instance (no score, no per-control alert, not attempted).
 		this.benchmarkLoader.setApplianceReads(config.readApplianceSettings);
-		// An instance edit re-runs configure and may change the benchmark
-		// mode (e.g. fixed -> Auto): forget last cycle's benchmarks so the
-		// B2 fallback never reuses a benchmark chosen under the old mode.
+		// An instance edit re-runs configure (and an upgrade from a build with
+		// a fixed Compliance Profile lands here too): forget last cycle's
+		// benchmarks so the B2 fallback never reuses a benchmark chosen under
+		// the old settings.
 		memory.clear();
 
 		// Ambient Suite API stitching — reads maintenanceuser.properties,
@@ -196,8 +208,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
-				+ " profile=" + config.benchmarkProfile
-				+ " allowInsecure=" + config.allowInsecure
+				+ " profile=" + BenchmarkSelector.AUTO
 				+ " readApplianceSettings=" + config.readApplianceSettings
 				+ " overridesFile="
 				+ (config.overridesFile.isEmpty() ? "(none)"
@@ -206,71 +217,67 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build 74: the TLS context for the REST clients (VAMI appliance API and
-	 * Test Connection), with the same trust decision as the SOAP client:
-	 * trust-all only on the explicit allowInsecure opt-out, otherwise the
-	 * PLATFORM context (it used to be the JDK default context, which does not
-	 * trust a lab or enterprise CA, so every VAMI read failed on vCenters
-	 * whose certificate the platform trusts). Null (JDK default) only when no
-	 * platform context is available, e.g. a bare Test Connection instance.
+	 * The TLS context for every vCenter client (REST session and
+	 * inventory, VAMI appliance API, Test Connection, and through
+	 * {@link #sslSocketFactoryFor} the vim25 SOAP walk and esxcli): the
+	 * PLATFORM trust manager, which trusts the VCF Operations trust store
+	 * plus the certificates accepted on this instance through Validate
+	 * Connection, wrapped by {@link VCenterCertificates#nameChecking} so the
+	 * certificate must also carry the name vCenter is entered by (build 93,
+	 * review B1: the platform trust manager checks the chain only). Null
+	 * (JDK default trust, which checks the name itself) only when no
+	 * platform trust manager is available, never trust-all.
 	 */
-	private javax.net.ssl.SSLContext sslContextFor(ComplianceConfig cfg) {
-		if (cfg.allowInsecure) {
-			return insecureSslContext();
-		}
+	private javax.net.ssl.SSLContext sslContextFor() {
 		try {
-			return getPlatformSslContext();
+			return VCenterCertificates.nameChecking(getAdapterTrustManager(),
+					getKeyManagers());
 		} catch (RuntimeException e) {
-			logWarn("Platform SSL context unavailable for the vCenter REST "
-					+ "client; using the JDK default trust store: "
+			logWarn("Platform trust manager unavailable for the vCenter "
+					+ "clients; using the JDK default trust store: "
 					+ e.getMessage());
 			return null;
 		}
 	}
 
 	/**
-	 * Task #12 — pick the SSL socket factory for the raw-SOAP
-	 * {@link VSphereClient} connection in line with the framework SSL
-	 * convention (migration guide §16 / {@code HttpClientBuilder}):
-	 *
-	 * <ul>
-	 *   <li><b>platform trust by default</b> — {@link #getPlatformSslContext()}
-	 *       (the same SSLContext {@code HttpClientBuilder.platformSsl(this)}
-	 *       installs) so the vCenter certificate is validated against the VCF
-	 *       Ops platform trust store. This is the secure default.</li>
-	 *   <li><b>{@code allowInsecure} per-adapter-config opt-out</b> — only when
-	 *       the instance's {@code allowInsecure} identifier is set does the
-	 *       client fall back to {@link #insecureSslContext()} (trust-all),
-	 *       exactly as {@code HttpClientBuilder.allowInsecure(true)} does. This
-	 *       is the documented lab opt-out, surfaced in the log line above.</li>
-	 * </ul>
-	 *
-	 * <p>Returns the {@link javax.net.ssl.SSLSocketFactory} of the chosen
-	 * context. If the platform context cannot be obtained (e.g. a standalone
-	 * collector with no platform trust store) the JDK default factory is used
-	 * — never a silent fall-through to trust-all. The chosen factory is handed
-	 * into {@link VSphereClient}, which threads it through to its per-cycle
-	 * {@link EsxcliSoapClient} so the esxcli slice honours the same trust
-	 * decision.
+	 * The SSL socket factory for the raw-SOAP {@link VSphereClient}
+	 * connection (and its per-cycle {@link EsxcliSoapClient}): the factory
+	 * of {@link #sslContextFor}, so the vim25 walk validates the vCenter
+	 * certificate, chain and name, exactly as the REST clients do. Both
+	 * SOAP clients also set {@link VCenterCertificates#strictHostnameVerifier}
+	 * through {@link VCenterCertificates#secure}. If no platform trust
+	 * manager can be obtained the JDK default factory is used, never
+	 * trust-all.
 	 */
-	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor(
-			ComplianceConfig cfg) {
-		if (cfg.allowInsecure) {
-			logWarn("allowInsecure=true — vCenter SOAP TLS certificate "
-					+ "validation is DISABLED for this instance (lab opt-out). "
-					+ "Set allowInsecure=false to validate against the platform "
-					+ "trust store.");
-			return insecureSslContext().getSocketFactory();
+	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor() {
+		javax.net.ssl.SSLContext ctx = sslContextFor();
+		if (ctx != null) {
+			return ctx.getSocketFactory();
 		}
-		javax.net.ssl.SSLContext platform = getPlatformSslContext();
-		if (platform != null) {
-			return platform.getSocketFactory();
-		}
-		logWarn("Platform SSL context unavailable and allowInsecure=false — "
-				+ "using the JDK default trust store for the vCenter SOAP "
-				+ "connection.");
+		logWarn("Platform trust manager unavailable: using the JDK default "
+				+ "trust store for the vCenter SOAP connection.");
 		return (javax.net.ssl.SSLSocketFactory)
 				javax.net.ssl.SSLSocketFactory.getDefault();
+	}
+
+	// -----------------------------------------------------------------------
+	// certificateCheckUrls (framework hook, build 93)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Build 93: the vCenter endpoint VCF Operations reviews on Validate
+	 * Connection, so an untrusted certificate brings up the Review and
+	 * Accept Certificate dialog instead of failing. Derived only from the
+	 * passed (possibly unsaved) config, never from instance state; see
+	 * {@link VCenterCertificates#checkUrls}. {@code @Override} on purpose:
+	 * a buildkit older than 1.0.11 has no such hook and must fail to
+	 * compile rather than build a pak that never offers the dialog.
+	 */
+	@Override
+	protected List<String> certificateCheckUrls(ResourceConfig rc) {
+		return VCenterCertificates.checkUrls(
+				getIdentifier(rc, "vcenter_host"));
 	}
 
 	// -----------------------------------------------------------------------
@@ -296,18 +303,32 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 
 			String vcenterHost = getIdentifier(rc, "vcenter_host");
-			String allowInsecure = getIdentifier(rc, "allowInsecure");
 			String username = getCredentialField(rc, "username");
 			String password = getCredentialField(rc, "password");
 
 			ComplianceConfig testCfg = new ComplianceConfig(
 					vcenterHost, username, password,
-					/*profile*/ null, allowInsecure);
+					null, null);
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
-					sslContextFor(testCfg));
-			testApi.login();
+					sslContextFor());
+			try {
+				testApi.login();
+			} catch (Exception e) {
+				VCenterCertificates.Failure f = VCenterCertificates.classify(e);
+				if (f == null) throw e;
+				// Build 93: rethrow WITHOUT the cause. The framework's final
+				// onTest replaces the text of any failure whose cause chain
+				// shows a trust problem with its generic message, which offers
+				// the removed Allow Insecure SSL setting. The original is
+				// logged here instead.
+				logWarn("Test Connection: vCenter certificate problem ("
+						+ f + "): " + e, e);
+				throw new Exception(VCenterCertificates.message(f,
+						vcenterHost) + " (" + e.getClass().getSimpleName()
+						+ ")");
+			}
 			try {
 				SimpleJson hosts = testApi.listHosts();
 				int count = 0;
@@ -450,10 +471,83 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
+	/**
+	 * Build 93: {@code vsphere.ensureConnected()}, with a certificate the
+	 * instance does not trust (or one issued for another name) turned into
+	 * the admin-facing instruction (open the account and Validate
+	 * Connection; enter vCenter by the name on its certificate). The cause
+	 * is kept for the log; any other failure is rethrown unchanged.
+	 */
+	private void ensureVCenterConnected() throws Exception {
+		try {
+			vsphere.ensureConnected();
+		} catch (Exception e) {
+			VCenterCertificates.Failure f = VCenterCertificates.classify(e);
+			if (f == null) throw e;
+			throw new Exception(VCenterCertificates.message(f,
+					config.vcenterHost), e);
+		}
+	}
+
+	/**
+	 * Build 93 (review W1): the cycle could not reach vCenter (connect,
+	 * login or certificate failure), so nothing was read. Push
+	 * {@code Rollup|incomplete} = 1 on this instance's vCenter object, which
+	 * raises "Compliance data not collected (vCenter)", instead of leaving
+	 * the last scores showing as current with no signal. Best effort: any
+	 * failure here is logged and the cycle's own exception is what the
+	 * caller rethrows.
+	 */
+	private void markCycleNotCollected(Exception cause) {
+		ComplianceStitcher st = stitcher;
+		if (st == null) {
+			logWarn("vCenter " + config.vcenterHost + " not reached this "
+					+ "cycle and no Suite API stitcher: Rollup|incomplete "
+					+ "cannot be pushed; the last scores stay in place");
+			return;
+		}
+		try {
+			String id = ComplianceDecisions.markNotCollected(lastVcResourceId,
+					() -> {
+						st.loadVCenterAdapterInstance();
+						ComplianceStitcher.HostEntry he =
+								st.matchVCenterAdapterInstance(
+										config.vcenterHost, null);
+						return he == null ? null : he.resourceId;
+					},
+					(rid, stats) -> st.pushStats(rid, stats,
+							System.currentTimeMillis()));
+			if (id == null) {
+				logWarn("vCenter " + config.vcenterHost + " not reached this "
+						+ "cycle (" + cause.getClass().getSimpleName() + "), "
+						+ "and its VMwareAdapter Instance could not be "
+						+ "resolved without vCenter (no VCURL equal to the "
+						+ "entered host): Rollup|incomplete is NOT pushed; "
+						+ "the last scores stay in place");
+			} else {
+				logWarn("vCenter " + config.vcenterHost + " not reached this "
+						+ "cycle (" + cause.getClass().getSimpleName() + "): "
+						+ ComplianceRollup.INCOMPLETE_KEY + " = 1 pushed to "
+						+ "resource " + id + "; the compliance values shown "
+						+ "are from the last completed cycle");
+			}
+		} catch (RuntimeException e) {
+			logWarn("vCenter " + config.vcenterHost + " not reached this "
+					+ "cycle, and pushing Rollup|incomplete failed: " + e);
+		}
+	}
+
 	/** The cycle body; {@link #collectWorld} times it. */
 	private void collectWorldCycle(ResourceConfig worldRc,
 			List<MetricData> out) throws Exception {
-		vsphere.ensureConnected();
+		try {
+			ensureVCenterConnected();
+		} catch (InterruptedException e) {
+			throw e;   // cancelled: no more network calls this cycle
+		} catch (Exception e) {
+			markCycleNotCollected(e);
+			throw e;
+		}
 		// Build 85: fresh esxcli reads every cycle. The esxcli cache lived as
 		// long as the vCenter session, so a stale result (pass or failure)
 		// could be served cycle after cycle; a stale pass is a false pass.
@@ -481,11 +575,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} catch (Exception e) {
 			logWarn("Could not read the vCenter version: " + e.getMessage());
 		}
-		if (selector.isAuto()) {
-			logInfo("Auto (by version): vCenter version=" + vcVersion
-					+ " governs vCenter / cluster / vDS / portgroup benchmark "
-					+ "choice");
-		}
+		logInfo("Auto (by version): vCenter version=" + vcVersion
+				+ " governs vCenter / cluster / vDS / portgroup benchmark "
+				+ "choice");
 
 		ComplianceRollup rollup = new ComplianceRollup();
 		CycleStats cs = new CycleStats();
@@ -527,6 +619,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 		}
 
+		if (vcEntry != null) {
+			lastVcResourceId = vcEntry.resourceId;
+		}
 		pushRollup(vcEntry, rollup);
 		pushOverridesStatus(vcEntry, out);
 		// Known limitation: this edge is added, never removed. A vCenter whose
@@ -570,48 +665,27 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build the per-cycle benchmark selector. {@code Auto (by version)}
-	 * loads every bundled profile once (cached by the loader) and selects
-	 * per object; any other value forces that profile for every object.
+	 * Build the per-cycle benchmark selector: {@code Auto (by version)} over
+	 * every bundled profile (loaded once, cached by the loader), selecting
+	 * per object. Build 93: Auto is the only mode.
 	 *
 	 * <p>Build 90: the overrides file ({@code parsed}, null for none) is
 	 * applied on top: skipped controls are removed from every loaded
 	 * profile, overridden expected values replace the SCG values, and
-	 * Profile pins replace the mode for the kinds they name. Auto and the
-	 * manual-review overlay keep working underneath. The result is kept in
+	 * Profile pins replace Auto for the kinds they cover (a pin without
+	 * kind covers every kind; a kind pin wins over it). The manual-review
+	 * overlay keeps working underneath. The result is kept in
 	 * {@link #cycleOverrides} for the push, the cleanup and the status keys.
 	 */
 	private BenchmarkSelector buildSelector(String confDir,
 			ComplianceOverrides.Parsed parsed) {
-		BenchmarkSelector base;
-		java.util.Map<String, BenchmarkProfile> baseProfiles;
-		if (config.isAuto()) {
-			java.util.Map<String, BenchmarkProfile> all =
-					benchmarkLoader.loadAll(confDir);
-			baseProfiles = all;
-			logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
-					+ all.size() + " bundled profiles loaded; "
-					+ benchmarkLoader.lastManualReviewApplied()
-					+ " controls set to manual review (prose expected values, standard-switch controls))");
-			base = BenchmarkSelector.auto(all);
-		} else {
-			BenchmarkProfile profile = benchmarkLoader.load(
-					config.benchmarkProfile, confDir);
-			if (!profile.name.equals(config.benchmarkProfile)) {
-				logWarn("Profile load divergence: requested='"
-						+ config.benchmarkProfile + "' resolved='"
-						+ profile.name + "': profile_name will use the resolved "
-						+ "name");
-			}
-			java.util.Map<String, BenchmarkProfile> one =
-					new java.util.LinkedHashMap<>();
-			one.put(profile.name, profile);
-			baseProfiles = one;
-			logInfo("Benchmark mode: fixed '" + profile.name + "' for every "
-					+ "object (" + benchmarkLoader.lastManualReviewApplied()
-					+ " controls set to manual review (prose expected values, standard-switch controls))");
-			base = BenchmarkSelector.fixed(profile);
-		}
+		java.util.Map<String, BenchmarkProfile> baseProfiles =
+				benchmarkLoader.loadAll(confDir);
+		logInfo("Benchmark mode: " + BenchmarkSelector.AUTO + " ("
+				+ baseProfiles.size() + " bundled profiles loaded; "
+				+ benchmarkLoader.lastManualReviewApplied()
+				+ " controls set to manual review (prose expected values, standard-switch controls))");
+		BenchmarkSelector base = BenchmarkSelector.auto(baseProfiles);
 		if (parsed == null || parsed.isEmpty()) {
 			cycleUnadjusted = java.util.Collections.emptyMap();
 			cycleOverrides = ComplianceOverrides.Resolved.EMPTY;
@@ -621,13 +695,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return base;
 		}
 
-		// Every profile the file can name: all bundled ones (cached). Since
-		// build 92 the instance's own profiles are always bundled ones.
-		java.util.Map<String, BenchmarkProfile> bundled =
-				benchmarkLoader.loadAll(confDir);
+		// Every profile the file can name: all bundled ones (cached), which
+		// since build 93 are also the instance's own.
+		java.util.Map<String, BenchmarkProfile> bundled = baseProfiles;
 		java.util.Map<String, BenchmarkProfile> known =
 				new java.util.LinkedHashMap<>(bundled);
-		known.putAll(baseProfiles);
 		ComplianceOverrides.Resolved r =
 				ComplianceOverrides.resolve(parsed, known.values());
 		cycleOverrides = r;
@@ -641,15 +713,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		java.util.Map<String, BenchmarkProfile> effBase = r.adjust(baseProfiles);
 		java.util.Map<String, BenchmarkProfile> effBundled = r.adjust(bundled);
-		BenchmarkSelector selector = config.isAuto()
-				? BenchmarkSelector.auto(effBase)
-				: BenchmarkSelector.fixed(effBase.values().iterator().next());
+		BenchmarkSelector selector = BenchmarkSelector.auto(effBase);
 		java.util.Map<BenchmarkSelector.Kind, BenchmarkProfile> pins =
 				r.pins(effBundled);
 		selector = selector.withPins(pins);
 
 		// Profiles a decision may name this cycle (the B2 fallback looks the
-		// previous benchmark up here): the mode's own, plus every pin.
+		// previous benchmark up here): every bundled one, plus every pin.
 		java.util.Map<String, BenchmarkProfile> byName =
 				new java.util.LinkedHashMap<>(effBase);
 		for (BenchmarkProfile p : pins.values()) byName.put(p.name, p);
@@ -1284,13 +1354,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String resourceId = he.resourceId;
 
 			String version = null;
-			if (selector.isAuto()) {
-				try {
-					version = vsphere.getHostProductVersion(hostInfo.moRef);
-				} catch (Exception e) {
-					logWarn("Host " + hostName + ": could not read the ESX "
-							+ "version (" + e.getMessage() + ")");
-				}
+			try {
+				version = vsphere.getHostProductVersion(hostInfo.moRef);
+			} catch (Exception e) {
+				logWarn("Host " + hostName + ": could not read the ESX "
+						+ "version (" + e.getMessage() + ")");
 			}
 			if (hostId != null) hostVersions.put(hostId, version);
 
@@ -1499,8 +1567,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				continue;
 			}
 			String resourceId = he.resourceId;
-			String hostVersion = selector.isAuto()
-					? vmHostVersion(vm, hostVersions) : null;
+			String hostVersion = vmHostVersion(vm, hostVersions);
 
 			ComplianceDecisions.Decision d = decide(selector,
 					BenchmarkSelector.Kind.VM, vm.moid,
@@ -2030,7 +2097,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		VamiApiClient client = new VamiApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor(config), this::logWarn);
+				sslContextFor(), this::logWarn);
 		try {
 			java.util.Map<String, Object> values = new java.util.HashMap<>();
 			for (BenchmarkProfile.Control c : controls) {

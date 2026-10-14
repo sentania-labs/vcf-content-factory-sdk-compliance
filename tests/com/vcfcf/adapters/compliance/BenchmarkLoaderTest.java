@@ -48,27 +48,34 @@ public final class BenchmarkLoaderTest {
 						+ e.getMessage());
 			}
 		}
-		// An instance stored as Custom runs as Auto and is flagged once for
-		// the configure WARN; any other value is untouched.
-		for (String stored : new String[] {"Custom", "custom", " Custom "}) {
-			ComplianceConfig c = new ComplianceConfig("vc", "u", "p", stored,
-					"false");
-			if (!c.storedAsCustom || !c.isAuto()) {
-				throw new AssertionError("stored '" + stored + "' should run "
-						+ "as Auto and be flagged");
+		// Build 93: the Compliance Profile setting is removed. A stored
+		// value is only reported: one INFO naming it (the adapter logs it
+		// once per configure); Auto, blank and absent say nothing.
+		for (String quiet : new String[] {null, "", "  ",
+				"Auto (by version)", " auto (BY VERSION) "}) {
+			if (ComplianceConfig.retiredProfileNotice(quiet) != null) {
+				throw new AssertionError("no notice for '" + quiet + "'");
 			}
 		}
-		ComplianceConfig fixed = new ComplianceConfig("vc", "u", "p",
-				"VMware_SCG_9.0", "false");
-		if (fixed.storedAsCustom
-				|| !"VMware_SCG_9.0".equals(fixed.benchmarkProfile)) {
-			throw new AssertionError("a bundled choice is untouched");
+		String n90 = ComplianceConfig.retiredProfileNotice("VMware_SCG_9.0");
+		if (n90 == null || !n90.contains("stored 'VMware_SCG_9.0'")
+				|| !n90.contains("now runs Auto (by version)")
+				|| !n90.contains("<Profile version=\"SCG 9.0\"/>")) {
+			throw new AssertionError("fixed 9.0 notice: " + n90);
 		}
-		ComplianceConfig blank = new ComplianceConfig("vc", "u", "p", null,
-				"false");
-		if (blank.storedAsCustom
-				|| !"VMware_SCG_8.0".equals(blank.benchmarkProfile)) {
-			throw new AssertionError("blank keeps the pre-v3 8.0 fallback");
+		String nCustom = ComplianceConfig.retiredProfileNotice(" Custom ");
+		if (nCustom == null || !nCustom.contains("stored 'Custom'")
+				|| !nCustom.contains("SCG X.Y")) {
+			throw new AssertionError("Custom notice: " + nCustom);
+		}
+		for (String stored : new String[] {"Custom", "custom", " Custom "}) {
+			if (!ComplianceConfig.isCustomName(stored)) {
+				throw new AssertionError("'" + stored + "' is Custom");
+			}
+		}
+		if (ComplianceConfig.isCustomName("VMware_SCG_9.0")
+				|| ComplianceConfig.isCustomName(null)) {
+			throw new AssertionError("only Custom is Custom");
 		}
 
 		// Filename mapping covers every bundled profile.

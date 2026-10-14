@@ -320,10 +320,9 @@ public final class BenchmarkLoader {
 				return profileName;
 			default:
 				throw new RuntimeException(
-						"configured benchmark_profile '" + profileName
-						+ "' is not bundled in this version; choose "
-						+ "Auto (by version) or VMware_SCG_6.7 / 7.0 / 8.0 / "
-						+ "9.0 / 9.1");
+						"profile '" + profileName
+						+ "' is not bundled in this version (bundled: "
+						+ "VMware_SCG_6.7 / 7.0 / 8.0 / 9.0 / 9.1)");
 		}
 	}
 

@@ -43,10 +43,11 @@ Bundled profiles cover SCG 6.7, 7.0, 8.0, 9.0, and 9.1. The default,
 `Auto (by version)`, scores each object against the SCG for its own
 version (hosts by ESX version, VMs by their host's ESX version,
 everything else by the vCenter version); an object whose version has no
-bundled SCG is reported as "no benchmark" and not scored. A fixed SCG can
-be forced instead. Since build 90 an overrides file in the VCF Operations
-configuration-file store can turn controls off, replace expected values
-and pin the SCG version per object kind (see [overrides.md](overrides.md)).
+bundled SCG is reported as "no benchmark" and not scored. Since build 93
+that is the only mode: the Compliance Profile setting is removed. Since
+build 90 an overrides file in the VCF Operations configuration-file store
+can turn controls off, replace expected values and pin the SCG version
+for the whole instance or per object kind (see [overrides.md](overrides.md)).
 
 ### Resource kinds
 
@@ -270,7 +271,13 @@ collection continues; compliance is never failed over a stitch error.
   alert fires. To see which listing failed, look in the adapter log for
   "Inventory listing failed this cycle for" and the "Failed to enumerate"
   warning just before it; then check the collection account's inventory
-  read permissions on that vCenter.
+  read permissions on that vCenter. Since build 93 a cycle that cannot
+  reach vCenter at all (connection, login or certificate failure) also
+  pushes `Rollup|incomplete` = 1 on the vCenter object, and nothing
+  else, before the cycle fails; the adapter log says "not reached this
+  cycle". The vCenter object is found without vCenter only by the id an
+  earlier cycle since the last account edit resolved, or by a VCURL
+  equal to the entered host.
 
 - **Version unreadable is not "no benchmark".** If the adapter cannot read
   the version that governs an object's SCG, it scores the object against
@@ -291,8 +298,9 @@ collection continues; compliance is never failed over a stitch error.
   keeps a metric's last value, so a control that failed (`Compliant` = 0)
   under an object's previous SCG would keep its alert open after the
   object moves to an SCG that does not evaluate that control (a host
-  upgraded from 8.0 to 9.0, an instance switched from a fixed profile to
-  Auto). At the end of every cycle the adapter reads the latest `Compliant`
+  upgraded from 8.0 to 9.0, an instance moved from a fixed profile to
+  Auto by the build 93 upgrade, a pin added or removed in the overrides
+  file). At the end of every cycle the adapter reads the latest `Compliant`
   values of the controls outside each object's current SCG from VCF Ops
   (bulk `stats/latest` requests packed up to a URL-length limit: about 41
   requests for 5,000 VMs, 7 for 500 hosts on SCG 9.1), and sets only the ones
@@ -311,10 +319,18 @@ collection continues; compliance is never failed over a stitch error.
   that silently returns nothing can be told apart from "nothing stale". Objects whose version could not
   be read are not cleaned.
 
-- **Strict TLS to vCenter by default.** Since build 50 the adapter
-  validates the vCenter certificate against the platform trust store by
-  default; `allowInsecure=true` is the explicit opt-out (see
-  `installing.md`).
+- **Strict TLS to vCenter, always.** Since build 50 the adapter
+  validates the vCenter certificate against the platform trust store.
+  Since build 93 there is no opt-out (Allow Insecure SSL is removed);
+  instead the adapter declares the vCenter endpoint to VCF Operations
+  (the framework's `certificateCheckUrls` hook), so Validate Connection
+  shows the Review and Accept Certificate dialog for an untrusted
+  certificate, and the accepted certificate is stored on the instance
+  and trusted on every cycle. The platform trust manager checks the
+  chain only, so the adapter also checks the certificate name itself on
+  every connection to vCenter (REST, appliance API, SOAP and esxcli,
+  Test Connection included): vCenter must be entered by the name on its
+  certificate (see `installing.md`).
 
 - **Fresh-instance discovery works on VCF Ops 9.0.2.** The adapter
   enumerates its synthetic world on the collect path

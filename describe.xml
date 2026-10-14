@@ -22,19 +22,13 @@
                   monitoringInterval="5">
       <ResourceIdentifier key="vcenter_host" nameKey="6" type="string"
                           required="true" dispOrder="1"/>
-      <ResourceIdentifier key="benchmark_profile" nameKey="7" type="string"
-                          required="true" dispOrder="2" default="Auto (by version)"
-                          enum="true">
-        <enum value="Auto (by version)" displayOrder="1"/>
-        <enum value="VMware_SCG_6.7" displayOrder="2"/>
-        <enum value="VMware_SCG_7.0" displayOrder="3"/>
-        <enum value="VMware_SCG_8.0" displayOrder="4"/>
-        <enum value="VMware_SCG_9.0" displayOrder="5"/>
-        <enum value="VMware_SCG_9.1" displayOrder="6"/>
-      </ResourceIdentifier>
+      <!-- Build 93: benchmark_profile (Compliance Profile, nameKey 7) is
+           removed; every instance runs Auto (by version) and the overrides
+           file's <Profile version="..."/> pins the whole instance. A stored
+           value logs one INFO when the instance is configured. nameKey 7 is
+           retired, not reused. -->
       <!-- Build 92: Custom and custom_profile_path are removed (deprecated
-           in build 90). An instance still stored as Custom logs one WARN and
-           runs as Auto (by version). nameKey 8 is retired, not reused. -->
+           in build 90). nameKey 8 is retired, not reused. -->
       <!-- Build 90: the name of the user's copy of
            compliance_overrides_template in the central configuration-file
            store (no path, no extension). Empty: no overrides, no fetch.
@@ -42,8 +36,11 @@
       <ResourceIdentifier key="overrides_file" nameKey="11" type="string"
                           required="false" dispOrder="4" default=""
                           identType="2"/>
-      <ResourceIdentifier key="allowInsecure" nameKey="9" type="string"
-                          required="false" dispOrder="5" default="false"/>
+      <!-- Build 93: allowInsecure (Allow Insecure SSL, nameKey 9) is
+           removed; the adapter always validates the vCenter certificate
+           against the platform trust path and offers VCF Operations' accept
+           dialog on Validate Connection (certificateCheckUrls). A stored
+           true logs one WARN. nameKey 9 is retired, not reused. -->
       <!-- HOLD (build 74, owner decision pending): read the vCenter
            appliance (VAMI) settings. Off = those controls are manual review
            for this instance. Default must match

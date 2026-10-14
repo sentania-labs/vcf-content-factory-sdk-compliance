@@ -20,10 +20,11 @@ public final class VCenterApiClient {
 	private volatile String sessionId;
 
 	/**
-	 * @param sslContext build 74: the platform TLS context when
-	 *        allowInsecure=false (was the JDK default, which does not trust
-	 *        a lab or enterprise CA), the trust-all context when
-	 *        allowInsecure=true. Null falls back to the JDK default.
+	 * @param sslContext the platform TLS context (build 74; was the JDK
+	 *        default, which does not trust a lab or enterprise CA). Build 93:
+	 *        always the platform context with the certificate name enforced
+	 *        ({@link VCenterCertificates#nameChecking}), never trust-all. Null
+	 *        falls back to the JDK default (which checks the name itself).
 	 */
 	public VCenterApiClient(String baseUrl, String username, String password,
 			SSLContext sslContext) {
