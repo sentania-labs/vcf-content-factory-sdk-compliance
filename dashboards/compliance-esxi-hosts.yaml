@@ -127,6 +127,15 @@ widgets:
           metric_name: "VCF-CF Compliance|Profile Name"
           label: "SCG Applied"
           is_string_metric: true
+        # Build 95 review B2: the flag sits ahead of the counts it
+        # qualifies. 1 = not fully read this cycle, so the counts below
+        # are from what was read, or from an earlier cycle when nothing
+        # was (the Objects with Unreadable Controls list gives the reason).
+        - adapter_kind: VMWARE
+          resource_kind: HostSystem
+          metric_key: "VCF-CF Compliance|has_unreadable"
+          metric_name: "VCF-CF Compliance|Has Unreadable"
+          label: "Not Fully Read"
         - adapter_kind: VMWARE
           resource_kind: HostSystem
           metric_key: "VCF-CF Compliance|total_count"

@@ -15,6 +15,11 @@
   Controls" list (object, kind, count, reason; the list view filtered on
   has_unreadable = 1 over the six kinds) sits next to the Controls
   Passing tile on the Environment Overview and the World Summary.
+- Review B2: Not Fully Read (has_unreadable) sits directly beside the
+  score in the six per-kind views (summed in the totals row) and in the
+  ESX Hosts host details, so a score kept from an earlier cycle is never
+  shown without its tell; no view description still names "Controls
+  Evaluated = 0" as the tell.
 
 The visual result still needs a look on devel; this pins the YAML.
 Standard library only (line parsing, like the other guards).
@@ -135,6 +140,27 @@ class Build95DashboardTest(unittest.TestCase):
                 self.assertEqual(y, sy, "same row as the scoreboard")
                 self.assertEqual(x, sx + sw, "directly right of the tile")
                 self.assertGreaterEqual(w, 5, "wide enough for the reason")
+
+    def test_flag_beside_score(self):
+        flag = "VCF-CF Compliance|has_unreadable"
+        for name in ["host-detail", "vm-detail", "vcenter-list",
+                     "cluster-list", "vds-list", "portgroup-list"]:
+            with self.subTest(view=name):
+                text = read("views/compliance-%s.yaml" % name)
+                cols = columns(text)
+                i = cols.index("VCF-CF Compliance|score")
+                self.assertEqual(cols[i + 1], flag)
+                summed = [int(x) for x in re.search(
+                    r"^  columns:\s*\[([^\]]*)\]", text, re.M
+                ).group(1).split(",")]
+                self.assertIn(i + 1, summed)
+                self.assertNotIn("score", [cols[k].split("|")[-1]
+                                           for k in summed])
+                self.assertNotIn("Controls Evaluated = 0", text)
+                self.assertIn("Not Fully Read", text)
+        block = widget(read("dashboards/compliance-esxi-hosts.yaml"),
+                       "host_compliance_details")
+        self.assertIn('metric_key: "%s"' % flag, block)
 
     def test_no_overlap(self):
         for name in ["compliance-environment-overview.yaml",

@@ -285,8 +285,11 @@ version, use the overrides file ([overrides.md](overrides.md)).
   with Unreadable Controls list** (build 95): the adapter could not read
   some or all of the object's settings for two cycles in a row. Those
   settings are not pushed (their last values stay) and the object's score
-  counts only what was read; a disconnected or not-responding host shows
-  its last score with `has_unreadable` = 1. The object's
+  counts only what was read, so a partial outage can move it either way
+  and raise or cancel Host Compliance Score Degraded. A disconnected or
+  not-responding host keeps its last score, shown with Not Fully Read = 1
+  beside it in the per-kind views and the ESX Hosts host details. The
+  object's
   `unreadable_reason` property says why in plain words (for example "host
   not responding" or "permission refused") with the logged detail, and
   `unreadable_controls` lists the settings. Check the object's connection

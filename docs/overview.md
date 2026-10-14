@@ -225,8 +225,10 @@ collection continues; compliance is never failed over a stitch error.
   "(+N more)"). An object with nothing readable this cycle (every attempted
   setting unreadable, or its version unreadable with no previous SCG)
   pushes only those signals and `collection_failed` = 1: no score, no
-  counters, no `non_compliant`, so its last values stay on screen with
-  the flag beside them. A version-unreadable object gets no
+  counters, no `non_compliant`, so its last values stay on screen, not
+  current; the Not Fully Read column (`has_unreadable`) beside the score in
+  the six per-kind views, and the same row in the ESX Hosts host details,
+  mark them. A version-unreadable object gets no
   `unreadable_count` (its controls are not known). The flag drives the
   Objects with Unreadable Controls list beside the Controls Passing tile
   and the "Compliance data not collected (<kind>)" alert (severity
@@ -234,7 +236,9 @@ collection continues; compliance is never failed over a stitch error.
   clean cycle. Builds 63 to 94 counted an unreadable setting as failing
   (pass / (pass + fail + unreadable)), pushed it as -1, made the object
   non-compliant and scored a disconnected host 0, which also raised Host
-  Compliance Score Degraded; a read outage no longer moves the score.
+  Compliance Score Degraded. A whole-object outage no longer moves the
+  score; a partial one scores what was read and can move it either way
+  (hiding a passing control lowers it, hiding a failing one raises it).
 
 - **A finding survives one unreadable cycle (build 86).** The per-control
   alerts and the Host Compliance Score Degraded alert (and their symptoms)
@@ -248,9 +252,10 @@ collection continues; compliance is never failed over a stitch error.
   minutes at the default 5 minute interval) instead of 1. The "Compliance
   data not collected" alerts wait 2 cycles and cancel after 1 (build 95):
   one slow cycle does not raise them, and they clear on the first cycle
-  that reads everything. Since build 95 an unreadable cycle no longer
-  lowers a host's score, so it no longer raises Host Compliance Score
-  Degraded.
+  that reads everything. Since build 95 a host with nothing readable gets
+  no score, so it no longer raises Host Compliance Score Degraded; a host
+  read in part is scored over what was read, which can move its score
+  either way and so can raise or cancel Score Degraded.
 
 - **Only objects with a VCF Ops resource are counted (build 88).** The
   per-vCenter rollup, and so the environment totals, count only objects

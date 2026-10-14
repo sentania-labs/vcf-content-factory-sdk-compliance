@@ -131,7 +131,8 @@ VCF-CF Compliance|score              0-100%: pass / (pass + fail), over what was
                                      when at least one control was read
 VCF-CF Compliance|pass_count         controls that passed
 VCF-CF Compliance|fail_count         controls evaluated and failed (unreadable NOT included)
-VCF-CF Compliance|total_count        pass + fail (0 when nothing was evaluated)
+VCF-CF Compliance|total_count        pass + fail; not pushed when nothing was read (it
+                                     keeps its last value; has_unreadable = 1 marks that)
 VCF-CF Compliance|unreadable_count   controls not read this cycle; not pushed when the
                                      governing version cannot be read
 VCF-CF Compliance|non_compliant      1 when fail_count > 0 (build 95: a failing control
@@ -158,7 +159,10 @@ unreadable, or its version unreadable with no previous SCG) pushes only
 `has_unreadable` = 1, `unreadable_count` (when known), `collection_failed`
 = 1, `unreadable_reason`, `unreadable_controls` and `object_kind`: no
 score, no pass / fail / total, no `non_compliant`, no per-control value.
-Its last score stays on screen with the flag beside it. A
+Its last score and `total_count` stay on screen, not current: the Not
+Fully Read column (`has_unreadable`) beside the score in the six per-kind
+views, and the same row in the ESX Hosts host details, mark them (the
+ESX Hosts heatmap colors by score alone and does not). A
 version-unreadable object's `unreadable_controls` reads `(not known: the
 benchmark depends on the version)`: its controls are not invented.
 
@@ -289,15 +293,19 @@ and pass rate. The object is flagged instead: `has_unreadable` = 1 with
 on the Objects with Unreadable Controls view beside the Controls Passing
 tile, and after two cycles in a row its "Compliance data not collected"
 alert fires (see Alerts). An object with nothing readable pushes only
-those signals, so its last score stays on screen with the flag beside
-it. This replaces the build 63 rule (owner decision 2026-09-23), under
+those signals, so its last score stays on screen, marked by Not Fully
+Read beside it in the per-kind views and the host details. A partial
+read outage still moves the score, over what was read, and can raise or
+cancel Host Compliance Score Degraded; only a whole-object outage leaves
+the score untouched. This replaces the build 63 rule (owner decision 2026-09-23), under
 which an unreadable setting counted as failing, pushed -1, made the object
 non-compliant and an all-unreadable object scored 0. `score` and
 `avg_score` are not pushed when nothing was read (an all-unreadable
 object, a no-benchmark object, a non-vSAN cluster); VCF Ops then keeps
-showing the last value it had, so read them with `has_unreadable` /
-`total_count` / `no_benchmark` (per object) and `scored` (per vCenter,
-pushed every cycle).
+showing the last value it had, so read them with `has_unreadable` and
+`no_benchmark` (per object, both pushed every cycle; `total_count` is not
+pushed when nothing was read, so it is stale too) and `scored` (per
+vCenter, pushed every cycle).
 
 **The percentage is controls passing (build 95, Scott 2026-10-14).**
 Every percentage the dashboards show for a kind, a vCenter or the

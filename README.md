@@ -176,8 +176,13 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   refused", plus the detail the adapter logged) and `unreadable_controls`
   (the control ids, the first 20 then "+N more"). An object with nothing
   readable this cycle (a host vCenter reports not responding, for example)
-  pushes only those signals, so its last score stays on screen with the
-  flag beside it. The **Objects with Unreadable Controls** list next to
+  pushes only those signals, so its last score and Controls Evaluated stay
+  on screen, not current: the **Not Fully Read** column (`has_unreadable`)
+  beside the score in the six per-kind views, and the same row in the ESX
+  Hosts dashboard's host details, show it. A partial read outage still
+  moves the score, over what was read, either way (hiding a passing control
+  lowers it), so it can raise or cancel Host Compliance Score Degraded;
+  only a whole-object outage leaves the score untouched. The **Objects with Unreadable Controls** list next to
   the Controls Passing tile, on the Environment Overview and the Compliance
   World Summary, names every flagged object with its kind, count and
   reason, and the object's "Compliance data not collected" alert fires
