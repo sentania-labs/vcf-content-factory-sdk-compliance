@@ -261,8 +261,10 @@ public final class CertificateTest {
 		// is gone; Test Connection's REST client is pinned below.
 		T.check(!OverridesTest.stripComments(ca).contains("vcApi"),
 				"no collection REST client");
-		OverridesTest.inOrder(ca, "SOAP client", "this.vsphere = new "
-				+ "VSphereClient(", "config.vcenterHost,",
+		// Build 95 review W4: configure builds the client into a local
+		// before swapping it in.
+		OverridesTest.inOrder(ca, "SOAP client", "VSphereClient newVsphere = "
+				+ "new VSphereClient(", "config.vcenterHost,",
 				"sslSocketFactoryFor(config.vcenterHost),");
 		OverridesTest.inOrder(ca, "Test Connection client",
 				"VCenterApiClient testApi = new VCenterApiClient(",
