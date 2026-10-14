@@ -1,4 +1,4 @@
-"""Guard: review N13, W12 and W13 (build 95). One holder per configuration.
+"""Guard: review N13, W12, W13 and N16 (build 95). One holder per configuration.
 
 configureAdapter builds one Configured holder (account, clients, the
 state a cycle hands to the next) and publishes it with one write to the
@@ -64,6 +64,20 @@ def span(code, signature):
     return i, (m.start() if m else len(code))
 
 
+# An assignment operator (plain or compound), not a comparison.
+ASSIGN = r"(?:=(?!=)|[-+*/%&|^]=|<<=|>>>?=)"
+
+# A class-level declaration (one tab in, any or no access modifier) of a
+# non-static field: a type, then the name, then `=` or `;`.
+FIELD = re.compile(r"^\t(?![^;=(){}]*\bstatic\b)[A-Za-z][^;=(){}]*?\s"
+                   r"(\w+)\s*[=;]", re.M)
+
+
+def fields(code):
+    """Names of the instance (non-static) fields declared in the class."""
+    return set(FIELD.findall(code))
+
+
 def check(src):
     """Problems with the snapshot shape of src; empty when it holds."""
     code = strip(src)
@@ -78,6 +92,9 @@ def check(src):
                      r"ComplianceStitcher>\s+cycle;", code):
         bad.append("no `cycle` copy field declaration")
 
+    known = fields(code)
+    if not {"configured", "cycle", "cycleConfDir"} <= known:
+        bad.append("field scan missed known fields: %s" % sorted(known))
     conf = span(code, "protected void configureAdapter(")
     world = span(code, "private void collectWorld(")
     head = (world[0], code.index("try {", world[0]))
@@ -96,13 +113,25 @@ def check(src):
             bad.append("`configured` outside declaration, configure, copy "
                        "block and discard (stripped line %d)" % line)
 
-    # configure publishes the holder with exactly one write and writes
-    # no other account or client field.
+    # configure publishes the holder with exactly one write and assigns
+    # no other instance field (declared here or inherited, such as the
+    # platform's this.config), so no account or client can live outside
+    # the holder (review N16).
     body = code[conf[0]:conf[1]]
     writes = re.findall(r"\bthis\.configured\s*=(?!=)", body)
     if len(writes) != 1:
         bad.append("configure writes `configured` %d times, not once"
                    % len(writes))
+    for name in sorted(set(re.findall(r"\bthis\.(\w+)\s*" + ASSIGN, body))
+                       - {"configured"}):
+        bad.append("configure assigns this.%s" % name)
+    for name in sorted(fields(code) - {"configured"}):
+        if re.search(r"[\w>\]]\s+%s\s*[=;:,)]" % name, body):
+            continue  # a local of the same name shadows the field
+        if re.search(r"(?<![\w.])%s\s*%s" % (name, ASSIGN), body) or \
+                re.search(r"(?:\+\+|--)\s*%s\b|(?<![\w.])%s\s*(?:\+\+|--)"
+                          % (name, name), body):
+            bad.append("configure assigns field `%s`" % name)
     if re.search(r"(?<![\w.])(?:this\.)?config\s*=(?!=)", code):
         bad.append("this.config is assigned")
     if re.search(r"(?<![\w.])(?:this\.)?cycle\s*=(?!=)", body):
@@ -174,6 +203,32 @@ class CycleSnapshotTest(unittest.TestCase):
                 "this.configured;",
                 "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
                 "this.configured; this.configured = null;"),
+            "M10 configure assigns another field via this.": (
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;",
+                "this.cycleConfDir = account.vcenterHost;\n\t\t"
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;"),
+            "M11 configure assigns a bare field": (
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;",
+                "bulkShadow = true;\n\t\t"
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;"),
+            "M12 configure assigns a new package-private field": (
+                "\t@Override\n"
+                "\tprotected void configureAdapter(ResourceStatus status,\n"
+                "\t\t\tResourceConfig resourceConfig) {\n",
+                "\tString lastHost;\n\n\t@Override\n"
+                "\tprotected void configureAdapter(ResourceStatus status,\n"
+                "\t\t\tResourceConfig resourceConfig) {\n"
+                "\t\tlastHost = null;\n"),
+            "M13 configure compound-assigns a bare field": (
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;",
+                "cycleSkippedInForce += 1;\n\t\t"
+                "Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+                "this.configured;"),
         }
         for name, (old, new) in mutations.items():
             with self.subTest(name):
