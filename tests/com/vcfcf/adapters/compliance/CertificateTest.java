@@ -92,7 +92,8 @@ public final class CertificateTest {
 					"host blank '" + blank + "'");
 		}
 		for (String bad : new String[] {"https://vc01", "vc01/sdk",
-				"fd00::5", "vc01:99999", "vc 01"}) {
+				"fd00::5", "vc01:99999", "vc 01", "vc?.example.org",
+				"vc#.example.org", "user@vc01"}) {
 			T.eq(Collections.<String>emptyList(),
 					VCenterCertificates.checkUrls(bad),
 					"not dialable as entered: " + bad);
@@ -522,8 +523,11 @@ public final class CertificateTest {
 				"bracketed IPv6 with port");
 		T.eq("fd00::5", VCenterCertificates.expectedHost("fd00::5"),
 				"bare IPv6 taken whole");
+		T.eq("vc_01.lab-1.local", VCenterCertificates.expectedHost(
+				"vc_01.lab-1.local"), "underscore and hyphen kept");
 		for (String none : new String[] {null, "", "   ", "https://vc01",
-				"vc01/sdk", "vc 01"}) {
+				"vc01/sdk", "vc 01", "vc?.example.org", "vc#.example.org",
+				"user@vc01", "vc%2e.example.org"}) {
 			T.eq(null, VCenterCertificates.expectedHost(none),
 					"no usable host: '" + none + "'");
 		}
@@ -574,6 +578,27 @@ public final class CertificateTest {
 						"no host '" + entered + "'");
 				T.eq(VCenterCertificates.NO_HOST_MESSAGE, m,
 						"fail closed text, no host '" + entered + "'");
+			}
+			// Review W1: "vc?.example.org" dials "vc", so a wildcard
+			// certificate must not satisfy a check against the entered
+			// string. Such a host is refused (fail closed); the dialable
+			// name under the same wildcard still passes.
+			X509Certificate wild = cert(dir, "nphw", "CN=wild",
+					"dns:*.example.org");
+			X509Certificate[] wildChain = {wild};
+			X509ExtendedTrustManager wildOk = trustManager(
+					new ChainOnly(wild), "vc.example.org");
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA");
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA", plain);
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA", engine);
+			for (String entered : new String[] {"vc?.example.org",
+					"vc#.example.org"}) {
+				X509ExtendedTrustManager tm = trustManager(
+						new ChainOnly(wild), entered);
+				String m = overloadsRefuse(tm, wildChain, plain, ssl, engine,
+						null, "authority-splitting host '" + entered + "'");
+				T.eq(VCenterCertificates.NO_HOST_MESSAGE, m,
+						"fail closed text, '" + entered + "'");
 			}
 			// The chain check still runs first and its failure is the
 			// platform's (the accept dialog), even with a wrong name too.

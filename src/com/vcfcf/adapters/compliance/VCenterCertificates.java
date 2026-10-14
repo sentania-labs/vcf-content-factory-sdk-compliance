@@ -67,8 +67,12 @@ public final class VCenterCertificates {
 
 	// host, host:port, [v6], [v6]:port. Anything else (a scheme, a path,
 	// a bare IPv6 literal) is not a host the clients can dial as entered.
+	// An unbracketed host is hostname characters only: a '?', '#' or '@'
+	// ends or splits the URL authority, so the clients would dial a
+	// different host than the one the name check compares (review W1,
+	// build 94: "vc?.example.org" dials "vc").
 	private static final Pattern HOST_PORT = Pattern.compile(
-			"^(\\[[0-9A-Fa-f:.]+\\]|[^:\\[\\]/\\s]+)(?::(\\d{1,5}))?$");
+			"^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9._-]+)(?::(\\d{1,5}))?$");
 
 	/**
 	 * The URLs whose certificate VCF Operations reviews on Validate
@@ -295,8 +299,9 @@ public final class VCenterCertificates {
 	 * vCenter: {@code vcenterHost} trimmed, without a {@code :port}, without
 	 * the brackets of an IPv6 literal, lower case, no trailing dot. A bare
 	 * IPv6 literal (colons, no brackets) is taken whole. Null when blank or
-	 * not a host as entered (a scheme, a path, a space): the name check then
-	 * fails closed.
+	 * not a host as entered (a scheme, a path, a space, or any character
+	 * outside letters, digits, '.', '_' and '-', such as '?' or '#'): the
+	 * name check then fails closed.
 	 */
 	static String expectedHost(String vcenterHost) {
 		if (vcenterHost == null) return null;

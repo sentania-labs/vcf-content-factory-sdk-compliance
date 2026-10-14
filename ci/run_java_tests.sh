@@ -31,6 +31,7 @@ bc_version=1.82
 bc_dir="$out/bc"
 mkdir -p "$bc_dir"
 bc_ok=1
+bc_skipped=0
 while read -r art sum; do
     jar="$art-jdk18on-$bc_version.jar"
     url="https://repo1.maven.org/maven2/org/bouncycastle/$art-jdk18on/$bc_version/$jar"
@@ -53,8 +54,7 @@ elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     echo "BouncyCastle jars could not be fetched from Maven Central" >&2
     exit 1
 else
-    echo "BcHandshakeTest NOT EXERCISED: BouncyCastle jars could not be" \
-        "fetched from Maven Central (offline?)" >&2
+    bc_skipped=1
 fi
 python3 tests/test_generate_compliance_alerts.py
 python3 tests/test_describe_symptom_sets.py
@@ -62,3 +62,13 @@ python3 tests/test_describe_account_dialog.py
 python3 tests/test_dashboard_alert_lists.py
 python3 tests/test_dashboard_widget_types.py
 python3 tests/test_overrides_template.py
+# Printed last and on stdout so a passing exit code on a workstation is
+# not mistaken for a run that exercised the BouncyCastle handshakes.
+if [ "$bc_skipped" = 1 ]; then
+    echo
+    echo "################################################################"
+    echo "## SKIPPED: BcHandshakeTest was NOT run. The BouncyCastle jars"
+    echo "## could not be fetched from Maven Central (offline?). The 9.1.1"
+    echo "## collector TLS path is untested in this run; CI runs it."
+    echo "################################################################"
+fi
