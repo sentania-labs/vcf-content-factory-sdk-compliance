@@ -57,7 +57,10 @@ public final class CertificateTest {
 		Path dir = Files.createTempDirectory("vcfcf-cert-test");
 		try {
 			nameMatching(dir);
+			expectedHosts();
+			noPeerHostOverloads(dir);
 			liveHandshakes(dir);
+			noPeerHostHandshake(dir);
 		} finally {
 			deleteTree(dir.toFile());
 		}
@@ -89,7 +92,8 @@ public final class CertificateTest {
 					"host blank '" + blank + "'");
 		}
 		for (String bad : new String[] {"https://vc01", "vc01/sdk",
-				"fd00::5", "vc01:99999", "vc 01"}) {
+				"fd00::5", "vc01:99999", "vc 01", "vc?.example.org",
+				"vc#.example.org", "user@vc01"}) {
 			T.eq(Collections.<String>emptyList(),
 					VCenterCertificates.checkUrls(bad),
 					"not dialable as entered: " + bad);
@@ -239,24 +243,50 @@ public final class CertificateTest {
 
 		// B1: one TLS context for every vCenter client, name enforced.
 		OverridesTest.inOrder(ca, "the shared context checks the name",
-				"private javax.net.ssl.SSLContext sslContextFor() {",
+				"private javax.net.ssl.SSLContext sslContextFor(String dialledHost) {",
 				"return VCenterCertificates.nameChecking(getAdapterTrustManager(),",
-				"getKeyManagers());");
+				"getKeyManagers(), dialledHost);");
 		OverridesTest.inOrder(ca, "the SOAP factory is that context's",
-				"private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor() {",
-				"javax.net.ssl.SSLContext ctx = sslContextFor();",
+				"private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor(",
+				"String dialledHost) {",
+				"javax.net.ssl.SSLContext ctx = sslContextFor(dialledHost);",
 				"return ctx.getSocketFactory();");
 		T.eq(1, OverridesTest.count(ca, "getSocketFactory()"),
 				"the only socket factory is the name-checking context's");
+		// Build 94: every context is built for the host its client dials
+		// (the REST, VAMI and Test Connection clients dial baseUrl(), the
+		// SOAP and esxcli clients https://<vcenterHost>/sdk, both the
+		// config's vcenterHost).
 		OverridesTest.inOrder(ca, "REST client", "this.vcApi = new "
-				+ "VCenterApiClient(", "sslContextFor());");
+				+ "VCenterApiClient(", "config.baseUrl(),",
+				"sslContextFor(config.vcenterHost));");
 		OverridesTest.inOrder(ca, "SOAP client", "this.vsphere = new "
-				+ "VSphereClient(", "sslSocketFactoryFor(),");
+				+ "VSphereClient(", "config.vcenterHost,",
+				"sslSocketFactoryFor(config.vcenterHost),");
 		OverridesTest.inOrder(ca, "Test Connection client",
 				"VCenterApiClient testApi = new VCenterApiClient(",
-				"sslContextFor());");
+				"testCfg.baseUrl(),",
+				"sslContextFor(testCfg.vcenterHost));");
 		OverridesTest.inOrder(ca, "VAMI client", "new VamiApiClient(",
-				"sslContextFor(), this::logWarn);");
+				"config.baseUrl(),",
+				"sslContextFor(config.vcenterHost), this::logWarn);");
+		T.eq(4, OverridesTest.count(ca, "sslContextFor(config.vcenterHost)")
+				+ OverridesTest.count(ca, "sslContextFor(testCfg.vcenterHost)")
+				+ OverridesTest.count(ca, "sslContextFor(dialledHost)"),
+				"every context build names the dialled host");
+		T.eq(0, OverridesTest.count(ca, "sslContextFor()")
+				+ OverridesTest.count(ca, "sslSocketFactoryFor()"),
+				"no context without a host");
+		T.eq(5, OverridesTest.count(ca, "sslContextFor(")
+				+ OverridesTest.count(ca, "sslSocketFactoryFor(") - 2,
+				"call sites: REST, SOAP, Test Connection, VAMI, and the "
+						+ "factory's own (the two declarations excluded)");
+		String vc = read(
+				"src/com/vcfcf/adapters/compliance/VCenterCertificates.java");
+		T.check(!vc.contains("getPeerHost") && !vc.contains("peerHost("),
+				"the name check never consults the provider's peer host");
+		T.eq(3, OverridesTest.count(vc, "checkName(expectedHost, chain);"),
+				"all three checkServerTrusted overloads check the dialled host");
 
 		// Per client: the HttpsURLConnection clients set the strict
 		// verifier through the shared helper; the HttpClient clients take
@@ -465,9 +495,337 @@ public final class CertificateTest {
 						new X509Certificate[] {both});
 				throw new AssertionError("no host must be refused: " + h);
 			} catch (CertificateException expected) {
-				T.check(expected.getMessage().contains("no peer host"),
+				T.eq(VCenterCertificates.NO_HOST_MESSAGE,
+						expected.getMessage(),
 						"fail closed: " + expected.getMessage());
+				T.check(expected.getMessage().contains("vCenter Host / IP"),
+						"names the account setting");
+				T.eq(null, VCenterCertificates.classify(expected),
+						"not read as untrusted or as a name mismatch");
 			}
+		}
+	}
+
+	// ----- Build 94: the dialled host, not the provider's peer host -------
+
+	static void expectedHosts() {
+		T.eq("vc01.lab.local", VCenterCertificates.expectedHost(
+				"vc01.lab.local"), "plain FQDN");
+		T.eq("vc01.lab.local", VCenterCertificates.expectedHost(
+				"  VC01.Lab.Local. "), "trimmed, lower case, no trailing dot");
+		T.eq("vc01.lab.local", VCenterCertificates.expectedHost(
+				"vc01.lab.local:8443"), "port stripped");
+		T.eq("10.0.0.5", VCenterCertificates.expectedHost("10.0.0.5:443"),
+				"IPv4 with port");
+		T.eq("fd00::5", VCenterCertificates.expectedHost("[fd00::5]"),
+				"bracketed IPv6");
+		T.eq("fd00::5", VCenterCertificates.expectedHost("[fd00::5]:443"),
+				"bracketed IPv6 with port");
+		T.eq("fd00::5", VCenterCertificates.expectedHost("fd00::5"),
+				"bare IPv6 taken whole");
+		T.eq("vc_01.lab-1.local", VCenterCertificates.expectedHost(
+				"vc_01.lab-1.local"), "underscore and hyphen kept");
+		for (String none : new String[] {null, "", "   ", "https://vc01",
+				"vc01/sdk", "vc 01", "vc?.example.org", "vc#.example.org",
+				"user@vc01", "vc%2e.example.org"}) {
+			T.eq(null, VCenterCertificates.expectedHost(none),
+					"no usable host: '" + none + "'");
+		}
+	}
+
+	/**
+	 * Every checkServerTrusted overload, handed a socket and an engine that
+	 * report no peer host (as BouncyCastle JSSE does on 9.1.1 collectors),
+	 * passes the right name and refuses the wrong one. Build 93 refused all
+	 * of them ("the connection has no peer host").
+	 */
+	static void noPeerHostOverloads(Path dir) throws Exception {
+		X509Certificate vc = cert(dir, "nph", "CN=vc01.lab.local",
+				"dns:vc01.lab.local,ip:10.0.0.5,ip:fd00:0:0:0:0:0:0:5");
+		X509Certificate[] chain = {vc};
+		Socket plain = new Socket();
+		javax.net.ssl.SSLSocket ssl = (javax.net.ssl.SSLSocket)
+				javax.net.ssl.SSLSocketFactory.getDefault().createSocket();
+		SSLEngine engine = SSLContext.getDefault().createSSLEngine();
+		T.eq(null, ssl.getHandshakeSession(), "socket: no handshake session");
+		T.eq(null, engine.getPeerHost(), "engine: no peer host");
+		T.eq(null, engine.getHandshakeSession(),
+				"engine: no handshake session");
+		try {
+			for (String entered : new String[] {"vc01.lab.local",
+					"VC01.lab.local:443", "10.0.0.5", "[fd00::5]:443"}) {
+				X509ExtendedTrustManager tm = trustManager(
+						new ChainOnly(vc), entered);
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA");
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA", plain);
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA", ssl);
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA", (Socket) null);
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA", engine);
+				tm.checkServerTrusted(chain, "ECDHE_ECDSA", (SSLEngine) null);
+			}
+			for (String entered : new String[] {"vc02.lab.local", "vc01",
+					"10.0.0.6", "[fd00::6]"}) {
+				X509ExtendedTrustManager tm = trustManager(
+						new ChainOnly(vc), entered);
+				overloadsRefuse(tm, chain, plain, ssl, engine,
+						VCenterCertificates.Failure.NAME_MISMATCH,
+						"wrong name " + entered);
+			}
+			for (String entered : new String[] {null, "", "https://vc01"}) {
+				X509ExtendedTrustManager tm = trustManager(
+						new ChainOnly(vc), entered);
+				String m = overloadsRefuse(tm, chain, plain, ssl, engine, null,
+						"no host '" + entered + "'");
+				T.eq(VCenterCertificates.NO_HOST_MESSAGE, m,
+						"fail closed text, no host '" + entered + "'");
+			}
+			// Review W1: "vc?.example.org" dials "vc", so a wildcard
+			// certificate must not satisfy a check against the entered
+			// string. Such a host is refused (fail closed); the dialable
+			// name under the same wildcard still passes.
+			X509Certificate wild = cert(dir, "nphw", "CN=wild",
+					"dns:*.example.org");
+			X509Certificate[] wildChain = {wild};
+			X509ExtendedTrustManager wildOk = trustManager(
+					new ChainOnly(wild), "vc.example.org");
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA");
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA", plain);
+			wildOk.checkServerTrusted(wildChain, "ECDHE_ECDSA", engine);
+			for (String entered : new String[] {"vc?.example.org",
+					"vc#.example.org"}) {
+				X509ExtendedTrustManager tm = trustManager(
+						new ChainOnly(wild), entered);
+				String m = overloadsRefuse(tm, wildChain, plain, ssl, engine,
+						null, "authority-splitting host '" + entered + "'");
+				T.eq(VCenterCertificates.NO_HOST_MESSAGE, m,
+						"fail closed text, '" + entered + "'");
+			}
+			// The chain check still runs first and its failure is the
+			// platform's (the accept dialog), even with a wrong name too.
+			X509Certificate other = cert(dir, "nph2", "CN=other", "dns:other");
+			X509ExtendedTrustManager untrusted = trustManager(
+					new ChainOnly(other), "vc02.lab.local");
+			overloadsRefuse(untrusted, chain, plain, ssl, engine,
+					VCenterCertificates.Failure.UNTRUSTED, "untrusted chain");
+		} finally {
+			plain.close();
+			ssl.close();
+		}
+		System.out.println("CertificateTest evidence: every "
+				+ "checkServerTrusted overload with a socket and an engine "
+				+ "that report no peer host: right name passes, wrong name "
+				+ "refused as name mismatch, no host refused (fail closed)");
+	}
+
+	/** The trust manager inside a {@code nameChecking} context. */
+	private static X509ExtendedTrustManager trustManager(
+			X509ExtendedTrustManager platform, String entered) {
+		return new VCenterCertificates.NameCheckingTrustManager(platform,
+				VCenterCertificates.expectedHost(entered));
+	}
+
+	/** All three overloads must refuse; returns the last message. */
+	private static String overloadsRefuse(X509ExtendedTrustManager tm,
+			X509Certificate[] chain, Socket plain, Socket ssl,
+			SSLEngine engine, VCenterCertificates.Failure want, String what) {
+		List<Call> calls = new ArrayList<>();
+		calls.add(() -> { tm.checkServerTrusted(chain, "EC"); return 0; });
+		calls.add(() -> {
+			tm.checkServerTrusted(chain, "EC", plain); return 0; });
+		calls.add(() -> {
+			tm.checkServerTrusted(chain, "EC", ssl); return 0; });
+		calls.add(() -> {
+			tm.checkServerTrusted(chain, "EC", engine); return 0; });
+		String last = null;
+		int i = 0;
+		for (Call c : calls) {
+			i++;
+			try {
+				c.run();
+				throw new AssertionError(what + ": overload " + i
+						+ " accepted");
+			} catch (AssertionError a) {
+				throw a;
+			} catch (Exception e) {
+				T.check(e instanceof CertificateException,
+						what + ": overload " + i + " threw " + e);
+				T.eq(want, VCenterCertificates.classify(e),
+						what + ": overload " + i + " classified: " + e);
+				last = e.getMessage();
+			}
+		}
+		return last;
+	}
+
+	/**
+	 * A real TLS handshake in which the provider reports no peer host: an
+	 * in-memory SSLEngine pair, the client engine made with no host
+	 * ({@code createSSLEngine()}), so JSSE hands the trust manager an engine
+	 * whose peer host is null, the condition BouncyCastle JSSE produces on
+	 * 9.1.1 collectors for the HttpsURLConnection sockets. (A SunJSSE
+	 * socket always fills the peer host from the connect address, so the
+	 * engine is the JDK-only way to reach it.) The right dialled host
+	 * passes, a wrong one is refused as a name mismatch.
+	 */
+	static void noPeerHostHandshake(Path dir) throws Exception {
+		KeyStore ks = keystore(dir, "nphsrv", "CN=vc01.lab.local",
+				"dns:vc01.lab.local,ip:127.0.0.1");
+		X509Certificate c = (X509Certificate) ks.getCertificate("vc");
+		KeyManagerFactory kmf = KeyManagerFactory.getInstance(
+				KeyManagerFactory.getDefaultAlgorithm());
+		kmf.init(ks, PASS);
+		SSLContext srvCtx = SSLContext.getInstance("TLS");
+		srvCtx.init(kmf.getKeyManagers(), null, null);
+		for (String entered : new String[] {"vc01.lab.local",
+				"127.0.0.1:443", "VC01.lab.local."}) {
+			PeerHostProbe probe = new PeerHostProbe(c);
+			SSLContext ctx = VCenterCertificates.nameChecking(probe, null,
+					entered);
+			engineHandshake(ctx, srvCtx);
+			T.check(probe.called, "platform check ran: " + entered);
+			T.eq(null, probe.peerHost, "the provider reported no peer host "
+					+ "(the 9.1.1 condition): " + entered);
+		}
+		PeerHostProbe probe = new PeerHostProbe(c);
+		SSLContext wrong = VCenterCertificates.nameChecking(probe, null,
+				"vc02.lab.local");
+		try {
+			engineHandshake(wrong, srvCtx);
+			throw new AssertionError("wrong dialled host accepted");
+		} catch (AssertionError a) {
+			throw a;
+		} catch (Exception e) {
+			T.eq(VCenterCertificates.Failure.NAME_MISMATCH,
+					VCenterCertificates.classify(e), "classified: " + e);
+			T.check(probe.called && probe.peerHost == null,
+					"no peer host on the refused handshake too");
+			System.out.println("CertificateTest evidence: real handshake, "
+					+ "no provider peer host, wrong dialled host: " + e);
+		}
+		PeerHostProbe probe2 = new PeerHostProbe(c);
+		try {
+			engineHandshake(VCenterCertificates.nameChecking(probe2, null,
+					"  "), srvCtx);
+			throw new AssertionError("no dialled host accepted");
+		} catch (AssertionError a) {
+			throw a;
+		} catch (Exception e) {
+			T.check(String.valueOf(e.getMessage()).contains(
+					"no usable vCenter host"), "fail closed: " + e);
+		}
+		System.out.println("CertificateTest evidence: real handshake, no "
+				+ "provider peer host (SSLEngine with no host): dialled "
+				+ "vc01.lab.local and 127.0.0.1 pass; a blank host fails "
+				+ "closed");
+	}
+
+	/** Drive a client and a server SSLEngine to the end of the handshake. */
+	private static void engineHandshake(SSLContext clientCtx,
+			SSLContext serverCtx) throws Exception {
+		SSLEngine cli = clientCtx.createSSLEngine();
+		cli.setUseClientMode(true);
+		SSLEngine srv = serverCtx.createSSLEngine();
+		srv.setUseClientMode(false);
+		int pkt = Math.max(cli.getSession().getPacketBufferSize(),
+				srv.getSession().getPacketBufferSize());
+		int app = Math.max(cli.getSession().getApplicationBufferSize(),
+				srv.getSession().getApplicationBufferSize());
+		java.nio.ByteBuffer empty = java.nio.ByteBuffer.allocate(0);
+		java.nio.ByteBuffer c2s = java.nio.ByteBuffer.allocate(pkt * 4);
+		java.nio.ByteBuffer s2c = java.nio.ByteBuffer.allocate(pkt * 4);
+		java.nio.ByteBuffer cliIn = java.nio.ByteBuffer.allocate(app * 2);
+		java.nio.ByteBuffer srvIn = java.nio.ByteBuffer.allocate(app * 2);
+		cli.beginHandshake();
+		srv.beginHandshake();
+		for (int i = 0; i < 1000; i++) {
+			if (done(cli) && done(srv)) return;
+			step(cli, empty, c2s, s2c, cliIn);
+			step(srv, empty, s2c, c2s, srvIn);
+		}
+		throw new AssertionError("handshake did not finish");
+	}
+
+	private static boolean done(SSLEngine e) {
+		javax.net.ssl.SSLEngineResult.HandshakeStatus h =
+				e.getHandshakeStatus();
+		return h == javax.net.ssl.SSLEngineResult.HandshakeStatus
+				.NOT_HANDSHAKING
+				|| h == javax.net.ssl.SSLEngineResult.HandshakeStatus.FINISHED;
+	}
+
+	/** One move for {@code e}: run tasks, wrap into out, unwrap from in. */
+	private static void step(SSLEngine e, java.nio.ByteBuffer empty,
+			java.nio.ByteBuffer out, java.nio.ByteBuffer in,
+			java.nio.ByteBuffer appIn) throws Exception {
+		Runnable task;
+		while ((task = e.getDelegatedTask()) != null) task.run();
+		switch (e.getHandshakeStatus()) {
+		case NEED_WRAP:
+			e.wrap(empty, out);
+			break;
+		case NEED_UNWRAP:
+		case NEED_UNWRAP_AGAIN:
+			in.flip();
+			e.unwrap(in, appIn);
+			in.compact();
+			break;
+		default:
+			break;
+		}
+		while ((task = e.getDelegatedTask()) != null) task.run();
+	}
+
+	/** Chain-only platform stand-in that records the provider's peer host. */
+	static final class PeerHostProbe extends X509ExtendedTrustManager {
+		private final ChainOnly chain;
+		volatile boolean called;
+		volatile String peerHost;
+
+		PeerHostProbe(X509Certificate trusted) {
+			this.chain = new ChainOnly(trusted);
+		}
+
+		@Override
+		public void checkServerTrusted(X509Certificate[] c, String a)
+				throws CertificateException {
+			called = true;
+			chain.checkServerTrusted(c, a);
+		}
+
+		@Override
+		public void checkServerTrusted(X509Certificate[] c, String a,
+				Socket s) throws CertificateException {
+			called = true;
+			if (s instanceof javax.net.ssl.SSLSocket) {
+				javax.net.ssl.SSLSession hs =
+						((javax.net.ssl.SSLSocket) s).getHandshakeSession();
+				peerHost = hs == null ? null : hs.getPeerHost();
+			}
+			chain.checkServerTrusted(c, a);
+		}
+
+		@Override
+		public void checkServerTrusted(X509Certificate[] c, String a,
+				SSLEngine e) throws CertificateException {
+			called = true;
+			peerHost = e == null ? null : e.getPeerHost();
+			chain.checkServerTrusted(c, a);
+		}
+
+		@Override
+		public void checkClientTrusted(X509Certificate[] c, String a) {}
+
+		@Override
+		public void checkClientTrusted(X509Certificate[] c, String a,
+				Socket s) {}
+
+		@Override
+		public void checkClientTrusted(X509Certificate[] c, String a,
+				SSLEngine e) {}
+
+		@Override
+		public X509Certificate[] getAcceptedIssuers() {
+			return chain.getAcceptedIssuers();
 		}
 	}
 
@@ -496,7 +854,9 @@ public final class CertificateTest {
 			int rp = right.getAddress().getPort();
 			SSLContext chainOnly = context(new ChainOnly(wrongCert));
 			SSLContext enforced = VCenterCertificates.nameChecking(
-					new ChainOnly(wrongCert), null);
+					new ChainOnly(wrongCert), null, "localhost");
+			SSLContext enforcedIp = VCenterCertificates.nameChecking(
+					new ChainOnly(wrongCert), null, "127.0.0.1:" + wp);
 
 			// Controls: why the name had to be enforced in the adapter.
 			T.eq(200, httpClient(chainOnly, "https://localhost:" + wp + "/"),
@@ -520,7 +880,7 @@ public final class CertificateTest {
 					enforced.getSocketFactory(), null,
 					"https://localhost:" + wp + "/"));
 			String soapIp = refused(() -> urlConnection(
-					enforced.getSocketFactory(), null,
+					enforcedIp.getSocketFactory(), null,
 					"https://127.0.0.1:" + wp + "/"));
 			String verifierOnly = refused(() -> urlConnection(
 					chainOnly.getSocketFactory(), null,
@@ -540,7 +900,7 @@ public final class CertificateTest {
 			// An untrusted chain is still the platform's failure (the
 			// accept dialog), even when the name is wrong too.
 			SSLContext untrusted = VCenterCertificates.nameChecking(
-					new ChainOnly(rightCert), null);
+					new ChainOnly(rightCert), null, "localhost");
 			try {
 				httpClient(untrusted, "https://localhost:" + wp + "/");
 				throw new AssertionError("untrusted chain must fail");
@@ -551,9 +911,9 @@ public final class CertificateTest {
 			}
 
 			// The right name passes, by DNS name and by IP.
-			SSLContext ok = VCenterCertificates.nameChecking(
-					new ChainOnly(rightCert), null);
 			for (String host : new String[] {"localhost", "127.0.0.1"}) {
+				SSLContext ok = VCenterCertificates.nameChecking(
+						new ChainOnly(rightCert), null, host + ":" + rp);
 				String u = "https://" + host + ":" + rp + "/";
 				T.eq(200, httpClient(ok, u), "HttpClient, right name " + host);
 				T.eq(200, urlConnection(ok.getSocketFactory(), null, u),
@@ -626,7 +986,7 @@ public final class CertificateTest {
 		return ctx;
 	}
 
-	private static HttpsServer server(KeyStore ks) throws Exception {
+	static HttpsServer server(KeyStore ks) throws Exception {
 		KeyManagerFactory kmf = KeyManagerFactory.getInstance(
 				KeyManagerFactory.getDefaultAlgorithm());
 		kmf.init(ks, PASS);
@@ -698,7 +1058,7 @@ public final class CertificateTest {
 
 	// ----- keytool ----------------------------------------------------------
 
-	private static final char[] PASS = "changeit".toCharArray();
+	static final char[] PASS = "changeit".toCharArray();
 
 	private static X509Certificate cert(Path dir, String name, String dname,
 			String san) throws Exception {
@@ -707,7 +1067,7 @@ public final class CertificateTest {
 	}
 
 	/** A PKCS12 keystore with one self-signed EC key pair, alias "vc". */
-	private static KeyStore keystore(Path dir, String name, String dname,
+	static KeyStore keystore(Path dir, String name, String dname,
 			String san) throws Exception {
 		File ks = dir.resolve(name + ".p12").toFile();
 		File keytool = new File(System.getProperty("java.home"),
@@ -735,7 +1095,7 @@ public final class CertificateTest {
 		return k;
 	}
 
-	private static void deleteTree(File f) {
+	static void deleteTree(File f) {
 		File[] kids = f.listFiles();
 		if (kids != null) {
 			for (File k : kids) deleteTree(k);

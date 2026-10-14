@@ -14,7 +14,9 @@
 # BenchmarkSelectorTest, ControlEvaluatorTest, ComplianceRollupTest,
 # ComplianceDecisionsTest, MixedVersionSimulationTest) and the generator's
 # unittest suite compile and run on a plain JDK + python3, so the full set
-# runs here, and the same set gates the tag build.
+# runs here, and the same set gates the tag build. The one download is
+# BcHandshakeTest's (build 94): the public BouncyCastle TLS jars from
+# Maven Central, no credentials, SHA-256 pinned in the script, test only.
 #
 # JDK matrix: 17 (the long-standing CI JDK) and 25 (the newest LTS). JDK
 # behavior drifts between releases in ways the adapter reads: zone-name

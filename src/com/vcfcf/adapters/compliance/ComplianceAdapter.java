@@ -169,11 +169,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		this.vcApi = new VCenterApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor());
+				sslContextFor(config.vcenterHost));
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
-				sslSocketFactoryFor(),
+				sslSocketFactoryFor(config.vcenterHost),
 				componentLogger(VSphereClient.class));
 
 		this.benchmarkLoader = new BenchmarkLoader();
@@ -227,11 +227,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * review B1: the platform trust manager checks the chain only). Null
 	 * (JDK default trust, which checks the name itself) only when no
 	 * platform trust manager is available, never trust-all.
+	 *
+	 * <p>Build 94: {@code dialledHost} is the host the client built on this
+	 * context connects to (the account's vCenter Host / IP as the client
+	 * uses it); the certificate is matched against it, not against the
+	 * peer host the TLS provider reports (none under BouncyCastle JSSE on
+	 * 9.1.1 collectors).
 	 */
-	private javax.net.ssl.SSLContext sslContextFor() {
+	private javax.net.ssl.SSLContext sslContextFor(String dialledHost) {
 		try {
 			return VCenterCertificates.nameChecking(getAdapterTrustManager(),
-					getKeyManagers());
+					getKeyManagers(), dialledHost);
 		} catch (RuntimeException e) {
 			logWarn("Platform trust manager unavailable for the vCenter "
 					+ "clients; using the JDK default trust store: "
@@ -250,8 +256,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * manager can be obtained the JDK default factory is used, never
 	 * trust-all.
 	 */
-	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor() {
-		javax.net.ssl.SSLContext ctx = sslContextFor();
+	private javax.net.ssl.SSLSocketFactory sslSocketFactoryFor(
+			String dialledHost) {
+		javax.net.ssl.SSLContext ctx = sslContextFor(dialledHost);
 		if (ctx != null) {
 			return ctx.getSocketFactory();
 		}
@@ -312,7 +319,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			VCenterApiClient testApi = new VCenterApiClient(
 					testCfg.baseUrl(), testCfg.username, testCfg.password,
-					sslContextFor());
+					sslContextFor(testCfg.vcenterHost));
 			try {
 				testApi.login();
 			} catch (Exception e) {
@@ -2097,7 +2104,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		VamiApiClient client = new VamiApiClient(
 				config.baseUrl(), config.username, config.password,
-				sslContextFor(), this::logWarn);
+				sslContextFor(config.vcenterHost), this::logWarn);
 		try {
 			java.util.Map<String, Object> values = new java.util.HashMap<>();
 			for (BenchmarkProfile.Control c : controls) {
