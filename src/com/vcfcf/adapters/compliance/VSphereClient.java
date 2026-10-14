@@ -1913,7 +1913,11 @@ public final class VSphereClient {
 			throw new VimOptions.ReadFault("CreateContainerView(" + type
 					+ ") returned no view");
 		}
-		String token = null;
+		// Review N1: the token of the retrieval still open on vCenter, set
+		// as soon as a page is parsed and before its handler runs, so a
+		// handler that throws (Stop, an evaluation error) cancels the next
+		// page's token, not the one already consumed.
+		String[] open = {null};
 		try {
 			Document resp;
 			while (true) {
@@ -1948,8 +1952,9 @@ public final class VSphereClient {
 			remember.droppedPaths = new ArrayList<>(st.droppedPaths);
 			acceptedPaths.put(cacheKey, remember);
 
-			token = handlePage(resp, type, handler, st);
-			while (token != null) {
+			handlePage(resp, type, handler, st, open);
+			while (open[0] != null) {
+				String token = open[0];
 				lastFault = null;
 				Document next = post("<ContinueRetrievePropertiesEx "
 						+ "xmlns=\"urn:vim25\">"
@@ -1963,11 +1968,11 @@ public final class VSphereClient {
 							+ (st.pages + 1) + " failed"
 							+ (lastFault != null ? ": " + lastFault : ""));
 				}
-				token = handlePage(next, type, handler, st);
+				handlePage(next, type, handler, st, open);
 			}
 			return st;
 		} catch (Exception e) {
-			if (token != null) cancelRetrieveQuietly(token);
+			if (open[0] != null) cancelRetrieveQuietly(open[0]);
 			throw e;
 		} finally {
 			destroyViewQuietly(view);
@@ -2006,9 +2011,13 @@ public final class VSphereClient {
 				+ "</RetrievePropertiesEx>";
 	}
 
-	/** Parse one page, hand it over, return the next token or null. */
-	private String handlePage(Document resp, String type, PageHandler handler,
-			BulkStats st) throws Exception {
+	/**
+	 * Parse one page, record its next-page token (or null) in
+	 * {@code openToken[0]}, then hand the page over (review N1: the token
+	 * is recorded first, so it is the one cancelled if the handler throws).
+	 */
+	private void handlePage(Document resp, String type, PageHandler handler,
+			BulkStats st, String[] openToken) throws Exception {
 		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
 		List<BulkRow> rows = new ArrayList<>();
 		String token = null;
@@ -2039,8 +2048,8 @@ public final class VSphereClient {
 		}
 		st.pages++;
 		st.objects += rows.size();
+		openToken[0] = token;
 		handler.page(rows);
-		return token;
 	}
 
 	private void cancelRetrieveQuietly(String token) {

@@ -530,6 +530,43 @@ public final class Build95CollectionTest {
 					"remaining pages cancelled");
 			T.eq(1, f.count("DestroyView"), "view destroyed on failure");
 		}
+		// Review N1: a page handler that throws (Stop, an evaluation error)
+		// cancels the retrieval still open: the token for the NEXT page,
+		// which vCenter has handed out and nobody will continue.
+		for (int failOn = 1; failOn <= 3; failOn++) {
+			try (FakeVCenter f = new FakeVCenter()) {
+				f.handler = r -> pagedVms(r, 5);
+				VSphereClient c = f.client();
+				c.ensureConnected();
+				int[] seen = {0};
+				final int stopAt = failOn;
+				boolean threw = false;
+				try {
+					c.retrieveBulk("VirtualMachine",
+							Arrays.asList("config.version"), 2, rows -> {
+								if (++seen[0] == stopAt) {
+									throw new InterruptedException("stop");
+								}
+							});
+				} catch (InterruptedException e) {
+					threw = true;
+				}
+				T.check(threw, "the handler's exception is rethrown");
+				List<FakeVCenter.Req> cancels =
+						f.of("CancelRetrievePropertiesEx");
+				if (failOn == 3) {
+					T.eq(0, cancels.size(), "last page: nothing left open");
+				} else {
+					T.eq(1, cancels.size(), "page " + failOn + ": one cancel");
+					T.eq((failOn * 2) + ":2", FakeVCenter.tag(
+							cancels.get(0).body, "token"),
+							"page " + failOn + ": the next page's token");
+				}
+				T.eq(failOn - 1, f.count("ContinueRetrievePropertiesEx"),
+						"no page requested after the throw");
+				T.eq(1, f.count("DestroyView"), "view destroyed");
+			}
+		}
 	}
 
 	static void bulkAgreesWithPerObject() throws Exception {
