@@ -150,9 +150,12 @@ widgets:
         metric_name: "Non-Compliant Objects"
         color_method: 2
 
-  # ── W6: Open Compliance Alerts (interaction-driven from W3; all 144
-  #     generated per-control compliance alerts, the hand-written
-  #     "Host Compliance Score Degraded" alert is deliberately excluded)
+  # ── W6: Open Compliance Alerts (interaction-driven from W3; every
+  #     pak alert of the Compliance type: the per-control alerts, the
+  #     "Compliance data not collected" alerts and the aggregate "Host
+  #     Compliance Score Degraded" alert. The type filter cannot separate
+  #     them and pinning definition ids was ruled out; Score Degraded in
+  #     the list is accepted, owner decision 2026-10-13, PR #44)
 
   - id: open_compliance_alerts
     type: AlertList
@@ -162,7 +165,7 @@ widgets:
     mode: all
     # depth 4: input is a VMwareAdapter Instance (vCenter); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
     depth: 4
-    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
 interactions:
   - from: vcenter_object_type_view
