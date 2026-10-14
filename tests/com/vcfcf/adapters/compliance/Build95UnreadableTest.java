@@ -23,6 +23,7 @@ public final class Build95UnreadableTest {
 		perObjectSignals();
 		adapterWiring();
 		objectKind();
+		shadowMode();
 		System.out.println("Build95UnreadableTest: all assertions passed");
 	}
 
@@ -359,6 +360,78 @@ public final class Build95UnreadableTest {
 			T.check(at >= 0 && ca.substring(at, end)
 					.contains("ComplianceDecisions.withObjectKind("),
 					m + " pushes object_kind");
+		}
+	}
+
+	/**
+	 * Point 6: shadow mode is on in a dev-preview build (0.0.0.N) and off
+	 * in a tagged release, from the version stamp the builder writes to
+	 * conf/version.txt (both shapes as the builder writes them), and off
+	 * whenever the stamp cannot be read.
+	 */
+	static void shadowMode() throws Exception {
+		String dev = "Major-Version=0\nMinor-Version=0\n"
+				+ "Implementation-Version=0.95\nBuild-Tools-Version-Ref=N/A\n"
+				+ "Adapter-Version-Ref=2.2\nCore-Version-Ref=8.0.0\n";
+		String rel = "Major-Version=1\nMinor-Version=0\n"
+				+ "Implementation-Version=0.95\nBuild-Tools-Version-Ref=N/A\n"
+				+ "Adapter-Version-Ref=2.2\nCore-Version-Ref=8.0.0\n";
+		ShadowMode.Decision d = ShadowMode.decide(dev);
+		T.check(d.enabled, "dev preview 0.0.0.95: on");
+		T.eq("0.0.0.95", d.version, "dev version read");
+		ShadowMode.Decision r = ShadowMode.decide(rel);
+		T.check(!r.enabled, "release 1.0.0.95: off");
+		T.eq("1.0.0.95", r.version, "release version read");
+		T.check(!ShadowMode.decide((String) null).enabled, "no file: off");
+		T.check(!ShadowMode.decide("Major-Version=0\n").enabled,
+				"incomplete stamp: off");
+		T.check(!ShadowMode.decide("garbage\u0000").enabled, "garbage: off");
+		T.check(!ShadowMode.isDevPreview("0.0.0.x"), "N must be a number");
+		T.check(!ShadowMode.isDevPreview("0.1.0.95"), "0.1 is not dev");
+		T.check(!ShadowMode.isDevPreview("10.0.0.95"), "10.x is not dev");
+
+		// The installed layout: version.txt beside describe.xml in conf/.
+		java.nio.file.Path conf = java.nio.file.Files.createTempDirectory(
+				"compliance-conf");
+		try {
+			T.check(!ShadowMode.decide(conf).enabled, "empty conf: off");
+			java.nio.file.Files.write(conf.resolve("version.txt"),
+					dev.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			T.check(ShadowMode.decide(conf).enabled, "installed dev: on");
+			java.nio.file.Files.write(conf.resolve("version.txt"),
+					rel.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			T.check(!ShadowMode.decide(conf).enabled, "installed release: off");
+		} finally {
+			java.nio.file.Files.deleteIfExists(conf.resolve("version.txt"));
+			java.nio.file.Files.deleteIfExists(conf);
+		}
+		T.check(!ShadowMode.decide((java.nio.file.Path) null).enabled,
+				"no conf dir: off");
+
+		// A built pak, when one is given (ci passes none): the stamp it
+		// actually carries decides, so the test proves the builder's file.
+		String pak = System.getProperty("compliance.pak");
+		if (pak != null) {
+			String want = System.getProperty("compliance.pak.shadow", "");
+			try (java.util.zip.ZipFile outer = new java.util.zip.ZipFile(pak)) {
+				java.util.zip.ZipEntry az = outer.getEntry("adapters.zip");
+				T.check(az != null, "pak has adapters.zip");
+				java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(
+						outer.getInputStream(az));
+				String txt = null;
+				for (java.util.zip.ZipEntry e; (e = in.getNextEntry()) != null; ) {
+					if (e.getName().endsWith("/conf/version.txt")) {
+						txt = new String(in.readAllBytes(),
+								java.nio.charset.StandardCharsets.UTF_8);
+					}
+				}
+				ShadowMode.Decision pd = ShadowMode.decide(txt);
+				System.out.println("Build95UnreadableTest: " + pak + ": "
+						+ pd.why);
+				if (!want.isEmpty()) {
+					T.eq(Boolean.valueOf(want), pd.enabled, "pak shadow mode");
+				}
+			}
 		}
 	}
 }

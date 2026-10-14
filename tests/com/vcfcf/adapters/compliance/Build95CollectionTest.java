@@ -730,11 +730,13 @@ public final class Build95CollectionTest {
 
 		String ca = OverridesTest.readSrc(
 				"src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
-		T.check(OverridesTest.stripComments(ca).replaceAll("\\s+", " ")
-				.contains("static final boolean BULK_SHADOW = true;"),
-				"shipped default unchanged: on (decision pending)");
-		T.check(ca.contains("new ShadowComparator(kind, BULK_SHADOW)"),
+		// Decision point 6: the switch follows the build's version stamp
+		// (Build95UnreadableTest.shadowMode runs ShadowMode itself).
+		T.check(!ca.contains("BULK_SHADOW"), "no compiled-in default");
+		T.check(ca.contains("new ShadowComparator(kind, enabled)"),
 				"every kind's comparator follows the switch");
+		T.eq(5, OverridesTest.count(ca, "bulkShadow);"),
+				"every kind's shadow is built from the per-cycle switch");
 		T.check(ca.contains("case \"VirtualMachine\": return 50;"),
 				"VM bulk page of 50");
 

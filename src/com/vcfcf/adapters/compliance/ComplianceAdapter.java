@@ -457,10 +457,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * pushes and alerts still come only from the per-object path. Not a
 	 * user setting. Review W5: the one switch for shadow mode; off, no
 	 * kind records per-object outcomes (no memory held) and no bulk read
-	 * is made. Whether a release ships with it on is Scott's decision;
-	 * the default stays on until then.
+	 * is made. Decision 2026-10-14 (point 6): on in a dev-preview build
+	 * (0.0.0.N), off in a tagged release, decided each cycle from the
+	 * build's own version stamp ({@link ShadowMode}, conf/version.txt).
 	 */
-	static final boolean BULK_SHADOW = true;
+	private volatile boolean bulkShadow;
+
+	/** The last shadow decision logged, so it is logged once per change. */
+	private volatile String bulkShadowLogged;
 
 	/**
 	 * Build 95: objects per bulk page. Hosts small (each carries its whole
@@ -662,6 +666,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				.getParent();   // <adaptersHome>/<kind>/conf
 		cycleConfDir = confDir.toString();
 		cycleReasons = new UnreadableReasons();
+		// Build 95 (point 6): shadow mode from this build's version stamp.
+		ShadowMode.Decision shadowMode = ShadowMode.decide(confDir);
+		bulkShadow = shadowMode.enabled;
+		if (!shadowMode.why.equals(bulkShadowLogged)) {
+			bulkShadowLogged = shadowMode.why;
+			logInfo("Bulk shadow mode: " + shadowMode.why);
+		}
 		// Build 90: the overrides file, fetched once per cycle (no fetch when
 		// the setting is empty), applied while the selector is built.
 		cycleOverridesSnap = refreshOverrides();
@@ -1482,7 +1493,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("vSphere SOAP: " + hosts.size() + " hosts");
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.HOST,
 				"HostSystem", rollup);
-		Shadow shadow = new Shadow("Host", "HostSystem");
+		Shadow shadow = new Shadow("Host", "HostSystem", bulkShadow);
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			stop.check("host " + hostInfo.name);
@@ -1687,8 +1698,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				controls = new java.util.HashMap<>();
 		String type;
 
-		Shadow(String kind, String type) {
-			this.comparator = new ShadowComparator(kind, BULK_SHADOW);
+		Shadow(String kind, String type, boolean enabled) {
+			this.comparator = new ShadowComparator(kind, enabled);
 			this.type = type;
 		}
 
@@ -1714,7 +1725,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * per-object path, which succeeded.
 	 */
 	private void runShadow(Shadow sh) throws InterruptedException {
-		// Off (BULK_SHADOW false): nothing was recorded, so no bulk read.
+		// Off (a release build): nothing was recorded, so no bulk read.
 		if (sh == null || !sh.comparator.hasRecords()) return;
 		java.util.Set<String> paths = new java.util.LinkedHashSet<>();
 		java.util.Set<java.util.List<BenchmarkProfile.Control>> slices =
@@ -1790,7 +1801,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("vSphere SOAP: " + vms.size() + " VMs");
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.VM,
 				"VirtualMachine", rollup);
-		Shadow shadow = new Shadow("VM", "VirtualMachine");
+		Shadow shadow = new Shadow("VM", "VirtualMachine", bulkShadow);
 
 		for (VSphereClient.VmInfo vm : vms) {
 			stop.check("VM " + vm.name);
@@ -2027,7 +2038,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"VmwareDistributedVirtualSwitch", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type);
+		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type,
+				bulkShadow);
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
 			cs.dvs++;
@@ -2061,7 +2073,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"DistributedVirtualPortgroup", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type);
+		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type,
+				bulkShadow);
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
 			cs.dvpg++;
@@ -2103,7 +2116,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"ClusterComputeResource", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type);
+		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type,
+				bulkShadow);
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);
 			cs.clusters++;
