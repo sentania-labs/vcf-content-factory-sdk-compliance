@@ -77,6 +77,9 @@ final class FakeVCenter implements AutoCloseable {
 		}
 	}
 
+	/** Review N3: drop the connection with no response (transport error). */
+	static final Resp ABORT = new Resp(0, "");
+
 	final List<Req> requests = Collections.synchronizedList(new ArrayList<>());
 	final Set<String> validCookies = Collections.synchronizedSet(new HashSet<>());
 	volatile Function<Req, Resp> handler = r -> fault("NotImplemented", "");
@@ -200,6 +203,10 @@ final class FakeVCenter implements AutoCloseable {
 			resp = ok(op, "");
 		} else {
 			resp = handler.apply(req);
+		}
+		if (resp == ABORT) {
+			ex.close();   // no status line: the client sees an IOException
+			return;
 		}
 		byte[] out = envelope(resp.inner).getBytes(StandardCharsets.UTF_8);
 		ex.getResponseHeaders().add("Content-Type", "text/xml; charset=utf-8");

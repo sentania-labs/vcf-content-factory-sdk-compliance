@@ -187,6 +187,9 @@ public final class VSphereClient {
 	// emptied every cycle by beginCycle() (build 85), because the session,
 	// and so this object, can outlive any number of cycles.
 	private volatile EsxcliSoapClient esxcli;
+	// Build 95 review N3: the esxcli client a mid-cycle re-login dropped,
+	// whose unreachable-host marks the next one takes over.
+	private volatile EsxcliSoapClient retiredEsxcli;
 
 	/**
 	 * The {@link SSLSocketFactory} is chosen by the adapter
@@ -334,9 +337,15 @@ public final class VSphereClient {
 		this.sessionCookie = cookie;
 
 		// esxcli reader rides this session cookie; its cache is emptied
-		// per cycle by beginCycle().
-		this.esxcli = new EsxcliSoapClient(vcenterUrl, cookie, sslFactory);
-		this.esxcli.setMetrics(metrics);
+		// per cycle by beginCycle(). Review N3: a re-login keeps the
+		// cycle's unreachable-host marks.
+		EsxcliSoapClient fresh = new EsxcliSoapClient(vcenterUrl, cookie,
+				sslFactory);
+		EsxcliSoapClient prev = esxcli != null ? esxcli : retiredEsxcli;
+		fresh.carryUnreachableFrom(prev);
+		fresh.setMetrics(metrics);
+		this.esxcli = fresh;
+		this.retiredEsxcli = null;
 
 		if (closed) {
 			// Review W4: closed while this login was in flight; log the
@@ -393,6 +402,7 @@ public final class VSphereClient {
 		aboutFullName = null;
 		aboutVersion = null;
 		esxcli = null;
+		retiredEsxcli = null;
 	}
 
 	/**
@@ -2170,6 +2180,8 @@ public final class VSphereClient {
 	private void clearSession() {
 		sessionCookie = null;
 		propertyCollector = null;
+		EsxcliSoapClient e = esxcli;
+		if (e != null) retiredEsxcli = e;   // review N3: marks carried over
 		esxcli = null;
 	}
 

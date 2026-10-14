@@ -50,6 +50,7 @@ public final class Build95CollectionTest {
 		reloginMidCycle();
 		failedReloginLatched();
 		failedLoginLeavesNoSession();
+		esxcliMarksSurviveRelogin();
 		connectionReuse();
 		bulkPaging();
 		bulkPathFixAndFailedPage();
@@ -337,6 +338,50 @@ public final class Build95CollectionTest {
 						"nothing was read on the unauthenticated cookie");
 			}
 			T.eq(1, f.count("Login"), "one Login");
+		}
+	}
+
+	/**
+	 * Review N3: a host whose esxcli calls failed in transport this cycle
+	 * stays skipped after a mid-cycle re-login (which replaces the esxcli
+	 * client), so it does not cost another timeout until the next cycle.
+	 */
+	static void esxcliMarksSurviveRelogin() throws Exception {
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> r.action.endsWith("RetrieveManagedMethodExecuter")
+					? FakeVCenter.ABORT
+					: perObject(r, FakeVCenter.map(
+							"host-1|runtime.connectionState",
+							"<val>connected</val>"), null);
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			c.beginCycle();
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem", "host-1");
+			BenchmarkProfile.Control ssh = new BenchmarkProfile.Control(
+					"esx.shell", "P1", "HostSystem", "VMWARE", "shell",
+					"esxcli", "string", "false", "esx.shell", "", "", "",
+					"esxcli:system.account.list:Shellaccess[UserID=dcui]");
+			Map<String, Object> v = c.readVimProperties(h, Arrays.asList(ssh));
+			T.check(v.get("shell") == VSphereClient.UNREADABLE,
+					"transport failure: UNREADABLE");
+			T.check(c.takeEsxcliUnreachable("host-1") != null,
+					"host marked and reported");
+			int lookups = f.count("RetrieveManagedMethodExecuter");
+			T.check(lookups >= 1, "the host was tried");
+
+			f.expireSessions();
+			T.eq("connected", c.getHostConnectionState(h), "re-login");
+			T.eq(2, f.count("Login"), "re-logged in");
+			v = c.readVimProperties(h, Arrays.asList(ssh));
+			T.check(v.get("shell") == VSphereClient.UNREADABLE,
+					"still UNREADABLE after the re-login");
+			String why = c.lastReadReasons().get("shell");
+			T.eq("esxcli-host-unreachable", UnreadableReasons.category(why),
+					"reason keeps the mark: " + why);
+			T.eq(lookups, f.count("RetrieveManagedMethodExecuter"),
+					"no new call to the unreachable host");
+			T.eq(null, c.takeEsxcliUnreachable("host-1"),
+					"not reported twice in the cycle");
 		}
 	}
 

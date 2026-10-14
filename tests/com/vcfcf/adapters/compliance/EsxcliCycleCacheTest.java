@@ -95,6 +95,7 @@ public final class EsxcliCycleCacheTest {
 		hostNegativeEntry();
 		cycleStartWiring();
 		unreachableReasonAndReport();
+		marksCarriedAcrossRelogin();
 		System.out.println("EsxcliCycleCacheTest: all assertions passed");
 	}
 
@@ -308,6 +309,38 @@ public final class EsxcliCycleCacheTest {
 		T.check(body(ca, "private void collectWorld(")
 				.contains("collectWorldCycle(worldRc, out);"),
 				"collectWorld runs the cycle body");
+	}
+
+	/**
+	 * Build 95 review N3: a re-login replaces the client; the new one keeps
+	 * the cycle's unreachable marks and what was already reported, and the
+	 * next cycle drops them as before.
+	 */
+	private static void marksCarriedAcrossRelogin() {
+		Fake t = new Fake();
+		t.lookupThrows.put(HOST,
+				new java.net.SocketTimeoutException("Read timed out"));
+		EsxcliSoapClient before = new EsxcliSoapClient(t);
+		before.beginCycle();
+		T.eq(EsxcliSoapClient.COMMAND_FAILED,
+				before.readField(HOST, CMD, "LogDir"), "host times out");
+		T.check(before.takeUnreachableToReport(HOST) != null,
+				"reported once before the re-login");
+		int lookups = t.lookups.get();
+
+		EsxcliSoapClient after = new EsxcliSoapClient(t);
+		after.carryUnreachableFrom(before);
+		T.eq(before.unreachableReason(HOST), after.unreachableReason(HOST),
+				"the mark survives the re-login");
+		T.eq(EsxcliSoapClient.COMMAND_FAILED,
+				after.readField(HOST, CMD2, "Mode"),
+				"its other commands still fail at once");
+		T.eq(lookups, t.lookups.get(), "no new call to the timed-out host");
+		T.eq(null, after.takeUnreachableToReport(HOST),
+				"not reported a second time this cycle");
+		after.carryUnreachableFrom(null);   // null-safe
+		after.beginCycle();
+		T.eq(null, after.unreachableReason(HOST), "next cycle drops it");
 	}
 
 	private static void unreachableReasonAndReport() throws Exception {

@@ -233,6 +233,28 @@ final class EsxcliSoapClient {
 	}
 
 	/**
+	 * Build 95 review N3: a mid-cycle re-login replaces this client (it
+	 * carries the session cookie); the new one takes over the cycle's
+	 * unreachable-host marks (build 86) and which of them were already
+	 * reported (build 87), so a host that timed out this cycle is not
+	 * tried again, costing another timeout, until the next cycle. The
+	 * result and executer caches are not carried. Null-safe.
+	 */
+	void carryUnreachableFrom(EsxcliSoapClient prev) {
+		if (prev == null || prev == this) return;
+		Map<String, String> marks;
+		Set<String> reported;
+		synchronized (prev) {
+			marks = new HashMap<>(prev.unreachableHosts);
+			reported = new HashSet<>(prev.unreachableReported);
+		}
+		synchronized (this) {
+			unreachableHosts.putAll(marks);
+			unreachableReported.addAll(reported);
+		}
+	}
+
+	/**
 	 * Build 86: why this host's esxcli reads are being skipped for the rest
 	 * of the cycle, or null when they are not. Diagnostics only: the reads
 	 * themselves already return {@link #COMMAND_FAILED} (UNREADABLE).
