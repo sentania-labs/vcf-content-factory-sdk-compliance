@@ -5,7 +5,10 @@ description: >
   every host in it worst first with its score and applied SCG, then
   select a host to see exactly which controls fail and their runbook
   remediation. "Which controls fail" comes from the per-control
-  compliance alerts (subType 21), one alert per failing control. See
+  compliance alerts (subType 21), one alert per failing control. The
+  Host Score Heatmap colors by score alone, so a host that could not be
+  read keeps its last color; Not Fully Read in the host list and the
+  host details marks it (build 95). See
   knowledge/designs/dashboards/compliance-esxi-hosts.md.
 
 released: false
