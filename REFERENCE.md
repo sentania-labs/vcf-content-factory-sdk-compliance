@@ -76,7 +76,6 @@ Compliance World".
 | `Rollup\|Environment\|avg_score` | Average Score | metric | % | yes |
 | `Rollup\|Environment\|controls_evaluated` | Controls Evaluated | metric | none | yes |
 | `Rollup\|Environment\|controls_passed` | Controls Passed | metric | none | yes |
-| `Rollup\|Environment\|controls_unreadable` | Controls Unreadable | metric | none | yes |
 | `Rollup\|Environment\|pass_rate` | Controls Passing | metric | % | yes |
 
 ---

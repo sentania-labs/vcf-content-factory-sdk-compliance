@@ -155,30 +155,38 @@ profiles via the `_READ_RECIPE_BY_PARAMETER` map in
 
 Unreadable controls are **excluded from pass and fail** (they are not
 evaluated failures) and per the cardinal rule they are **never compliant /
-never a sentinel pass**. **Since build 63 (owner decision: "If unreadable =
-not collected/etc, let's count it as failing") they count against the
-score**: score = pass / (pass + fail + unreadable) * 100, so an object
-whose every attempted control is unreadable scores 0 and is pushed and
-averaged. A per-resource `VCF-CF Compliance|unreadable_count` stat carries
-them separately from `fail_count`, and a per-kind "Compliance data not
-collected" alert fires on `unreadable_count > 0` OR on
-`VCF-CF Compliance|collection_failed = 1` (build 65): a 0/1 metric pushed
-on every object every cycle, 1 when nothing could be read on the object
-(every attempted control unreadable, or the governing version unreadable
-with no previous benchmark; such an object scores 0 and is counted with
-its 0 in the rollup). `unreadable_count` is never invented: for an
-unreadable version it is not pushed, because which benchmark's controls
-apply is unknown. Since build 57 an object with any unreadable
-control also has `VCF-CF Compliance|non_compliant` = 1 (unreadable is not
-compliant), while the unreadable control's own
-`VCF-CF Compliance|<control_id>|Compliant` is **-1** (not evaluated), not
-0, so its per-control compliance alert (which fires on 0) never hands
-out a remediation runbook for a setting the adapter could not read. (The
-world `Summary|total_unreadable_controls` aggregate was retired in build
-57 with the rest of the shared-world Summary numbers.) Zero-divisor
-contract: only when NOTHING was attempted (no evaluable controls, and none
-unreadable) is the score the placeholder 100.0; it is never pushed and
-never folded into rollups.
+never a sentinel pass**. **Since build 95 (Scott 2026-10-14: "if we have
+missing data we just don't log it - but flag the stale metric, and then
+that becomes an alarm") they are skipped and flagged per object:**
+
+- An unreadable control is **not pushed**: no
+  `VCF-CF Compliance|<control_id>|Compliant`, no Actual, for every cause
+  (a host vCenter reports not responding included). Its last value and its
+  per-control alert stay as they were; the stale-key cleanup holds it too
+  (never retires it to -1).
+- The score is over what was read: score = pass / (pass + fail) * 100,
+  the same rule as the rollup pass rate. `non_compliant` is a failing
+  control that was read. The rollup counts (`scored`, `non_compliant`,
+  `controls_evaluated`, `controls_passed`, `pass_rate`) come from what was
+  read; there is no unreadable rollup key.
+- The object carries `VCF-CF Compliance|has_unreadable` (1 or 0, every
+  cycle), `unreadable_count`, and the properties `unreadable_reason` (the
+  cause in plain words plus the logged detail) and `unreadable_controls`
+  (the ids, capped at 20 with "(+N more)"). The per-kind "Compliance data
+  not collected" alert fires on `has_unreadable = 1` after two cycles and
+  cancels after one clean cycle.
+- An object with nothing readable (every attempted control unreadable, or
+  the governing version unreadable with no previous benchmark) pushes only
+  the unreadable signals (and `collection_failed` = 1): no score, no
+  counters, no `non_compliant`. `unreadable_count` is never invented: for
+  an unreadable version it is not pushed, because which benchmark's
+  controls apply is unknown.
+
+Builds 63 to 94 counted unreadable as failing (score = pass / (pass + fail
++ unreadable), an all-unreadable object scored 0, any unreadable control
+made the object non-compliant) and pushed the control as Compliant = -1.
+Zero-divisor contract: when nothing was read the score is the placeholder
+100.0; it is never pushed and never folded into rollups.
 
 ### `control_id` format
 

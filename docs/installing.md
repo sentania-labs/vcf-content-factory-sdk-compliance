@@ -281,14 +281,18 @@ version, use the overrides file ([overrides.md](overrides.md)).
   accounts that collected before the upgrade): the account names vCenter
   by an IP or name the certificate does not list. Edit the account, enter the name on the certificate, and click
   Validate Connection. Accepting the certificate does not fix this.
-- **"Compliance data not collected" alert, or a host scoring 0** (build
-  63): the adapter could not read some or all of the object's settings,
-  and unreadable settings count as failing. A disconnected or
-  not-responding host scores 0. Check the object's connection state in
-  vCenter, the adapter account's read permissions, and the adapter log for
-  read errors naming the object; `unreadable_count` and the controls whose
-  `Compliant` is -1 with Actual "(unreadable)" show which settings. The
-  alert clears on the first cycle in which everything is read. On a
+- **"Compliance data not collected" alert, or an object on the Objects
+  with Unreadable Controls list** (build 95): the adapter could not read
+  some or all of the object's settings for two cycles in a row. Those
+  settings are not pushed (their last values stay) and the object's score
+  counts only what was read; a disconnected or not-responding host shows
+  its last score with `has_unreadable` = 1. The object's
+  `unreadable_reason` property says why in plain words (for example "host
+  not responding" or "permission refused") with the logged detail, and
+  `unreadable_controls` lists the settings. Check the object's connection
+  state in vCenter, the adapter account's read permissions, and the
+  adapter log for read errors naming the object. The alert clears on the
+  first cycle in which everything is read. On a
   vCenter, the same alert with `VCF-CF Compliance|Rollup|incomplete` = 1
   and the account in error means the last cycle could not reach vCenter
   at all (build 93): the collector log and the account status give the
