@@ -9,19 +9,27 @@ inside see [overview.md](overview.md).
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| vCenter Host / IP | Yes | - | vCenter FQDN or IP |
+| vCenter Host / IP | Yes | - | vCenter, by the name on its certificate (installing.md, TLS section) |
 | Username | Yes | - | vCenter SSO credentials |
 | Password | Yes | - | vCenter SSO credentials |
-| Compliance Profile | Yes | Auto (by version) | Auto (by version), VMware_SCG_6.7, VMware_SCG_7.0, VMware_SCG_8.0, VMware_SCG_9.0, VMware_SCG_9.1, or Custom |
-| Custom Profile CSV Path | No | - | Filesystem path to CSV if Custom |
-| Allow Insecure SSL | No | false | Accept self-signed certificates |
-| Read vCenter appliance settings | No | false | Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
+| Overrides file | No | - | Advanced Settings. Build 90. Name of your copy of `compliance_overrides_template` in Infrastructure Operations > Configurations > Management Packs Configuration, without `.xml`. Empty: no overrides, no fetch. See [overrides.md](overrides.md) |
+| Read vCenter appliance settings | No | false | Advanced Settings; a true/false choice. Read the vCenter appliance (VAMI) settings (SSH, NTP, syslog, TLS profile, root password expiry, FIPS). Off: those controls are reported for manual review. On: needs the collection account in the vsphere.local SSO group `SystemConfiguration.Administrators`, which also grants appliance write access (no read-only appliance role exists) |
 
-**Existing instances keep their stored profile on upgrade.** VCF Ops
-stores the configured value on each adapter instance, and a pak upgrade
-does not rewrite it (the new default applies to new instances only). An instance stored as a fixed `VMware_SCG_9.1`, for example, keeps scoring
-every object against SCG 9.1 until someone edits it to `Auto (by version)`. An instance with no stored value keeps the pre-v3
-fallback, SCG 8.0.
+**No profile setting (build 93).** The Compliance Profile setting is
+removed and every instance runs Auto (by version), including one that
+stored a fixed SCG (for example `VMware_SCG_9.1`), `Custom`, or nothing
+(the pre-version-aware SCG 8.0 default). If the platform still hands
+the adapter the stored value, it logs one INFO line each time it is
+configured, naming that value; VCF Operations may drop it on upgrade,
+so record it first (installing.md, Upgrading). To score every object of
+an instance against one SCG, use the overrides file's instance-wide
+pin, `<Profile version="SCG 9.1"/>`.
+
+**No Allow Insecure SSL (build 93).** The vCenter certificate is always
+validated, chain and name; an untrusted one is accepted in the Validate
+Connection dialog. If the platform still hands the adapter a stored
+`allowInsecure=true`, it logs one WARN each time it is configured. See
+installing.md, TLS section and Upgrading.
 
 ## Benchmark selection
 
@@ -38,8 +46,13 @@ fallback, SCG 8.0.
   collected: `profile_name` = `benchmark unknown: ESX version unreadable`,
   score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
   "Compliance data not collected").
-- **Fixed profile:** that SCG for every object regardless of version.
-- **Custom:** a canonical-schema CSV on the collector, for every object.
+- **Overrides file (build 90):** applied on top. A `Profile` pin
+  replaces Auto for every kind (no `kind`, the instance-wide pin) or for
+  one kind (a `kind` pin wins over the instance-wide pin), whatever the
+  object's version; `Skip` removes
+  a control from every loaded profile; `Override` replaces its expected
+  value. The manual-review list still applies. See
+  [overrides.md](overrides.md).
 
 ## Benchmark profiles
 
@@ -53,16 +66,15 @@ Bundled profiles ship with the pak under `profiles/canonical/`:
 All derive from vmware/vcf-security-and-compliance-guidelines (6.7 and
 7.0 from its history; source CSVs kept beside them under `profiles/`;
 the canonical form is produced by the normalizer pipeline, see
-CANONICAL_SCHEMA.md). `profiles/manual_review.csv` lists controls that
+[building.md](building.md)). `profiles/manual_review.csv` lists controls that
 are reported for manual review and never scored: those whose SCG expected
 value is prose (site-specific text), and (build 70) the standard-switch
 security controls, which live on each ESX host's vSwitches and were
 wrongly read from the distributed switch. The file is required: a pak
 without it fails to load rather than scoring those controls.
 
-Custom profiles must follow the canonical CSV schema
-(CANONICAL_SCHEMA.md). Upload the CSV to the VCF Ops appliance and
-reference the path.
+To tune controls for your site, use an overrides file
+([overrides.md](overrides.md)).
 
 ## Keys pushed onto VMWARE resources
 
@@ -72,9 +84,33 @@ VCF-CF Compliance|<control_id>|Actual        property
 VCF-CF Compliance|<control_id>|Expected      property
 VCF-CF Compliance|<control_id>|Description   property
 VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-compliant,
-                                             -1 not evaluated (unreadable, or no
-                                             longer in the applied benchmark)
+                                             -1 not evaluated (unreadable, no
+                                             longer in the applied benchmark, or
+                                             skipped by the overrides file)
 ```
+
+Build 90: for a control whose expected value comes from the overrides
+file, Expected reads `<value> (site override)` and a read Actual reads
+`<actual>, expected <value> (site override)`. A skipped control's
+Actual reads `(skipped by override file <name>)` and its Compliant reads
+-1, pushed every cycle while the Skip is in force (build 92).
+
+Actual values you can see:
+
+- the value read, for example `TRUE` or `900`.
+- `(undefined)`: the setting is not set on the object (absent, or set
+  with an empty value). Compliant is 1 when the guide allows it to be
+  unset (`X or Undefined`, `X or Not Present`, bare `Not Present`) and 0
+  otherwise (build 90; before build 90 an unset setting was skipped).
+- `""`: the setting is set with an empty value and the guide's value is
+  explicitly empty (`esx.network-dvfilter`); Compliant is 1.
+- `<key>=<value>; <key>=<value>`: a control whose parameter is a key
+  pattern (`vm.dvfilter`, `ethernet*.filter*.name`) lists every
+  matching setting with its value, for example
+  `ethernet0.filter0.name=dvfilter-generic-vmware`. Any match fails
+  `Not Present` (build 90; before build 90 this control always passed).
+- `(unreadable)`: the read failed; Compliant is -1.
+- the site-override and skipped forms above.
 
 Per object:
 ```
@@ -107,11 +143,39 @@ VCF-CF Compliance|Rollup|<K>|unmatched        not for All (build 88): objects vC
 VCF-CF Compliance|Rollup|VM|skipped_pods      vSphere Pod VMs skipped (build 88); 0 when none
 VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
                                                (vCenter's, or VCF Ops' resource list for a
-                                               kind) failed and rollup keys were held back
+                                               kind) failed and rollup keys were held back,
+                                               or (build 93) the cycle could not reach
+                                               vCenter at all (the only key pushed then)
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
-                                               (+ Custom)
 ```
+
+Overrides file status, per vCenter (build 90), pushed every cycle:
+```
+VCF-CF Compliance|Summary|overrides_file        property: the instance's Overrides file setting ("" when none)
+VCF-CF Compliance|Summary|overrides_status      property: none | OK | N rejected | absent |
+                                                parse failed, last good from <time> |
+                                                parse failed, no previous copy |
+                                                fetch failed: <reason>, last good from <time> |
+                                                fetch failed N cycles: <reason>, last good from <time> |
+                                                fetch failed: <reason>, no copy in force
+                                                (<time> is the collector's local time; <reason> is
+                                                refused (HTTP 401|403) | HTTP <status> |
+                                                no Suite API channel | no answer (<error>))
+VCF-CF Compliance|Summary|overrides_skipped     Skip entries in force for the instance's guide
+                                                versions (its mode's, or the pinned one per kind)
+VCF-CF Compliance|Summary|overrides_overridden  Override entries in force, counted the same way
+VCF-CF Compliance|Summary|overrides_not_loaded  1 when the status is absent, parse failed, fetch
+                                                failed with no copy in force, or fetch failed 3
+                                                or more cycles in a row (raises "Compliance
+                                                overrides file not loaded"), else 0
+```
+
+`absent` means the configuration-file store has no file by that name:
+no overrides apply, and any copy read earlier is dropped. `parse failed`
+and `fetch failed` keep the last copy read, when there is one. One or two
+fetch failures in a row with a copy in force do not raise the alert; a
+fetch failure with no copy in force does at once.
 
 **The rollup counts only objects with a VCF Ops resource (build 88).**
 An object counts in `scored`, `non_compliant`, `no_benchmark`,
@@ -155,10 +219,17 @@ had, so read them with `total_count` / `unreadable_count` / `no_benchmark`
 ## Keys on the pack's Compliance World
 
 The Compliance World is one object shared by every adapter instance. The
-adapter pushes one key onto it; the environment totals are computed by
+adapter pushes the last scan time and (build 90) the overrides status
+onto it, so those show the last instance to collect; read each vCenter
+object for a specific instance. The environment totals are computed by
 VCF Operations, not pushed (build 82):
 ```
 Summary|last_scan_timestamp          property, pushed: last scan by any instance
+Summary|overrides_file               property, pushed (build 90): last instance to collect
+Summary|overrides_status             property, pushed (build 90): last instance to collect
+Summary|overrides_skipped            pushed (build 90): last instance to collect
+Summary|overrides_overridden         pushed (build 90): last instance to collect
+Summary|overrides_not_loaded         pushed (build 90): last instance to collect
 Rollup|Environment|scored            sum of every vCenter's VCF-CF Compliance|Rollup|All|scored
 Rollup|Environment|non_compliant     sum of every vCenter's VCF-CF Compliance|Rollup|All|non_compliant
 Rollup|Environment|no_benchmark      sum of every vCenter's VCF-CF Compliance|Rollup|All|no_benchmark
@@ -242,6 +313,14 @@ and recommendation names carry no prefix.
   where to see which settings (`unreadable_count`, and the controls whose
   `Compliant` is -1 with Actual "(unreadable)"), and what to check. Alert
   ids `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`.
+
+- `VCF Content Factory Compliance Alert: Compliance overrides file not
+  loaded` (build 90) on the vCenter object (`VMwareAdapter Instance`),
+  severity Warning, raised when `VCF-CF Compliance|Summary|overrides_not_loaded`
+  is 1: the instance's Overrides file names a file the configuration-file
+  store does not have, or one that is not valid XML. Its recommendation
+  says how to tell which and what to fix. Alert id
+  `vcfcf_compliance_overrides_vcenter`; raises and cancels after 1 cycle.
 
 All compliance alerts are type Compliance (subType 21).
 

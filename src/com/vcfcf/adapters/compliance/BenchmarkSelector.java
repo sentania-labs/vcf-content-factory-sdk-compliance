@@ -8,22 +8,19 @@ import java.util.regex.Pattern;
 /**
  * v3 (build 57): picks the benchmark profile for ONE object.
  *
- * <p>Two modes, set by the {@code benchmark_profile} connection setting:
- * <ul>
- *   <li><b>Auto (by version)</b>: each object is scored against the SCG
- *       matching its own product version. HostSystem uses its ESX
- *       version; VirtualMachine uses its host's ESX version; vCenter,
- *       cluster, distributed switch and distributed portgroup use the
- *       vCenter version (a vDS's own version, e.g. 9.0.0 under a 9.1.1
- *       vCenter, is deliberately NOT used: the switch is configured and
- *       hardened through that vCenter). The version's {@code major.minor}
- *       picks SCG 6.7 / 7.0 / 8.0 / 9.0 / 9.1 (8.0 U3 reports 8.0.3 and
- *       maps to 8.0). Any other version gets NO benchmark: profile name
- *       {@code "no benchmark for <ESX|vCenter> X.Y"}, no score, no
- *       per-control results.</li>
- *   <li><b>Fixed</b> (any bundled profile or Custom): that profile for
- *       every object regardless of version (the pre-v3 behavior).</li>
- * </ul>
+ * <p><b>Auto (by version)</b>, the only mode since build 93 (the
+ * Compliance Profile setting and its fixed choices are removed): each
+ * object is scored against the SCG matching its own product version.
+ * HostSystem uses its ESX version; VirtualMachine uses its host's ESX
+ * version; vCenter, cluster, distributed switch and distributed portgroup
+ * use the vCenter version (a vDS's own version, e.g. 9.0.0 under a 9.1.1
+ * vCenter, is deliberately NOT used: the switch is configured and hardened
+ * through that vCenter). The version's {@code major.minor} picks SCG 6.7 /
+ * 7.0 / 8.0 / 9.0 / 9.1 (8.0 U3 reports 8.0.3 and maps to 8.0). Any other
+ * version gets NO benchmark: profile name
+ * {@code "no benchmark for <ESX|vCenter> X.Y"}, no score, no per-control
+ * results. The overrides file's Profile pins (see {@link #withPins}) replace
+ * the choice for the kinds they cover.
  *
  * <p>An unreadable version in Auto mode is NOT guessed and is NOT "no
  * benchmark" (build 58, review B2): the selection is
@@ -72,25 +69,43 @@ public final class BenchmarkSelector {
 	private static final Pattern MAJOR_MINOR =
 			Pattern.compile("^\\s*(\\d+)\\.(\\d+)");
 
-	private final BenchmarkProfile fixed;                 // fixed mode
-	private final Map<String, BenchmarkProfile> byScg;    // auto: "9.1" -> profile
+	private final Map<String, BenchmarkProfile> byScg;    // "9.1" -> profile
+	// Build 90: Profile pins from the overrides file, by kind. A pinned kind
+	// takes its pinned profile in place of Auto.
+	private final Map<Kind, BenchmarkProfile> pins;
 
-	private BenchmarkSelector(BenchmarkProfile fixed,
-			Map<String, BenchmarkProfile> byScg) {
-		this.fixed = fixed;
+	private BenchmarkSelector(Map<String, BenchmarkProfile> byScg,
+			Map<Kind, BenchmarkProfile> pins) {
 		this.byScg = byScg;
-	}
-
-	/** Fixed mode: {@code profile} for every object. */
-	public static BenchmarkSelector fixed(BenchmarkProfile profile) {
-		if (profile == null) {
-			throw new IllegalArgumentException("fixed profile is null");
-		}
-		return new BenchmarkSelector(profile, Collections.emptyMap());
+		this.pins = pins;
 	}
 
 	/**
-	 * Auto mode over the loaded bundled profiles, keyed by profile name
+	 * Build 90: this selector with the overrides file's Profile pins
+	 * applied. {@code pinsByKind} holds one profile per pinned kind (the
+	 * caller has already resolved an instance-wide pin into every kind it
+	 * covers, and let a per-kind pin win over it). A pinned kind is scored
+	 * against its pin whatever its version; every other kind stays on
+	 * Auto (by version).
+	 */
+	public BenchmarkSelector withPins(Map<Kind, BenchmarkProfile> pinsByKind) {
+		if (pinsByKind == null || pinsByKind.isEmpty()) return this;
+		Map<Kind, BenchmarkProfile> m = new java.util.EnumMap<>(Kind.class);
+		for (Map.Entry<Kind, BenchmarkProfile> e : pinsByKind.entrySet()) {
+			if (e.getKey() != null && e.getValue() != null) {
+				m.put(e.getKey(), e.getValue());
+			}
+		}
+		return new BenchmarkSelector(byScg, Collections.unmodifiableMap(m));
+	}
+
+	/** Build 90: the pinned profile for {@code kind}, or null. */
+	public BenchmarkProfile pinFor(Kind kind) {
+		return pins.get(kind);
+	}
+
+	/**
+	 * Auto (by version) over the loaded bundled profiles, keyed by profile name
 	 * ({@code VMware_SCG_9.1} etc., as returned by
 	 * {@link BenchmarkLoader#loadAll}).
 	 */
@@ -106,22 +121,20 @@ public final class BenchmarkSelector {
 			throw new IllegalArgumentException(
 					"auto mode needs at least one bundled profile");
 		}
-		return new BenchmarkSelector(null, Collections.unmodifiableMap(m));
-	}
-
-	public boolean isAuto() {
-		return fixed == null;
+		return new BenchmarkSelector(Collections.unmodifiableMap(m),
+				Collections.<Kind, BenchmarkProfile>emptyMap());
 	}
 
 	/**
 	 * Select the benchmark for an object of {@code kind} whose governing
 	 * product version is {@code version} (the ESX version for a host, the
 	 * host's ESX version for a VM, the vCenter version for everything
-	 * else; see {@link #governingVersion}). Ignored in fixed mode.
+	 * else; see {@link #governingVersion}). Ignored for a pinned kind.
 	 */
 	public Selection select(Kind kind, String version) {
-		if (fixed != null) {
-			return Selection.of(fixed);
+		BenchmarkProfile pinned = pins.get(kind);
+		if (pinned != null) {
+			return Selection.of(pinned);
 		}
 		String mm = majorMinor(version);
 		if (mm == null) {
@@ -202,7 +215,7 @@ public final class BenchmarkSelector {
 
 	/**
 	 * Rollup benchmark bucket for a profile name: {@code VMware_SCG_9.1}
-	 * -> {@code SCG_9.1}; {@code Custom} -> {@code Custom}.
+	 * -> {@code SCG_9.1}; any other name is its own bucket.
 	 */
 	public static String bucketOf(String profileName) {
 		String scg = scgOfProfileName(profileName);

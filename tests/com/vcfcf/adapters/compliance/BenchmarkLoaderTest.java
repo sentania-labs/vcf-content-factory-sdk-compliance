@@ -37,11 +37,46 @@ public final class BenchmarkLoaderTest {
 		expectThrows("VMware_SCG_6.5", "not bundled in this version");
 		expectThrows("VMware_SCG_10.0", "not bundled in this version");
 
-		// Custom without a path reaches the resolver and gets its own
-		// actionable message (the valid Custom+path branch never calls
-		// the resolver).
-		expectThrows("Custom", "custom_profile_path");
-		expectThrows("custom", "custom_profile_path");
+		// Build 92: Custom is gone. The resolver treats it as unknown and
+		// the message no longer offers it.
+		expectThrows("Custom", "not bundled in this version");
+		try {
+			BenchmarkLoader.resolveBundledProfileName("Custom");
+		} catch (RuntimeException e) {
+			if (e.getMessage().contains("or Custom")) {
+				throw new AssertionError("message still offers Custom: "
+						+ e.getMessage());
+			}
+		}
+		// Build 93: the Compliance Profile setting is removed. A stored
+		// value is only reported: one INFO naming it (the adapter logs it
+		// once per configure); Auto, blank and absent say nothing.
+		for (String quiet : new String[] {null, "", "  ",
+				"Auto (by version)", " auto (BY VERSION) "}) {
+			if (ComplianceConfig.retiredProfileNotice(quiet) != null) {
+				throw new AssertionError("no notice for '" + quiet + "'");
+			}
+		}
+		String n90 = ComplianceConfig.retiredProfileNotice("VMware_SCG_9.0");
+		if (n90 == null || !n90.contains("stored 'VMware_SCG_9.0'")
+				|| !n90.contains("now runs Auto (by version)")
+				|| !n90.contains("<Profile version=\"SCG 9.0\"/>")) {
+			throw new AssertionError("fixed 9.0 notice: " + n90);
+		}
+		String nCustom = ComplianceConfig.retiredProfileNotice(" Custom ");
+		if (nCustom == null || !nCustom.contains("stored 'Custom'")
+				|| !nCustom.contains("SCG X.Y")) {
+			throw new AssertionError("Custom notice: " + nCustom);
+		}
+		for (String stored : new String[] {"Custom", "custom", " Custom "}) {
+			if (!ComplianceConfig.isCustomName(stored)) {
+				throw new AssertionError("'" + stored + "' is Custom");
+			}
+		}
+		if (ComplianceConfig.isCustomName("VMware_SCG_9.0")
+				|| ComplianceConfig.isCustomName(null)) {
+			throw new AssertionError("only Custom is Custom");
+		}
 
 		// Filename mapping covers every bundled profile.
 		expectFilename("VMware_SCG_6.7", "scg_6.7.csv");

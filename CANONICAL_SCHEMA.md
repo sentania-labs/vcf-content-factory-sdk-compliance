@@ -1,5 +1,11 @@
 # Canonical Benchmark CSV Schema
 
+Contributor reference for the bundled profiles: how the shipped SCG
+CSVs under `profiles/canonical/` are laid out and read. Operators tune
+controls with the overrides file (docs/overrides.md), not by editing or
+supplying a CSV; since build 92 the adapter loads the bundled profiles
+only.
+
 The compliance adapter consumes benchmarks in a single, header-aware
 CSV format. Source benchmarks (VMware SCG 6.7, 7.0, 8.0, 9.0, 9.1) are
 normalized into this schema before being loaded by the
@@ -88,7 +94,7 @@ the remainder is `<namespace.command>:<ResultField>` — see the table).
   | `vm_hardware_device_absent` | walk to the device list, then return Boolean `true` iff **no** element's runtime class simple-name equals the named device type ("device absent" → compliant), `false` iff ≥1 matching device present. Grammar `vm_hardware_device_absent:<list_path>.<DeviceTypeSimpleName>` — the **final** segment names the vim25 device type, the preceding segments are the list path. Type match is by `getClass().getSimpleName()`, never `instanceof` a concrete subclass. **Cardinal-trap separation:** the list is read via `readListConfirmed`, which folds a **failed fetch** (container node null, or accessor not a `List`) to UNREADABLE; an **empty but confirmed** list is the compliant "absent" reading. Build 40. | `vm_hardware_device_absent:config.hardware.device.VirtualPCIPassthrough` |
   | `list_empty` | walk to the list and return Boolean `true` iff the list was read AND has **zero** elements, `false` iff ≥1 element. Grammar `list_empty:<list_path>`. **Cardinal-trap separation:** same `readListConfirmed` helper — a **failed fetch** of the list folds to UNREADABLE (never "empty → compliant"); only a **confirmed** (read off a non-null container) empty list scores compliant. Build 40. | `list_empty:config.vspanSession` |
   | `vlan_id_not` | type-aware VGT (Virtual Guest Tagging) detection on a VLAN spec node — VGT is **non-compliant**. Returns Boolean `true` (compliant) iff the spec is a plain id spec (`...VlanIdSpec`, recognized by `"VlanId"` in the runtime type name) AND `vlanId != 4095`; `false` iff the spec is a trunk spec (`...TrunkVlanSpec`, recognized by `"Trunk"`) OR a plain id spec with `vlanId == 4095`. Grammar `vlan_id_not:<vlan_spec_path>`. An **unreadable** spec node, OR a runtime type that is neither a recognized id spec nor trunk spec, folds to UNREADABLE — never a guess-pass. Type discrimination is by `getClass().getSimpleName()` substring, never `instanceof`. Build 40. | `vlan_id_not:config.defaultPortConfig.vlan` |
-  | `vami` | read a JSON field from a vCenter Appliance Management (VAMI) REST endpoint. **A different transport from vim25 SOAP**; `VCenterAdapterInstance`-only, `parameter_kind=vami_api`. Grammar `vami:<appliance-path>:<json-field>` where `<appliance-path>` is everything after `/api/appliance/` (the path may contain `/` and is parsed as everything up to the **last** `:`), and `<json-field>` is the response field (dotted for nesting; the literal `(list)` token means "the response body itself is the list"; since build 74 the literal `(value)` token means "the response body itself is the value", for endpoints that return a bare scalar such as `GET /api/appliance/access/ssh` -> `true`; since build 76 a named field may carry an absent default, `<field>?absent=<value>`, used only where the vendor spec defines what absence means: when a SUCCESSFUL 200 JSON-object body lacks the field, the value is `<value>`, while any HTTP or session failure, or a body that is not a JSON object, stays UNREADABLE. Example: `vami:local-accounts/root:max_days_between_password_change?absent=-1`, because the 9.1.1 appliance spec says of that field "If unset, password never expires", and -1 is the SCG's own "never expires" value). `VamiApiClient` opens its OWN REST session (`POST /api/session`, HTTP Basic with the raw username/password, token passed as `vmware-api-session-id`); NOT the SOAP cookie. A JSON boolean is returned as Boolean (so `expected_value` `true`/`false` compares correctly), a JSON list as the comma-joined element string (pair with `(non-empty)`), a scalar as its String form. **Cardinal trap:** any auth failure, non-200, 404, timeout, parse error or **absent field** folds to UNREADABLE; only a successful 200 with the field present yields a value, and a failed GET of a "should be disabled" endpoint NEVER becomes "disabled / compliant". Build 74: a successful 200 with an **empty list** is a definitive answer ("nothing configured"), returned as the empty string, which scores **FAIL** under `(non-empty)` (it used to be UNREADABLE). TLS uses the platform trust store unless `allowInsecure=true`; each failure is logged once per cycle per vCenter (HTTP status and vAPI `error_type`, or the exception class, never credentials); the session is deleted at the end of the cycle. Failed session + per-endpoint results cached per cycle. **BLIND build (build 41): JSON field names are documentation-derived, not wire-captured; coverage is claimed, not proven, until a live run.** | `vami:access/ssh:(value)` |
+  | `vami` | read a JSON field from a vCenter Appliance Management (VAMI) REST endpoint. **A different transport from vim25 SOAP**; `VCenterAdapterInstance`-only, `parameter_kind=vami_api`. Grammar `vami:<appliance-path>:<json-field>` where `<appliance-path>` is everything after `/api/appliance/` (the path may contain `/` and is parsed as everything up to the **last** `:`), and `<json-field>` is the response field (dotted for nesting; the literal `(list)` token means "the response body itself is the list"; since build 74 the literal `(value)` token means "the response body itself is the value", for endpoints that return a bare scalar such as `GET /api/appliance/access/ssh` -> `true`; since build 76 a named field may carry an absent default, `<field>?absent=<value>`, used only where the vendor spec defines what absence means: when a SUCCESSFUL 200 JSON-object body lacks the field, the value is `<value>`, while any HTTP or session failure, or a body that is not a JSON object, stays UNREADABLE. Example: `vami:local-accounts/root:max_days_between_password_change?absent=-1`, because the 9.1.1 appliance spec says of that field "If unset, password never expires", and -1 is the SCG's own "never expires" value). `VamiApiClient` opens its OWN REST session (`POST /api/session`, HTTP Basic with the raw username/password, token passed as `vmware-api-session-id`); NOT the SOAP cookie. A JSON boolean is returned as Boolean (so `expected_value` `true`/`false` compares correctly), a JSON list as the comma-joined element string (pair with `(non-empty)`), a scalar as its String form. **Cardinal trap:** any auth failure, non-200, 404, timeout, parse error or **absent field** folds to UNREADABLE; only a successful 200 with the field present yields a value, and a failed GET of a "should be disabled" endpoint NEVER becomes "disabled / compliant". Build 74: a successful 200 with an **empty list** is a definitive answer ("nothing configured"), returned as the empty string, which scores **FAIL** under `(non-empty)` (it used to be UNREADABLE). TLS uses the platform trust store (build 93: always; certificates accepted on the instance through Validate Connection are trusted too); each failure is logged once per cycle per vCenter (HTTP status and vAPI `error_type`, or the exception class, never credentials); the session is deleted at the end of the cycle. Failed session + per-endpoint results cached per cycle. **BLIND build (build 41): JSON field names are documentation-derived, not wire-captured; coverage is claimed, not proven, until a live run.** | `vami:access/ssh:(value)` |
 
 Rules:
 
@@ -126,7 +132,7 @@ Rules:
   fetch can never be scored as "list empty → compliant".
 
 - `read_recipe` is **optional** and kept OUT of the loader's required-
-  column set, so older bundled or custom CSVs still load.
+  column set, so older canonical CSVs still load.
 - A `vim_property` or `esxcli` control with an **empty** `read_recipe`
   is **non-evaluable** (informational only): it loads and appears for
   traceability, and the evaluator skips it — it is *not* counted as
@@ -137,8 +143,7 @@ Rules:
 
 The bundled normalizers own the vim-path knowledge for the shipped
 profiles via the `_READ_RECIPE_BY_PARAMETER` map in
-`scripts/_compliance_normalize.py`. Custom-profile authors supply
-`read_recipe` directly in their CSV.
+`scripts/_compliance_normalize.py`.
 
 ### Unreadable outcome
 
@@ -239,6 +244,17 @@ informational-only.
 | `powercli_only` | Requires PowerCLI-specific cmdlet that has no direct vSphere SOAP equivalent. | no |
 | `manual_audit` | Has no machine-readable assessment command. Human review only. | no |
 
+**Key patterns (build 90).** An `advanced_setting` `parameter`
+containing `*` is a key pattern, not a literal key: each `*` matches one
+or more characters within one dot-separated segment, case-insensitive,
+against every key of the object's successful settings read. Matching
+keys with a non-empty value are the present values: bare `Not Present`
+fails on any match; other modes pass only when every match passes; no
+match takes the absent-key branch (Actual `(undefined)`). Actual lists
+the matches as `key=value; key=value`. A failed read is UNREADABLE as
+for any other `advanced_setting`. Today only `vm.dvfilter`
+(`ethernet*.filter*.name`, SCG 7.0 to 9.1) uses one.
+
 The "evaluable" flag is *derived*; there is no separate column.
 `advanced_setting` is always evaluable; `vim_property`, `esxcli`, and
 `vami_api` are evaluable only when `read_recipe` is non-empty (the recipe
@@ -323,11 +339,17 @@ read is **never** folded into a pass:
   setting manager; builds 77 and 78) is never an empty option list: every advanced_setting
   control of the object is UNREADABLE for that cycle (pushed as -1, counted
   in `unreadable_count`, never a pass, never touched by the stale cleanup).
-- For `advanced_setting`, an absent key is **skipped** (excluded from the
-  score denominator) by the existing absent-key branch *before* the
-  `not:` / `(non-empty)` comparison is consulted. In particular the
-  not-equal mode **never** treats a missing value as "not equal to X,
-  therefore compliant" — absence is an exclusion, not a pass.
+- For `advanced_setting`, an absent key (or a present key with an empty
+  value) is decided by the absent-key branch *before* the `not:` /
+  `(non-empty)` comparison is consulted. It is a **pass** with Actual
+  `(undefined)` only when the expected value allows absence (`X or
+  Undefined`, `X or Not Present`, bare `Not Present`); otherwise it is a
+  **fail** with Actual `(undefined)`, counted in the denominator (build 90,
+  DEF-022; before build 90 it was skipped, which raised the score of an
+  un-hardened object). The not-equal mode therefore **never** treats a
+  missing value as "not equal to X, therefore compliant". One exception: a
+  key present with an empty value against an explicitly empty expected
+  value (`""`, or `NULL` in SCG 6.7; `esx.network-dvfilter`) passes.
 
 ### `vmx-N or higher` / `vmx-N or newer` (build 57)
 
@@ -487,8 +509,8 @@ two groups of bundled-profile controls:
 
 The loader demotes each listed control, in the listed profile only, to
 `manual_audit` (no recipe): not evaluable, never pushed, never alerted,
-never a pass. The overlay is applied to bundled profiles, never to a
-Custom profile, and is kept outside the canonical CSVs so regenerating
+never a pass. The overlay is applied to every bundled profile, and is
+kept outside the canonical CSVs so regenerating
 a profile cannot silently undo it. Since build 70 a missing overlay file
 FAILS the bundled-profile load (the adapter goes Down with an actionable
 message): without it the standard-switch controls would be scored (a

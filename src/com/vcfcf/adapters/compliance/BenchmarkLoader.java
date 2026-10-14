@@ -54,8 +54,8 @@ public final class BenchmarkLoader {
 	 * Canonical column 13 — {@code read_recipe}. Optional by contract
 	 * (see CANONICAL_SCHEMA.md): a CSV without it still loads, and every
 	 * vim_property control then reads as non-evaluable / informational.
-	 * Kept out of {@link #REQUIRED_COLUMNS} so older bundled or custom
-	 * CSVs do not hard-fail the loader. When the header IS present, the
+	 * Kept out of {@link #REQUIRED_COLUMNS} so older canonical CSVs do not
+	 * hard-fail the loader. When the header IS present, the
 	 * loader populates it by name like every other column.
 	 */
 	static final String READ_RECIPE_COLUMN = "read_recipe";
@@ -77,8 +77,7 @@ public final class BenchmarkLoader {
 	 * v3 manual-review overlay, relative to the pak's {@code profiles/}
 	 * directory. Columns {@code profile,control_id,reason}. Each row demotes
 	 * one control of one BUNDLED profile to non-evaluable (see
-	 * {@link BenchmarkProfile.Control#asManualReview()}). Custom profiles
-	 * are never overlaid: their author owns their expected values.
+	 * {@link BenchmarkProfile.Control#asManualReview()}).
 	 */
 	static final String MANUAL_REVIEW_FILE = "manual_review.csv";
 
@@ -153,27 +152,17 @@ public final class BenchmarkLoader {
 		return lastManualReviewApplied;
 	}
 
-	public BenchmarkProfile load(String profileName, String customPath,
-			String confDir) {
-		String key = profileName + "|" + customPath + "|" + confDir
+	public BenchmarkProfile load(String profileName, String confDir) {
+		String key = profileName + "|" + confDir
 				+ "|appliance=" + applianceReads;
 		if (cachedProfile != null && key.equals(cachedProfileKey)) {
 			return cachedProfile;
 		}
 
-		BenchmarkProfile profile;
-		if ("Custom".equalsIgnoreCase(profileName) && customPath != null
-				&& !customPath.isEmpty()) {
-			List<String> lines = readFile(Paths.get(customPath));
-			profile = new BenchmarkProfile("Custom", applyApplianceSetting(
-					parseCanonical(lines, customPath), applianceReads));
-			lastManualReviewApplied = countManualReview(profile);
-		} else {
-			String resolvedName = resolveBundledProfileName(profileName);
-			profile = loadBundled(resolvedName, confDir,
-					loadManualReview(confDir));
-			lastManualReviewApplied = countManualReview(profile);
-		}
+		String resolvedName = resolveBundledProfileName(profileName);
+		BenchmarkProfile profile = loadBundled(resolvedName, confDir,
+				loadManualReview(confDir));
+		lastManualReviewApplied = countManualReview(profile);
 		cachedProfile = profile;
 		cachedProfileKey = key;
 		return profile;
@@ -313,10 +302,10 @@ public final class BenchmarkLoader {
 	 * confident compliance score on dashboards that answers a
 	 * different question than the instance's own configuration says —
 	 * for a compliance product the wrong-score mode is strictly worse
-	 * than a one-click-recoverable Down. {@code Custom} reaches here
-	 * only when {@code custom_profile_path} is unset (the caller
-	 * handles the valid Custom+path case first) and gets its own
-	 * actionable message.
+	 * than a one-click-recoverable Down. Build 92: {@code Custom} is no
+	 * longer a choice; {@link ComplianceConfig} maps a stored Custom to
+	 * Auto before this is reached, so here it is unknown like any other
+	 * name.
 	 */
 	static String resolveBundledProfileName(String profileName) {
 		if (profileName == null || profileName.trim().isEmpty()) {
@@ -330,18 +319,10 @@ public final class BenchmarkLoader {
 			case "VMware_SCG_6.7":
 				return profileName;
 			default:
-				if ("Custom".equalsIgnoreCase(profileName)) {
-					throw new RuntimeException(
-							"benchmark_profile 'Custom' requires "
-							+ "custom_profile_path to point at a "
-							+ "canonical-schema profile CSV on the "
-							+ "collector");
-				}
 				throw new RuntimeException(
-						"configured benchmark_profile '" + profileName
-						+ "' is not bundled in this version; choose "
-						+ "Auto (by version), VMware_SCG_6.7 / 7.0 / 8.0 / "
-						+ "9.0 / 9.1, or Custom");
+						"profile '" + profileName
+						+ "' is not bundled in this version (bundled: "
+						+ "VMware_SCG_6.7 / 7.0 / 8.0 / 9.0 / 9.1)");
 		}
 	}
 

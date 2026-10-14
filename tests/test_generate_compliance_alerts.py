@@ -90,7 +90,7 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(gen.ALERT_NAME_PREFIX,
                          "VCF Content Factory Compliance Alert: ")
         alerts = list(self.root.iter(NS + "AlertDefinition"))
-        self.assertEqual(len(alerts), 143)
+        self.assertEqual(len(alerts), 144)   # build 90: + overrides alert
         for a in alerts:
             name = self.props[a.get("nameKey")]
             self.assertTrue(name.startswith(gen.ALERT_NAME_PREFIX),
@@ -111,7 +111,7 @@ class GeneratorTest(unittest.TestCase):
                          (1, 3))
         self.assertEqual((gen.COLLECTION_WAIT_CYCLE,
                           gen.COLLECTION_CANCEL_CYCLE), (1, 1))
-        seen = {"control": 0, "score": 0, "collection": 0}
+        seen = {"control": 0, "score": 0, "collection": 0, "overrides": 0}
         for tag in ("SymptomDefinition", "AlertDefinition"):
             for el in self.root.iter(NS + tag):
                 i = el.get("id")
@@ -121,13 +121,15 @@ class GeneratorTest(unittest.TestCase):
                     group, want = "score", ("1", "3")
                 elif i.startswith("vcfcf_compliance_collection_"):
                     group, want = "collection", ("1", "1")
+                elif i.startswith("vcfcf_compliance_overrides_"):
+                    group, want = "overrides", ("1", "1")
                 else:
                     self.fail(f"unclassified {tag} {i}")
                 seen[group] += 1
                 self.assertEqual((el.get("waitCycle"), el.get("cancelCycle")),
                                  want, i)
         self.assertEqual(seen, {"control": 272, "score": 3,
-                                "collection": 19})
+                                "collection": 19, "overrides": 2})
 
     def test_symptom_condition(self):
         for s in self.root.iter(NS + "SymptomDefinition"):
@@ -242,6 +244,47 @@ class GeneratorTest(unittest.TestCase):
                        "not supported", "SystemConfiguration.Administrators",
                        "WRITE access"):
             self.assertIn(needle, text)
+
+    def test_overrides_alert(self):
+        # Build 90: "Compliance overrides file not loaded" on the vCenter,
+        # one Warning symptom on Summary|overrides_not_loaded = 1, its own
+        # recommendation.
+        alerts = {a.get("id"): a for a in self.root.iter(NS + "AlertDefinition")}
+        syms = {s.get("id"): s for s in self.root.iter(NS + "SymptomDefinition")}
+        a = alerts[gen.OVERRIDES_ALERT]
+        self.assertEqual((a.get("type"), a.get("subType")), ("15", "21"))
+        self.assertEqual(a.get("adapterKind"), "VMWARE")
+        self.assertEqual(a.get("resourceKind"), "VMwareAdapter Instance")
+        self.assertEqual(self.props[a.get("nameKey")],
+                         gen.ALERT_NAME_PREFIX
+                         + "Compliance overrides file not loaded")
+        # Build 91: a single symptom set is bare under State, never in a
+        # <SymptomSets> container (Ops rejects a one-child composite).
+        self.assertIsNone(a.find(NS + "State/" + NS + "SymptomSets"))
+        refs = [x.get("ref") for x in a.findall(
+            NS + "State/" + NS + "SymptomSet")]
+        self.assertEqual(refs, [gen.OVERRIDES_SYMPTOM])
+        rec = a.find(NS + "State/" + NS + "Recommendations/"
+                     + NS + "Recommendation")
+        self.assertEqual(rec.get("ref"), gen.OVERRIDES_REC_ID)
+        sym = syms[gen.OVERRIDES_SYMPTOM]
+        self.assertEqual(sym.get("resourceKind"), "VMwareAdapter Instance")
+        state = sym.find(NS + "State")
+        self.assertEqual(state.get("severity"), "Warning")
+        cond = state.find(NS + "Condition")
+        self.assertEqual((cond.get("type"), cond.get("key"),
+                          cond.get("operator"), cond.get("value")),
+                         ("metric",
+                          "VCF-CF Compliance|Summary|overrides_not_loaded",
+                          "=", "1"))
+        recs = [r for r in self.root.iter(NS + "Recommendation")
+                if r.get("key") == gen.OVERRIDES_REC_ID]
+        self.assertEqual(len(recs), 1)
+        text = self.props[recs[0].find(NS + "Description").get("nameKey")]
+        for needle in ("overrides_status", "compliance_overrides_template",
+                       "Management Packs Configuration", "Overrides file"):
+            self.assertIn(needle, text)
+        self.assertNotIn("\u2014", text)   # no em-dash
 
     def test_severity_from_priority(self):
         for c in self.controls:

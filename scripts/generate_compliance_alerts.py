@@ -64,6 +64,16 @@ adapter never pushes):
   for a kind could not be read) and rollup keys were held back. Ids use the
   `vcfcf_compliance_collection_` prefix, distinct from the per-control
   `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
+* Overrides alert (build 90, the factory's
+  knowledge/designs/sdk-adapters/compliance-overrides-file.md): one alert
+  on the vCenter object (`VMwareAdapter Instance`), "Compliance overrides
+  file not loaded", type 15 subType 21, impact badge risk, one Warning
+  symptom `VCF-CF Compliance|Summary|overrides_not_loaded = 1` (the
+  instance names an overrides file that the configuration-file store does
+  not have, or that does not parse, or that could not be fetched with no
+  copy in force or for 3 cycles in a row), its own recommendation. Wait 1,
+  cancel 1, like the collection alerts. Ids use the
+  `vcfcf_compliance_overrides_` prefix; nameKeys 2040 to 2042.
 * Title, priority and remediation come from the NEWEST profile in which
   the control is scored. If that row has no usable remediation text
   (empty or N/A), the next-newest scored row with one is used. When the
@@ -128,6 +138,39 @@ COLLECTION_FAILED_NAMEKEY_BASE = 2020   # 2020 + i: collection_failed symptoms
 # Build 79: third symptom on the vCenter collection alert only.
 ROLLUP_INCOMPLETE_SYMPTOM = "vcfcf_compliance_collection_vcenter_rollup_incomplete"
 ROLLUP_INCOMPLETE_NAMEKEY = 2030
+
+# Build 90: "Compliance overrides file not loaded" on the vCenter object.
+OVERRIDES_SYMPTOM = "vcfcf_compliance_overrides_vcenter_not_loaded"
+OVERRIDES_ALERT = "vcfcf_compliance_overrides_vcenter"
+OVERRIDES_REC_ID = "vcfcf_compliance_overrides_check"
+OVERRIDES_NAMEKEY = 2040   # +0 symptom, +1 alert, +2 recommendation
+OVERRIDES_METRIC = "VCF-CF Compliance|Summary|overrides_not_loaded"
+OVERRIDES_REC_TEXT = (
+    "This compliance adapter instance names an overrides file that it could "
+    "not load. There are three causes: the configuration-file store has no "
+    "file by that name; the file is not valid XML with a ComplianceOverrides "
+    "root; or the file could not be read from VCF Operations, either with "
+    "no earlier copy in force or for 3 collection cycles in a row. When the "
+    "file is missing, or could not be read and no copy is in force, the "
+    "instance runs with no overrides (the guide's values only). Otherwise "
+    "it keeps the last copy it read. The vCenter object's VCF-CF "
+    "Compliance|Summary|overrides_status property says which: absent; "
+    "parse failed, with the time of the copy in use; or fetch failed, with "
+    "the reason, where refused (HTTP 401 or 403) means VCF Operations "
+    "answered and refused the identity the adapter uses for it, any other "
+    "HTTP status "
+    "is an error VCF Operations returned, and no answer means it was not "
+    "reached. The adapter log names the problem. To fix a missing file: "
+    "open Infrastructure Operations > Configurations > Management Packs "
+    "Configuration and check that a file with exactly the name in the "
+    "instance's Overrides file setting exists (the name without .xml, same "
+    "case). If it does not, copy compliance_overrides_template and give the "
+    "copy that name, or correct the setting under Administration > "
+    "Integrations > Accounts. If the file does not parse, open it and fix "
+    "the XML. If it was refused, the collector log names the VCF Operations "
+    "identity the adapter uses when it starts; that identity must be able "
+    "to read configuration files. The alert clears on the first collection "
+    "cycle that loads the file.")
 
 # Per-kind "Compliance data not collected" alerts (build 63).
 # canonical resource_kind -> (id slug, label used in names)
@@ -459,6 +502,51 @@ def render(controls: list):
         f'      <Description nameKey="{COLLECTION_NAMEKEY_BASE + 100}"/>\n'
         f'    </Recommendation>\n')
     props.append(f"{COLLECTION_NAMEKEY_BASE + 100}={prop_value(COLLECTION_REC_TEXT)}")
+    # Build 90: the overrides alert on the vCenter object.
+    vc_kind = xml_attr(KINDS["VCenterAdapterInstance"][0])
+    onk = OVERRIDES_NAMEKEY
+    sym.append(
+        f'    <SymptomDefinition id="{OVERRIDES_SYMPTOM}"\n'
+        f'                       nameKey="{onk}"\n'
+        f'                       adapterKind="VMWARE"\n'
+        f'                       resourceKind="{vc_kind}"\n'
+        f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
+        f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
+        f'      <State severity="Warning">\n'
+        f'        <Condition type="metric" key="{OVERRIDES_METRIC}"\n'
+        f'                   operator="=" value="1"\n'
+        f'                   valueType="numeric" thresholdType="static"/>\n'
+        f'      </State>\n'
+        f'    </SymptomDefinition>\n')
+    alert.append(
+        f'    <AlertDefinition id="{OVERRIDES_ALERT}"\n'
+        f'                     nameKey="{onk + 1}"\n'
+        f'                     adapterKind="VMWARE"\n'
+        f'                     resourceKind="{vc_kind}"\n'
+        f'                     type="15" subType="21"\n'
+        f'                     waitCycle="{COLLECTION_WAIT_CYCLE}" '
+        f'cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
+        f'      <State severity="Automatic">\n'
+        f'        <Impact type="badge" key="risk"/>\n'
+        # Build 91: one symptom goes bare. VCF Operations rejects a
+        # <SymptomSets> container with fewer than two children ("A
+        # composite symptom set should contain at least two Symptom
+        # Sets"), which failed the build 90 install.
+        f'        <SymptomSet ref="{OVERRIDES_SYMPTOM}" operator="and"\n'
+        f'                    aggregation="any" applyOn="self" '
+        f'negateCondition="false"/>\n'
+        f'        <Recommendations>\n'
+        f'          <Recommendation ref="{OVERRIDES_REC_ID}" priority="1"/>\n'
+        f'        </Recommendations>\n'
+        f'      </State>\n'
+        f'    </AlertDefinition>\n')
+    rec.append(
+        f'    <Recommendation key="{OVERRIDES_REC_ID}">\n'
+        f'      <Description nameKey="{onk + 2}"/>\n'
+        f'    </Recommendation>\n')
+    props.append(f"{onk}={prop_value('Compliance overrides file not loaded on vCenter')}")
+    props.append(f"{onk + 1}={prop_value(ALERT_NAME_PREFIX + 'Compliance overrides file not loaded')}")
+    props.append(f"{onk + 2}={prop_value(OVERRIDES_REC_TEXT)}")
     return "".join(sym), "".join(alert), "".join(rec), "\n".join(props) + "\n"
 
 
@@ -503,6 +591,9 @@ def main(argv: list) -> int:
           f"plus Rollup|incomplete = 1 on the vCenter; "
           f"{2 * len(collection_ids()) + 1} symptoms) and 1 shared collection "
           f"recommendation", file=sys.stderr)
+    print("[generate_compliance_alerts] plus 1 overrides alert (Summary|"
+          "overrides_not_loaded = 1 on the vCenter; 1 symptom, 1 "
+          "recommendation)", file=sys.stderr)
     print(f"[generate_compliance_alerts] by severity: "
           + ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())),
           file=sys.stderr)

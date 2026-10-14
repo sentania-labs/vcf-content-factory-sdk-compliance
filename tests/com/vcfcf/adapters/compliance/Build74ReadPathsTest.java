@@ -181,7 +181,7 @@ public final class Build74ReadPathsTest {
 				BenchmarkSelector.Kind.VCENTER, off91, off.loadAll(".").values());
 		T.check(cand.contains("vc.ssh"), "off: vc.ssh old values retired");
 		// Fixed profile path honours the setting too.
-		T.check(!ProfileSetTest.find(off.load("VMware_SCG_8.0", null, ".").controls,
+		T.check(!ProfileSetTest.find(off.load("VMware_SCG_8.0", ".").controls,
 				"vc.vami-access-ssh").isEvaluable(), "off: fixed 8.0 demoted");
 
 		// ---- E: unreadable diagnostics tally
