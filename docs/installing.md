@@ -2,6 +2,7 @@
 
 ## Prerequisites
 
+- **Allow Unsigned PAK Installation** turned on in VCF Operations (the pak is unsigned); see [Installing: allow unsigned paks first](../README.md#installing-allow-unsigned-paks-first).
 - VCF Operations 8.x or 9.x (collect-path discovery is validated on
   9.0.2).
 - Network reachability from the VCF Operations collector to your vCenter
