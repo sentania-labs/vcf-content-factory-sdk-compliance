@@ -14,8 +14,9 @@ plausible but different number with no error. This test pins:
   Rollup|Environment|pass_rate, labelled Controls Passing;
 - the per-vCenter view has a "<Kind> Controls Passing (%)" column bound
   to Rollup|<Kind>|pass_rate for every kind (the vCenter kind labelled
-  "vCenter Appliance", review N9), a Controls Unreadable (All) column,
-  and a totals row that sums counts, never a percentage;
+  "vCenter Appliance", review N9), no unreadable rollup column (build 95
+  decision: unreadable is flagged per object), and a totals row that sums
+  counts, never a percentage;
 - the per-vCenter view reconciles with the Environment tile (review W2):
   All Controls Passing, Passed and Evaluated columns, with Passed and
   Evaluated summed in the totals row, so summed Passed over summed
@@ -74,6 +75,19 @@ def view_columns(text: str) -> list:
 
 class PassRateBindingTest(unittest.TestCase):
 
+    def test_no_unreadable_rollup_key(self):
+        """Build 95 decision: controls_unreadable is gone from the rollups,
+        the Environment ComputedMetrics, the view and the tiles."""
+        paths = bundled("views") + bundled("dashboards") + ["describe.xml"]
+        for rel in paths:
+            with self.subTest(path=rel):
+                text = (REPO / rel).read_text(encoding="utf-8")
+                if rel.endswith(".yaml"):
+                    text = code(text)
+                else:
+                    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+                self.assertNotIn("controls_unreadable", text)
+
     def test_bundled_content_has_no_avg_score(self):
         paths = bundled("views") + bundled("dashboards")
         self.assertTrue(paths, "no bundled content found in adapter.yaml")
@@ -102,8 +116,10 @@ class PassRateBindingTest(unittest.TestCase):
             want = ("VCF-CF Compliance|Rollup|%s|pass_rate" % kind,
                     "%s Controls Passing (%%)" % LABEL.get(kind, kind))
             self.assertIn(want, cols, kind)
-        self.assertIn(("VCF-CF Compliance|Rollup|All|controls_unreadable",
-                       "Controls Unreadable"), cols)
+        # Build 95 decision (Scott 2026-10-14): no unreadable rollup key
+        # anywhere; objects with unreadable controls are listed instead.
+        self.assertFalse([a for a in attrs if "controls_unreadable" in a],
+                         "no Controls Unreadable column")
         m = re.search(r"^  columns:\s*\[([^\]]*)\]", text, re.M)
         self.assertIsNotNone(m, "summary columns")
         summed = [int(x) for x in m.group(1).split(",")]
@@ -111,9 +127,6 @@ class PassRateBindingTest(unittest.TestCase):
             self.assertLess(i, len(attrs))
             self.assertFalse(attrs[i].endswith("|pass_rate"),
                              "a percentage is summed: " + attrs[i])
-        self.assertIn(
-            attrs.index("VCF-CF Compliance|Rollup|All|controls_unreadable"),
-            summed, "Controls Unreadable is in the totals row")
         self.assertNotIn("vCenter Controls Passing (%)",
                          [n for _, n in cols], "ambiguous label (N9)")
 

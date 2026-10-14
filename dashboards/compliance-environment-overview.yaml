@@ -96,8 +96,8 @@ widgets:
     # the last line no longer runs under the widget's EDIT link.
     coords: {x: 9, y: 1, w: 4, h: 5}
     text: >
-      <p><b>Controls Passing</b>: controls passed over controls evaluated.
-      Unreadable controls are counted apart, never as passes.</p>
+      <p><b>Controls Passing</b>: controls passed over controls evaluated,
+      from what was read. Unreadable objects are listed apart.</p>
       <p><b>Non-compliant</b>: a failing or unreadable control.
       <b>Without benchmark</b>: no SCG for the version.</p>
       <p>Per object: ESX Hosts, VMs, vCenter &amp; Networking.</p>

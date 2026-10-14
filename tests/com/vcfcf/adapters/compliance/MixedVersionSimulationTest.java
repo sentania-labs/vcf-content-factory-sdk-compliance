@@ -20,7 +20,7 @@ import java.util.Set;
  * to every key of every object, as VCF Ops does.
  *
  * <p>Cycle 1: vCenter 9.1.1; hosts on ESX 6.7, 7.0, 8.0 U3, 9.0, 9.1
- * (disconnected: every control unreadable, scores 0) and unmapped 10.0; VMs on the 6.7,
+ * (disconnected: every control unreadable; build 95: flagged, not scored) and unmapped 10.0; VMs on the 6.7,
  * 8.0 U3 and 10.0 hosts; a vDS reporting its own 9.0.0 (ignored) and a
  * portgroup. Cycle 2: the 8.0 host was upgraded to 9.0 while one of its
  * 8.0-only controls still reads 0 (an open alert); the 7.0 host's version
@@ -108,10 +108,12 @@ public final class MixedVersionSimulationTest {
 		T.near(0, r1.toStats().get(P + "Benchmark|unknown|objects"), "unknown");
 		T.near(1, r1.toStats().get(P + "Host|no_benchmark"), "host nb");
 		T.near(1, r1.toStats().get(P + "VM|no_benchmark"), "vm nb");
-		T.near(2, r1.toStats().get(P + "Host|non_compliant"),
-				"8.0 host (fail) + 9.1 host (unreadable)");
-		T.near(5, r1.toStats().get(P + "Host|scored"),
-				"4 read hosts + the disconnected host at 0");
+		// Build 95: the rollup counts what was read; the disconnected host
+		// (nothing read) is neither scored nor non-compliant.
+		T.near(1, r1.toStats().get(P + "Host|non_compliant"),
+				"8.0 host (fail) only");
+		T.near(4, r1.toStats().get(P + "Host|scored"),
+				"4 read hosts, the disconnected host not scored");
 		T.check(!ops.get("HOST|host-91").containsKey(K + "score"),
 				"disconnected host: no score pushed (build 95)");
 		T.near(1, ops.get("HOST|host-91").get(K + "collection_failed"),
@@ -186,8 +188,8 @@ public final class MixedVersionSimulationTest {
 		Map<String, Double> s2 = r2.toStats();
 		T.near(1, s2.get(P + "Benchmark|unknown|objects"), "unknown bucket");
 		T.near(1, s2.get(P + "Host|no_benchmark"), "only the 10.0 host");
-		T.near(3, s2.get(P + "Host|non_compliant"),
-				"9.1 unreadable + new unreadable + 9.0 upgraded (fails)");
+		T.near(1, s2.get(P + "Host|non_compliant"),
+				"9.0 upgraded (fails); nothing-read hosts not counted");
 
 		// ---------------- cycle 3: bulk read fails -> nothing changes
 		String another = null;

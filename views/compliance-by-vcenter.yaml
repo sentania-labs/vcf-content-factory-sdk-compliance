@@ -2,18 +2,18 @@ id: e4838292-faf0-494a-a6af-fb92ada63585
 name: "[VCF Content Factory] Compliance by vCenter and Object Type"
 description: >
   Per-vCenter compliance rollup by object kind from the VCF-CF Compliance
-  adapter, on the VMWARE VMwareAdapter Instance. All Controls Passing, Passed and Evaluated are the
-  vCenter's totals across every kind: summed down the totals row, Passed
-  over Evaluated is the Environment Controls Passing tile. vCenter Appliance
-  Controls Passing is the vCenter appliance kind only (its VAMI and vCenter
-  settings controls). Per kind: Controls Passing (controls passed over
-  controls evaluated; unreadable controls are in neither count, and with
-  nothing evaluated there is no percentage, never 100), objects scored,
-  non-compliant, and Not in VCF Ops (listed by vCenter, no VCF Operations
-  resource, so not scored). Controls Unreadable counts unreadable controls
-  across every kind. The totals row sums the counts, never a percentage.
-  Feeds Environment Overview W3. Sort by All Controls Passing ascending to surface the
-  worst vCenter first.
+  adapter, on the VMWARE VMwareAdapter Instance. All Controls Passing,
+  Passed and Evaluated are the vCenter's totals across every kind; summed
+  down the totals row, Passed over Evaluated is the Environment Controls
+  Passing tile. vCenter Appliance is the appliance kind only. Per kind:
+  Controls Passing (controls passed over controls evaluated, from what was
+  read this cycle), objects scored, non-compliant, and Not in VCF Ops (no
+  VCF Operations resource, not scored). When nothing of a kind could be
+  read this cycle, no new percentage is pushed and the cell keeps its last
+  value, never 100: Objects with Unreadable Controls, beside the Controls
+  Passing tile, names those objects and why. The totals row sums the
+  counts, never a percentage. Sort by All Controls Passing ascending to
+  surface the worst vCenter first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VMwareAdapter Instance
@@ -100,13 +100,11 @@ columns:
     display_name: "Portgroup Not in VCF Ops"
   - attribute: VCF-CF Compliance|Rollup|All|no_benchmark
     display_name: "No Benchmark"
-  - attribute: VCF-CF Compliance|Rollup|All|controls_unreadable
-    display_name: "Controls Unreadable"
 
 summary:
   display_name: "Environment Totals"
   aggregation: SUM
-  columns: [2, 3, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20, 22, 23, 24, 25, 26]
+  columns: [2, 3, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20, 22, 23, 24, 25]
 
 released: false
 version: "1.0.0"

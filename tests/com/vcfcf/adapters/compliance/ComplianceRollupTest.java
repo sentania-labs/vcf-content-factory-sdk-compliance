@@ -42,12 +42,15 @@ public final class ComplianceRollupTest {
 
 		Map<String, Double> s = r.toStats();
 
-		T.near(4, s.get(P + "Host|scored"),
-				"all-unreadable host is scored (0), not skipped");
-		T.near(270, s.get(P + "Host|score_sum"), "host sum 90+100+0+80");
-		T.near(67.5, s.get(P + "Host|avg_score"), "host avg");
-		T.near(3, s.get(P + "Host|non_compliant"),
-				"host non-compliant: fail + all-unreadable + partial");
+		// Build 95: counts come from what was read; the all-unreadable
+		// host is not scored and not non-compliant (has_unreadable on the
+		// object carries it).
+		T.near(3, s.get(P + "Host|scored"),
+				"all-unreadable host is not scored (build 95)");
+		T.near(270, s.get(P + "Host|score_sum"), "host sum 90+100+80");
+		T.near(90, s.get(P + "Host|avg_score"), "host avg");
+		T.near(2, s.get(P + "Host|non_compliant"),
+				"host non-compliant: fail + partial (all-unreadable not)");
 		T.near(1, s.get(P + "Host|no_benchmark"), "host no benchmark");
 		T.check(!s.containsKey(P + "Host|scored_stale"),
 				"scored_stale retired in build 63");
@@ -68,10 +71,10 @@ public final class ComplianceRollupTest {
 		T.near(0, s.get(P + "vDS|scored"), "vDS zero");
 		T.near(1, s.get(P + "Portgroup|no_benchmark"), "pg no benchmark");
 
-		T.near(7, s.get(P + "All|scored"), "all scored 4+2+1");
+		T.near(6, s.get(P + "All|scored"), "all scored 3+2+1");
 		T.near(500, s.get(P + "All|score_sum"), "all sum 270+180+50");
-		T.near(500.0 / 7, s.get(P + "All|avg_score"), "all weighted avg");
-		T.near(5, s.get(P + "All|non_compliant"), "all non-compliant 3+1+1");
+		T.near(500.0 / 6, s.get(P + "All|avg_score"), "all weighted avg");
+		T.near(4, s.get(P + "All|non_compliant"), "all non-compliant 2+1+1");
 		T.near(2, s.get(P + "All|no_benchmark"), "all no benchmark");
 
 		T.near(1, s.get(P + "Benchmark|SCG_7.0|objects"), "7.0 objects");
@@ -94,19 +97,19 @@ public final class ComplianceRollupTest {
 		T.near(0, e.get(P + "All|scored"), "empty scored");
 		T.check(!e.containsKey(P + "All|avg_score"), "empty has no avg");
 
-		// Review B2: version unreadable (no previous benchmark) is
-		// non-compliant and in the unknown bucket, never no_benchmark.
+		// Review B2: version unreadable (no previous benchmark) is in the
+		// unknown bucket, never no_benchmark. Build 95: nothing was read,
+		// so that bucket is all it is counted in (not scored, not nc).
 		ComplianceRollup u = new ComplianceRollup();
 		u.recordVersionUnreadable(BenchmarkSelector.Kind.HOST);
 		Map<String, Double> us = u.toStats();
-		T.near(1, us.get(P + "Host|non_compliant"), "unreadable version nc");
+		T.near(0, us.get(P + "Host|non_compliant"), "not counted nc");
 		T.near(0, us.get(P + "Host|no_benchmark"), "not no_benchmark");
 		T.near(1, us.get(P + "Benchmark|unknown|objects"), "unknown bucket");
 		T.near(0, us.get(P + "Benchmark|none|objects"), "not none bucket");
-		// Build 65 (W1): nothing collected -> scored with 0.
-		T.near(1, us.get(P + "Host|scored"), "version-unreadable is scored");
-		T.near(0, us.get(P + "Host|score_sum"), "with score 0");
-		T.near(0, us.get(P + "Host|avg_score"), "avg 0");
+		T.near(0, us.get(P + "Host|scored"), "version-unreadable not scored");
+		T.near(0, us.get(P + "Host|score_sum"), "no score summed");
+		T.check(!us.containsKey(P + "Host|avg_score"), "no avg, never 0");
 
 		T.check(ComplianceRollup.isNonCompliant(0, 1), "unreadable -> nc");
 		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");
@@ -348,7 +351,8 @@ public final class ComplianceRollupTest {
 	/**
 	 * Build 95: a vCenter with a mix of kinds. Per kind and for All,
 	 * pass_rate = controls_passed / controls_evaluated * 100; unreadable
-	 * controls are in neither count and are counted on their own.
+	 * controls are in neither count and have no rollup key (build 95
+	 * decision: each object carries has_unreadable instead).
 	 */
 	static void build95PassRate() {
 		ComplianceRollup r = new ComplianceRollup();
@@ -379,16 +383,13 @@ public final class ComplianceRollupTest {
 
 		T.near(18, s.get(P + "Host|controls_evaluated"), "host evaluated 10+8+0");
 		T.near(17, s.get(P + "Host|controls_passed"), "host passed 9+8+0");
-		T.near(42, s.get(P + "Host|controls_unreadable"), "host unreadable 2+40");
 		T.near(1700.0 / 18, s.get(P + "Host|pass_rate"),
 				"host pass_rate = passed / evaluated");
 		T.near(38, s.get(P + "VM|controls_evaluated"), "vm evaluated");
 		T.near(30, s.get(P + "VM|controls_passed"), "vm passed");
-		T.near(0, s.get(P + "VM|controls_unreadable"), "vm unreadable");
 		T.near(3000.0 / 38, s.get(P + "VM|pass_rate"), "vm pass_rate");
 		T.near(20, s.get(P + "vCenter|controls_evaluated"), "vc evaluated");
 		T.near(15, s.get(P + "vCenter|controls_passed"), "vc passed");
-		T.near(1, s.get(P + "vCenter|controls_unreadable"), "vc unreadable");
 		T.near(75, s.get(P + "vCenter|pass_rate"),
 				"vc pass_rate 15/20, unreadable not in the denominator");
 		T.near(100, s.get(P + "Portgroup|pass_rate"), "pg pass_rate");
@@ -400,24 +401,25 @@ public final class ComplianceRollupTest {
 
 		T.near(88, s.get(P + "All|controls_evaluated"), "all evaluated");
 		T.near(74, s.get(P + "All|controls_passed"), "all passed");
-		T.near(43, s.get(P + "All|controls_unreadable"), "all unreadable");
 		T.near(7400.0 / 88, s.get(P + "All|pass_rate"),
 				"All pass_rate is the ratio of sums");
 		// The object mean is unchanged and differs from the pass rate.
 		double mean = s.get(P + "All|score_sum") / s.get(P + "All|scored");
 		T.near(mean, s.get(P + "All|avg_score"), "avg_score still the mean");
-		T.check(Math.abs(mean - s.get(P + "All|pass_rate")) > 1,
+		T.check(Math.abs(mean - s.get(P + "All|pass_rate")) > 0.5,
 				"pass_rate is not the object mean");
+		for (String key : s.keySet()) {
+			T.check(!key.endsWith("|controls_unreadable"),
+					"no unreadable rollup key: " + key);
+		}
 		// Per-kind sums add up to All.
-		double ev = 0, pa = 0, un = 0;
+		double ev = 0, pa = 0;
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			ev += s.get(P + k.rollupName + "|controls_evaluated");
 			pa += s.get(P + k.rollupName + "|controls_passed");
-			un += s.get(P + k.rollupName + "|controls_unreadable");
 		}
 		T.near(88, ev, "kinds sum to All evaluated");
 		T.near(74, pa, "kinds sum to All passed");
-		T.near(43, un, "kinds sum to All unreadable");
 		T.check(ComplianceRollup.passRate(0, 0) == null, "passRate(0,0) null");
 		T.near(50, ComplianceRollup.passRate(1, 2), "passRate(1,2)");
 	}
@@ -435,7 +437,7 @@ public final class ComplianceRollupTest {
 		r.markIncomplete(BenchmarkSelector.Kind.VM);
 		Map<String, Double> s = r.toStats();
 		for (String k : new String[] {"controls_evaluated", "controls_passed",
-				"controls_unreadable", "pass_rate"}) {
+				"pass_rate"}) {
 			T.check(!s.containsKey(P + "VM|" + k), "VM|" + k + " held back");
 			T.check(!s.containsKey(P + "All|" + k), "All|" + k + " held back");
 		}
@@ -447,13 +449,15 @@ public final class ComplianceRollupTest {
 
 	/**
 	 * Build 95: nothing evaluated means no pass_rate (never 100), with the
-	 * counts still pushed; all-unreadable controls are counted, not passed.
+	 * counts still pushed; all-unreadable controls are neither counted nor
+	 * passed, and the object is not scored (build 95).
 	 */
 	static void build95NothingEvaluated() {
 		Map<String, Double> e = new ComplianceRollup().toStats();
 		T.near(0, e.get(P + "All|controls_evaluated"), "empty evaluated 0");
 		T.near(0, e.get(P + "All|controls_passed"), "empty passed 0");
-		T.near(0, e.get(P + "All|controls_unreadable"), "empty unreadable 0");
+		T.check(!e.containsKey(P + "All|controls_unreadable"),
+				"no unreadable rollup key (build 95 decision)");
 		T.check(!e.containsKey(P + "All|pass_rate"), "empty: no pass_rate");
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			T.check(!e.containsKey(P + k.rollupName + "|pass_rate"),
@@ -466,12 +470,15 @@ public final class ComplianceRollupTest {
 		u.recordVersionUnreadable(BenchmarkSelector.Kind.VM);
 		Map<String, Double> us = u.toStats();
 		T.near(0, us.get(P + "Host|controls_evaluated"), "unreadable: 0 eval");
-		T.near(40, us.get(P + "Host|controls_unreadable"), "40 unreadable");
+		T.near(0, us.get(P + "Host|scored"), "all unreadable: not scored");
+		T.near(0, us.get(P + "Host|non_compliant"), "all unreadable: not nc");
+		T.check(!us.containsKey(P + "Host|controls_unreadable"),
+				"no unreadable rollup key");
 		T.check(!us.containsKey(P + "Host|pass_rate"),
 				"all unreadable: no pass_rate, never 100");
 		T.check(!us.containsKey(P + "All|pass_rate"), "All: no pass_rate");
-		T.near(0, us.get(P + "All|avg_score"),
-				"the object mean still reads 0 (build 63 rule unchanged)");
+		T.check(!us.containsKey(P + "All|avg_score"),
+				"nothing read: no object mean either (build 95)");
 	}
 
 	/**

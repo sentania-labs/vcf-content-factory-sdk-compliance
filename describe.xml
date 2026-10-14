@@ -114,9 +114,6 @@
           <ResourceAttribute key="controls_passed" nameKey="37"
                              dataType="float" isProperty="false"
                              defaultMonitored="true"/>
-          <ResourceAttribute key="controls_unreadable" nameKey="38"
-                             dataType="float" isProperty="false"
-                             defaultMonitored="true"/>
           <ResourceAttribute key="pass_rate" nameKey="39"
                              dataType="float" isProperty="false"
                              defaultMonitored="true" unit="%"/>
@@ -129,9 +126,10 @@
            Build 95: pass_rate is the displayed percentage, summed
            controls_passed over summed controls_evaluated times 100 (a ratio
            of sums across vCenters, never a mean of per-vCenter rates).
-           Unreadable controls are in neither sum; controls_unreadable
-           carries them. With nothing evaluated anywhere the division is
-           0/0: no data, never 100. -->
+           Unreadable controls are in neither sum (build 95, Scott
+           2026-10-14: no unreadable rollup key; each object carries
+           has_unreadable and its reason instead). With nothing evaluated
+           anywhere the division is 0/0: no data, never 100. -->
       <ComputedMetrics>
         <ComputedMetric key="Rollup|Environment|scored" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
         <ComputedMetric key="Rollup|Environment|non_compliant" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|non_compliant})"/>
@@ -139,7 +137,6 @@
         <ComputedMetric key="Rollup|Environment|avg_score" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|score_sum}) / sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
         <ComputedMetric key="Rollup|Environment|controls_evaluated" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_evaluated})"/>
         <ComputedMetric key="Rollup|Environment|controls_passed" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_passed})"/>
-        <ComputedMetric key="Rollup|Environment|controls_unreadable" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_unreadable})"/>
         <ComputedMetric key="Rollup|Environment|pass_rate" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_passed}) / sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_evaluated}) * 100"/>
       </ComputedMetrics>
     </ResourceKind>

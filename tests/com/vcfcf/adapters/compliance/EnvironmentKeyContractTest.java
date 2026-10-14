@@ -174,9 +174,9 @@ public final class EnvironmentKeyContractTest {
 				List.of(all + "score_sum", all + "scored"));
 		wantShape.put("Rollup|Environment|avg_score", sumRatio);
 		// Build 95: control counts summed; pass_rate is summed passed over
-		// summed evaluated, in that order, times 100 (a ratio of sums).
-		for (String c : List.of("controls_evaluated", "controls_passed",
-				"controls_unreadable")) {
+		// summed evaluated, in that order, times 100 (a ratio of sums). No
+		// unreadable key (Scott 2026-10-14: flagged per object instead).
+		for (String c : List.of("controls_evaluated", "controls_passed")) {
 			wantRefs.put("Rollup|Environment|" + c, List.of(all + c));
 			wantShape.put("Rollup|Environment|" + c, sumOne);
 		}
