@@ -90,7 +90,7 @@ public final class VSphereClient {
 	private final String username;
 	private final String password;
 	private final SSLSocketFactory sslFactory;
-	private final Log log;                 // nullable — standalone use logs nothing
+	private final Log log;                 // nullable: standalone use logs nothing
 
 	// Build 95: this cycle's measurement (null: nothing is counted).
 	private volatile CycleMetrics metrics;
