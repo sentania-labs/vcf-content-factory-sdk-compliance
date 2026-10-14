@@ -18,7 +18,8 @@ for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
         MixedVersionSimulationTest Build74ReadPathsTest \
         Build76CleanupAbsentTest Build77FaultTest \
         EnvironmentKeyContractTest EsxcliCycleCacheTest OverridesTest \
-        CertificateTest Build95CollectionTest Build95TriageTest; do
+        CertificateTest Build95CollectionTest Build95TriageTest \
+        Build95PrefixBoundsTest; do
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 
