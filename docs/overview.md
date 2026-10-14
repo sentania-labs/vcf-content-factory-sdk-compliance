@@ -336,22 +336,31 @@ collection continues; compliance is never failed over a stitch error.
   read, inventory names taken from the listing call, connections kept
   open between calls, and a property path that does not resolve never
   falls back to fetching a host's or VM's whole configuration (those
-  controls are unreadable with reason `prefix-cap`).
+  controls are unreadable with reason `prefix-cap`). When vCenter drops
+  the session mid-cycle the adapter logs in again once; if that login
+  fails (a changed password, for example) it does not try again until the
+  next cycle, so a bad credential costs one failed login per cycle, not
+  one per read, and cannot trip the SSO lockout policy. The reads after it
+  are unreadable.
 
 - **Stop Collecting stops within one object (build 95, issue #16).**
   Stopping collection on the account abandons the running cycle before the
   next host, VM, switch, portgroup or cluster, instead of after the whole
   vCenter walk. Nothing more is read or pushed that cycle (values already
-  pushed stay), and the log says where it stopped ("ComplianceAdapter
-  cycle abandoned after ..."). There is no time limit on a cycle yet.
+  pushed stay), and one WARN says where it stopped ("ComplianceAdapter
+  cycle abandoned after ...") followed by the cycle's timing so far.
+  There is no time limit on a cycle yet.
 
 - **Bulk read shadow (build 95).** After each kind is scored, the adapter
   also reads that kind's objects in a few paged bulk calls, evaluates the
   same controls from that data and compares. Nothing it finds changes a
   score, a push or an alert. Each cycle logs one INFO line per kind,
   starting `Bulk shadow <kind>:`, with the controls compared and the
-  disagreements, and one `Bulk shadow disagreement:` line per difference
-  (object, control, per-object value, bulk value; the first 25 per kind).
+  disagreements, the pages read and their size (total bytes and the
+  largest page; each page's size is at DEBUG), and one
+  `Bulk shadow disagreement:` line per difference (object, control,
+  per-object value, bulk value; the first 25 per kind). VMs are read 50
+  per page, hosts 10.
   Zero disagreements across every vCenter is what lets a later build
   score from the bulk reads, which grow with pages instead of objects.
 
