@@ -32,6 +32,20 @@ import java.util.function.Function;
  */
 public final class ComplianceDecisions {
 
+	/**
+	 * Build 95 (issue #25): the HTTP Basic Authorization header value for
+	 * the vCenter REST and VAMI sessions, with the credential encoded as
+	 * UTF-8 explicitly (as the SOAP login sends it). The platform default
+	 * charset is not UTF-8 on every collector, and a non-ASCII password then
+	 * failed Test Connection and the appliance reads while SOAP worked.
+	 */
+	public static String basicAuthorization(String username, String password) {
+		return "Basic " + java.util.Base64.getEncoder().encodeToString(
+				(username + ":" + password).getBytes(
+						java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+
 	private ComplianceDecisions() {}
 
 	static final String K = "VCF-CF Compliance|";

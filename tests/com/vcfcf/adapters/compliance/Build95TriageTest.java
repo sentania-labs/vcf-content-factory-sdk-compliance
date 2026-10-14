@@ -22,6 +22,8 @@ import java.util.Map;
  *   <li>#23 / #28: configure releases the previous vCenter session and
  *       Suite API client before making new ones; the dead REST client
  *       field is gone.</li>
+ *   <li>#25: REST and VAMI Basic auth encode the credential as UTF-8,
+ *       whatever the platform charset.</li>
  * </ul>
  * Run from the repo root.
  */
@@ -36,6 +38,7 @@ public final class Build95TriageTest {
 		stopBetweenObjects();
 		responseCap();
 		releaseOnReconfigure();
+		basicAuthUtf8();
 		System.out.println("Build95TriageTest: all assertions passed");
 	}
 
@@ -247,6 +250,29 @@ public final class Build95TriageTest {
 			FakeVCenter.Req lo = f.of("Logout").get(0);
 			T.check(lo.cookie != null && lo.cookie.contains("s1"),
 					"the session's own cookie was logged out");
+		}
+	}
+
+	/** #25. */
+	static void basicAuthUtf8() throws Exception {
+		String h = ComplianceDecisions.basicAuthorization(
+				"svc-compliance@vsphere.local", "p\u00e4ss\u20acw\u00f6rd");
+		T.check(h.startsWith("Basic "), "Basic scheme");
+		byte[] got = java.util.Base64.getDecoder().decode(h.substring(6));
+		T.check(java.util.Arrays.equals(
+				("svc-compliance@vsphere.local:p\u00e4ss\u20acw\u00f6rd")
+						.getBytes(java.nio.charset.StandardCharsets.UTF_8), got),
+				"credential bytes are UTF-8");
+		T.eq("Basic dXNlcjpwYXNz",
+				ComplianceDecisions.basicAuthorization("user", "pass"),
+				"ASCII unchanged");
+		for (String f : new String[] {
+				"src/com/vcfcf/adapters/compliance/VamiApiClient.java",
+				"src/com/vcfcf/adapters/compliance/VCenterApiClient.java"}) {
+			String code = OverridesTest.stripComments(OverridesTest.readSrc(f));
+			T.check(!code.contains(".getBytes()"), f + ": no platform charset");
+			T.check(code.contains("ComplianceDecisions.basicAuthorization("),
+					f + ": uses the UTF-8 helper");
 		}
 	}
 }
