@@ -338,6 +338,13 @@ collection continues; compliance is never failed over a stitch error.
   falls back to fetching a host's or VM's whole configuration (those
   controls are unreadable with reason `prefix-cap`).
 
+- **Stop Collecting stops within one object (build 95, issue #16).**
+  Stopping collection on the account abandons the running cycle before the
+  next host, VM, switch, portgroup or cluster, instead of after the whole
+  vCenter walk. Nothing more is read or pushed that cycle (values already
+  pushed stay), and the log says where it stopped ("ComplianceAdapter
+  cycle abandoned after ..."). There is no time limit on a cycle yet.
+
 - **Bulk read shadow (build 95).** After each kind is scored, the adapter
   also reads that kind's objects in a few paged bulk calls, evaluates the
   same controls from that data and compares. Nothing it finds changes a
