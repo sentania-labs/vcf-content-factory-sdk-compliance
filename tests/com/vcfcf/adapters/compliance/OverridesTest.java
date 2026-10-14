@@ -1134,7 +1134,7 @@ public final class OverridesTest {
 				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
 						+ "bundled, cycleOverrides.skipped);",
 				"ComplianceDecisions.orphanProps(stale, p.profileName, "
-						+ "cycleOverrides.skipped, config.overridesFile)");
+						+ "cycleOverrides.skipped, cycleConfig.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its
 		// skipped controls in force, every cycle, and the cleanup treats
@@ -1150,7 +1150,7 @@ public final class OverridesTest {
 		inOrder(skipIn, "skipInForce",
 				"ComplianceDecisions.skipPush(kind,",
 				"cycleUnadjusted.get(d.profileName), r.skipped,",
-				"config.overridesFile);");
+				"cycleConfig.overridesFile);");
 		T.check(!skipIn.contains("latest"),
 				"the skip push never depends on a read-back");
 		T.check(!skipIn.contains("stitcher."),

@@ -353,7 +353,11 @@ collection continues; compliance is never failed over a stitch error.
   fails (a changed password, for example) it does not try again until the
   next cycle, so a bad credential costs one failed login per cycle, not
   one per read, and cannot trip the SSO lockout policy. The reads after it
-  are unreadable.
+  are unreadable. Editing the account while a cycle runs does not switch
+  that cycle to the new settings part-way: it finishes on the clients it
+  started with, which the edit has closed, so its remaining reads are
+  unreadable (never read from another vCenter), and the next cycle uses
+  the new settings.
 
 - **Stop Collecting stops within one object (build 95, issue #16).**
   Stopping collection on the account abandons the running cycle before the

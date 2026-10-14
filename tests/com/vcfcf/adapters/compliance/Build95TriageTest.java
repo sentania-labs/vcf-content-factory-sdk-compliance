@@ -346,23 +346,27 @@ public final class Build95TriageTest {
 		String code = OverridesTest.stripComments(ca);
 		T.check(!code.contains("vcApi"), "no vcApi field or use (#28)");
 		// Configure needs the SDK, so its order is pinned from source:
-		// build, swap, then release (no null window, review W4).
+		// build, swap, then release (no null window, review W4). Review
+		// N13: configure swaps the configured* fields; the cycle copies
+		// them at its start (tests/test_cycle_snapshot.py).
 		String configure = OverridesTest.body(ca,
 				"protected void configureAdapter(");
 		OverridesTest.inOrder(configure, "configureAdapter",
-				"VSphereClient oldVsphere = this.vsphere;",
-				"SuiteApiStitcher oldSuite = this.suiteStitcher;",
+				"VSphereClient oldVsphere = this.configuredVsphere;",
+				"SuiteApiStitcher oldSuite = this.configuredSuite;",
 				"VSphereClient newVsphere = new VSphereClient(",
 				"newSuite = SuiteApiStitcher.create(",
-				"this.vsphere = newVsphere;",
-				"this.suiteStitcher = newSuite;",
-				"this.stitcher = newStitcher;",
+				"this.configuredVsphere = newVsphere;",
+				"this.configuredSuite = newSuite;",
+				"this.configuredStitcher = newStitcher;",
 				"releaseClients(oldVsphere, oldSuite);");
 		T.eq(1, OverridesTest.count(configure, "releaseClients("),
 				"released once per configure");
 		String flat = code.replaceAll("\\s+", " ");
 		for (String nul : new String[] {"vsphere = null;",
-				"this.vsphere = null;", "stitcher = null;"}) {
+				"this.vsphere = null;", "stitcher = null;",
+				"configuredVsphere = null;", "configuredStitcher = null;",
+				"configuredSuite = null;"}) {
 			T.check(!flat.contains(" " + nul), "no client field is nulled: "
 					+ nul);
 		}
@@ -370,7 +374,7 @@ public final class Build95TriageTest {
 				"private void releaseClients("), "releaseClients",
 				"oldVsphere.disconnect();", "oldSuite.discard();");
 		T.check(OverridesTest.body(ca, "public void onDiscard()")
-				.startsWith("releaseClients(vsphere, suiteStitcher);"),
+				.startsWith("releaseClients(configuredVsphere, configuredSuite);"),
 				"discard releases too");
 
 		// disconnect() logs the session out on vCenter and closes the

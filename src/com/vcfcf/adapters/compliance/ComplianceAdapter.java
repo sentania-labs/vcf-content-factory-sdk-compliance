@@ -56,10 +56,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	private static final String ADAPTER_KIND = "vcfcf_compliance";
 
+	// Review N13: configureAdapter writes the configured* fields; each
+	// cycle copies them once, at its start, into the four below (and the
+	// account into cycleConfig), and the cycle reads only those. An
+	// instance edit during a cycle therefore never switches the cycle to
+	// the new vCenter part-way: the rest of that cycle stays on the old
+	// clients, which configure has released, so its remaining calls fail
+	// (UNREADABLE, never read from another vCenter), and the next cycle
+	// starts on the new ones.
+	private volatile VSphereClient configuredVsphere;
+	private volatile BenchmarkLoader configuredLoader;
+	private volatile SuiteApiStitcher configuredSuite;
+	private volatile ComplianceStitcher configuredStitcher;
 	private volatile VSphereClient vsphere;
 	private volatile BenchmarkLoader benchmarkLoader;
 	private volatile SuiteApiStitcher suiteStitcher;
 	private volatile ComplianceStitcher stitcher;
+	private volatile ComplianceConfig cycleConfig;
 
 	// Build 59 (review N3): benchmark applied to each object last cycle,
 	// used only for the B2 "version unreadable" fallback. Emptied only by a
@@ -174,22 +187,24 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// leaves a live session and HTTP pools behind in the collector JVM.
 		// Review W4: the new clients are built first, swapped in, and only
 		// then are the old ones released, so a cycle still running never
-		// sees a null client; its calls already on the old client fail
-		// (the closed client does not log in again). (Issue #28: the REST
+		// sees a null client. Review N13: that cycle keeps the old clients
+		// to its end (it copied them at its start), so its remaining calls
+		// fail (the closed client does not log in again) instead of
+		// switching to the new vCenter part-way. (Issue #28: the REST
 		// client built here was never used by collection; it is gone. Test
 		// Connection builds its own.)
-		VSphereClient oldVsphere = this.vsphere;
-		SuiteApiStitcher oldSuite = this.suiteStitcher;
+		VSphereClient oldVsphere = this.configuredVsphere;
+		SuiteApiStitcher oldSuite = this.configuredSuite;
 		VSphereClient newVsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
 				sslSocketFactoryFor(config.vcenterHost),
 				clientLog(componentLogger(VSphereClient.class)));
 
-		this.benchmarkLoader = new BenchmarkLoader();
+		BenchmarkLoader newLoader = new BenchmarkLoader();
 		// HOLD (owner decision pending): "Read vCenter appliance settings".
 		// Off = the vami_api controls load as manual review for this
 		// instance (no score, no per-control alert, not attempted).
-		this.benchmarkLoader.setApplianceReads(config.readApplianceSettings);
+		newLoader.setApplianceReads(config.readApplianceSettings);
 		// An instance edit re-runs configure (and an upgrade from a build with
 		// a fixed Compliance Profile lands here too): forget last cycle's
 		// benchmarks so the B2 fallback never reuses a benchmark chosen under
@@ -217,9 +232,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ e.getMessage());
 		}
 		// Review W4: swap, then release the previous clients.
-		this.vsphere = newVsphere;
-		this.suiteStitcher = newSuite;
-		this.stitcher = newStitcher;
+		this.configuredVsphere = newVsphere;
+		this.configuredLoader = newLoader;
+		this.configuredSuite = newSuite;
+		this.configuredStitcher = newStitcher;
 		releaseClients(oldVsphere, oldSuite);
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
@@ -228,7 +244,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " overridesFile="
 				+ (config.overridesFile.isEmpty() ? "(none)"
 						: config.overridesFile)
-				+ " stitcher=" + (stitcher != null));
+				+ " stitcher=" + (newStitcher != null));
 	}
 
 	/**
@@ -555,6 +571,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// summary line; measurement only.
 		CycleMetrics metrics = new CycleMetrics();
 		cycleMetrics = metrics;
+		// Review N13: one set of clients and one account for the whole
+		// cycle (see the field comment).
+		cycleConfig = config;
+		vsphere = configuredVsphere;
+		benchmarkLoader = configuredLoader;
+		suiteStitcher = configuredSuite;
+		stitcher = configuredStitcher;
 		if (vsphere != null) vsphere.setMetrics(metrics);
 		if (stitcher != null) stitcher.setMetrics(metrics);
 		try {
@@ -596,7 +619,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			VCenterCertificates.Failure f = VCenterCertificates.classify(e);
 			if (f == null) throw e;
 			throw new Exception(VCenterCertificates.message(f,
-					config.vcenterHost), e);
+					cycleConfig.vcenterHost), e);
 		}
 	}
 
@@ -612,7 +635,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void markCycleNotCollected(Exception cause) {
 		ComplianceStitcher st = stitcher;
 		if (st == null) {
-			logWarn("vCenter " + config.vcenterHost + " not reached this "
+			logWarn("vCenter " + cycleConfig.vcenterHost + " not reached this "
 					+ "cycle and no Suite API stitcher: Rollup|incomplete "
 					+ "cannot be pushed; the last scores stay in place");
 			return;
@@ -623,27 +646,27 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						st.loadVCenterAdapterInstance();
 						ComplianceStitcher.HostEntry he =
 								st.matchVCenterAdapterInstance(
-										config.vcenterHost, null);
+										cycleConfig.vcenterHost, null);
 						return he == null ? null : he.resourceId;
 					},
 					(rid, stats) -> st.pushStats(rid, stats,
 							System.currentTimeMillis()));
 			if (id == null) {
-				logWarn("vCenter " + config.vcenterHost + " not reached this "
+				logWarn("vCenter " + cycleConfig.vcenterHost + " not reached this "
 						+ "cycle (" + cause.getClass().getSimpleName() + "), "
 						+ "and its VMwareAdapter Instance could not be "
 						+ "resolved without vCenter (no VCURL equal to the "
 						+ "entered host): Rollup|incomplete is NOT pushed; "
 						+ "the last scores stay in place");
 			} else {
-				logWarn("vCenter " + config.vcenterHost + " not reached this "
+				logWarn("vCenter " + cycleConfig.vcenterHost + " not reached this "
 						+ "cycle (" + cause.getClass().getSimpleName() + "): "
 						+ ComplianceRollup.INCOMPLETE_KEY + " = 1 pushed to "
 						+ "resource " + id + "; the compliance values shown "
 						+ "are from the last completed cycle");
 			}
 		} catch (RuntimeException e) {
-			logWarn("vCenter " + config.vcenterHost + " not reached this "
+			logWarn("vCenter " + cycleConfig.vcenterHost + " not reached this "
 					+ "cycle, and pushing Rollup|incomplete failed: " + e);
 		}
 	}
@@ -725,7 +748,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (cs.skipPushedKeys > 0) {
 			// Build 92: the skipped controls are pushed every cycle, so the
 			// symptom on each key sees its cancel cycles.
-			logInfo("Overrides file '" + config.overridesFile + "': "
+			logInfo("Overrides file '" + cycleConfig.overridesFile + "': "
 					+ cs.skipPushedKeys + " skipped control key(s) set to -1 "
 					+ "(not evaluated) on " + cs.skipPushedObjects
 					+ " object(s) this cycle");
@@ -870,7 +893,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return sas.get(path);
 		};
 		OverridesStore.Snapshot snap = overridesStore.refresh(
-				config.overridesFile, fetcher, Instant.now());
+				cycleConfig.overridesFile, fetcher, Instant.now());
 		switch (snap.status) {
 			case ABSENT:
 				logWarn("Overrides file '" + snap.fileName + "' not loaded: "
@@ -993,7 +1016,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		if (vcEntry == null) {
 			logWarn("No VMwareAdapter Instance resolved for "
-					+ config.vcenterHost + ": the per-vCenter compliance "
+					+ cycleConfig.vcenterHost + ": the per-vCenter compliance "
 					+ "rollup (VCF-CF Compliance|Rollup|*) is NOT pushed this "
 					+ "cycle");
 			return;
@@ -1066,7 +1089,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			case NO_VCENTER:
 				// DEBUG: the unresolved vCenter is already reported at WARN
 				// by the stitcher, collectVCenter and pushRollup this cycle.
-				logDebug("vCenter " + config.vcenterHost + " is NOT linked "
+				logDebug("vCenter " + cycleConfig.vcenterHost + " is NOT linked "
 						+ "under ComplianceWorld this cycle: its VMwareAdapter "
 						+ "Instance was not resolved, so the environment "
 						+ "totals do not include it");
@@ -1274,7 +1297,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		return ComplianceDecisions.skipPush(kind,
 				cycleUnadjusted.get(d.profileName), r.skipped,
-				config.overridesFile);
+				cycleConfig.overridesFile);
 	}
 
 	/** One object queued for end-of-cycle cleanup. */
@@ -1405,7 +1428,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			stitcher.pushProperties(p.resourceId,
 					ComplianceDecisions.orphanProps(stale, p.profileName,
 							cycleOverrides.skipped,
-							config.overridesFile), ts);
+							cycleConfig.overridesFile), ts);
 			stitcher.pushStats(p.resourceId,
 					ComplianceDecisions.orphanStats(stale), ts);
 			cs.cleanedObjects++;
@@ -1933,7 +1956,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			BenchmarkSelector selector, String vcVersion,
 			ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) {
-		String resourceName = config.vcenterHost;
+		String resourceName = cycleConfig.vcenterHost;
 		String moid = "vcenter";
 		beginObject(BenchmarkSelector.Kind.VCENTER);
 		seen.add(LastBenchmarkMemory.key(BenchmarkSelector.Kind.VCENTER,
@@ -2406,8 +2429,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		VamiApiClient client = new VamiApiClient(
-				config.baseUrl(), config.username, config.password,
-				sslContextFor(config.vcenterHost), this::logWarn);
+				cycleConfig.baseUrl(), cycleConfig.username,
+				cycleConfig.password, sslContextFor(cycleConfig.vcenterHost),
+				this::logWarn);
 		try {
 			java.util.Map<String, Object> values = new java.util.HashMap<>();
 			for (BenchmarkProfile.Control c : controls) {
@@ -2559,7 +2583,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// Review W4: the fields keep the (now closed) clients, so a cycle
 		// still running fails its remaining reads instead of an NPE or a
 		// fresh login.
-		releaseClients(vsphere, suiteStitcher);
+		releaseClients(configuredVsphere, configuredSuite);
 		super.onDiscard();
 	}
 

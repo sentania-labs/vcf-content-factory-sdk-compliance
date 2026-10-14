@@ -270,10 +270,11 @@ public final class CertificateTest {
 				"VCenterApiClient testApi = new VCenterApiClient(",
 				"testCfg.baseUrl(),",
 				"sslContextFor(testCfg.vcenterHost));");
+		// Review N13: the cycle reads its account copy (cycleConfig).
 		OverridesTest.inOrder(ca, "VAMI client", "new VamiApiClient(",
-				"config.baseUrl(),",
-				"sslContextFor(config.vcenterHost), this::logWarn);");
-		T.eq(3, OverridesTest.count(ca, "sslContextFor(config.vcenterHost)")
+				"cycleConfig.baseUrl(),",
+				"sslContextFor(cycleConfig.vcenterHost),", "this::logWarn);");
+		T.eq(3, OverridesTest.count(ca, "sslContextFor(cycleConfig.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(testCfg.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(dialledHost)"),
 				"every context build names the dialled host");
@@ -354,7 +355,7 @@ public final class CertificateTest {
 				"ComplianceDecisions.markNotCollected(lastVcResourceId,",
 				"st.loadVCenterAdapterInstance();",
 				"st.matchVCenterAdapterInstance(",
-				"config.vcenterHost, null);",
+				"cycleConfig.vcenterHost, null);",
 				"st.pushStats(rid, stats,",
 				"} catch (RuntimeException e) {");
 		OverridesTest.inOrder(ca, "last resolved id kept per configure",

@@ -65,6 +65,7 @@ python3 tests/test_dashboard_widget_types.py
 python3 tests/test_overrides_template.py
 python3 tests/test_pass_rate_bindings.py
 python3 tests/test_build95_dashboards.py
+python3 tests/test_cycle_snapshot.py
 # Printed last and on stdout so a passing exit code on a workstation is
 # not mistaken for a run that exercised the BouncyCastle handshakes.
 if [ "$bc_skipped" = 1 ]; then
