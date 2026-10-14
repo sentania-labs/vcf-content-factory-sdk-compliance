@@ -1414,6 +1414,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.List<VSphereClient.HostInfo> hosts;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			hosts = vsphere.getHosts();
+		} catch (Exception e) {
+			// Build 95 (issue #18): a failed host listing holds the Host kind
+			// back like every other kind (Rollup|Host, All and Benchmark keys
+			// keep their values, Rollup|incomplete = 1 raises "Compliance data
+			// not collected (vCenter)") and the cycle goes on with the other
+			// kinds. It used to escape and fail the whole cycle with no
+			// incomplete signal. VMs then read their host's version on
+			// demand (vmHostVersion).
+			logWarn("Failed to enumerate hosts: " + e.getMessage()
+					+ "; Host compliance not collected this cycle, Rollup|Host "
+					+ "keys held back, other kinds still collected");
+			rollup.markIncomplete(BenchmarkSelector.Kind.HOST);
+			return hostVersions;
 		}
 		if (hosts.isEmpty()) {
 			logWarn("No hosts returned from vCenter SOAP");

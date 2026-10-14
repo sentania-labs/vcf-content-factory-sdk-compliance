@@ -286,8 +286,9 @@ collection continues; compliance is never failed over a stitch error.
   the Overview view shows `non_compliant` / `scored` beside each average so
   that is visible at a glance.
 - **A failed inventory listing holds back that vCenter's rollup for the
-  kind (build 78).** If vCenter fails to list the VMs, distributed
-  switches, portgroups or clusters in a cycle, the adapter does not push
+  kind (build 78).** If vCenter fails to list the hosts (build 95,
+  issue #18; before, a failed host listing failed the whole cycle with no
+  signal), VMs, distributed switches, portgroups or clusters in a cycle, the adapter does not push
   that kind's `Rollup|<K>|*` keys, nor the cross-kind `Rollup|All|*` and
   `Rollup|Benchmark|*|objects` keys, for that vCenter that cycle. The
   previous values stay, so the environment totals do not suddenly lose,
