@@ -455,19 +455,25 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * per-object way, the same objects are read in paged bulk calls,
 	 * evaluated locally and compared, and the differences logged. Scores,
 	 * pushes and alerts still come only from the per-object path. Not a
-	 * user setting.
+	 * user setting. Review W5: the one switch for shadow mode; off, no
+	 * kind records per-object outcomes (no memory held) and no bulk read
+	 * is made. Whether a release ships with it on is Scott's decision;
+	 * the default stays on until then.
 	 */
 	static final boolean BULK_SHADOW = true;
 
 	/**
 	 * Build 95: objects per bulk page. Hosts small (each carries its whole
 	 * config.option list, about a thousand settings), VMs larger, the
-	 * low-count kinds in between.
+	 * low-count kinds in between. Review W5: VMs 50 (was 200): a VM page
+	 * carries config.hardware and config.extraConfig, and the DOM is
+	 * several times the bytes read, in the collector JVM every adapter
+	 * shares; the shadow summary now logs the page bytes to size it.
 	 */
 	static int bulkPageSize(String type) {
 		switch (type) {
 			case "HostSystem": return 10;
-			case "VirtualMachine": return 200;
+			case "VirtualMachine": return 50;
 			case "ClusterComputeResource": return 50;
 			default: return 100;
 		}
@@ -1672,14 +1678,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		String type;
 
 		Shadow(String kind, String type) {
-			this.comparator = new ShadowComparator(kind);
+			this.comparator = new ShadowComparator(kind, BULK_SHADOW);
 			this.type = type;
 		}
 
 		void record(String moid, String name,
 				java.util.List<BenchmarkProfile.Control> slice,
 				ControlEvaluator.ComplianceResult cr) {
-			if (moid == null || cr == null) return;
+			if (!comparator.isEnabled() || moid == null || cr == null) {
+				return;   // review W5: shadow off records nothing
+			}
 			comparator.record(moid, name, cr.controlResults,
 					VSphereClient.bulkComparable(type, slice));
 			if (comparator.isRecorded(moid)) controls.put(moid, slice);
@@ -1696,7 +1704,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * per-object path, which succeeded.
 	 */
 	private void runShadow(Shadow sh) throws InterruptedException {
-		if (!BULK_SHADOW || sh == null || !sh.comparator.hasRecords()) return;
+		// Off (BULK_SHADOW false): nothing was recorded, so no bulk read.
+		if (sh == null || !sh.comparator.hasRecords()) return;
 		java.util.Set<String> paths = new java.util.LinkedHashSet<>();
 		java.util.Set<java.util.List<BenchmarkProfile.Control>> slices =
 				java.util.Collections.newSetFromMap(
@@ -1706,6 +1715,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			paths.addAll(VSphereClient.bulkPaths(sh.type, slice));
 		}
 		final int[] pages = {0};
+		final long[] bytes = {0, 0};   // total, largest page (review W5)
 		long t0 = System.nanoTime();
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.SHADOW)) {
 			VSphereClient.BulkStats st = vsphere.retrieveBulk(sh.type, paths,
@@ -1722,6 +1732,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 											moid));
 						}
 					});
+			bytes[0] = st.bytes;
+			bytes[1] = st.maxPageBytes;
 			if (!st.droppedPaths.isEmpty() || st.pathFixes > 0) {
 				logInfo("Bulk shadow " + sh.comparator.summaryKind()
 						+ ": vCenter rejected " + st.pathFixes
@@ -1736,7 +1748,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ e.getMessage());
 		}
 		long ms = (System.nanoTime() - t0) / 1_000_000L;
-		logInfo(sh.comparator.summary(pages[0], ms));
+		logInfo(sh.comparator.summary(pages[0], ms, bytes[0], bytes[1]));
 		for (String line : sh.comparator.disagreementLines()) {
 			logInfo("Bulk shadow disagreement: " + line);
 		}

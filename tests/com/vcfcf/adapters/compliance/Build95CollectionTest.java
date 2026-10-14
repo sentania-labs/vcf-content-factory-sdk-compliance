@@ -56,6 +56,7 @@ public final class Build95CollectionTest {
 		bulkPathFixAndFailedPage();
 		bulkAgreesWithPerObject();
 		comparator();
+		shadowSwitchAndPageBytes();
 		metrics();
 		System.out.println("Build95CollectionTest: all assertions passed");
 	}
@@ -704,6 +705,56 @@ public final class Build95CollectionTest {
 		capped.fail("ReadFault: page 2 failed");
 		T.check(capped.summary(1, 5).contains("bulk read FAILED (ReadFault: "
 				+ "page 2 failed)"), "failure in the summary");
+	}
+
+	/**
+	 * Review W5: shadow mode off records nothing (no memory, and the
+	 * caller skips the bulk read on hasRecords); the bulk read reports
+	 * response bytes per page and the largest page, and the summary says
+	 * them. The shipped default is unchanged (on) until Scott decides.
+	 */
+	static void shadowSwitchAndPageBytes() throws Exception {
+		List<ControlEvaluator.ControlResult> one = new ArrayList<>(
+				ControlEvaluator.evaluateControls(Arrays.asList(adv("vm.a",
+						"VirtualMachine", "a.key", "TRUE")),
+						FakeVCenter.map("a.key", "TRUE"), "vm-1")
+						.controlResults);
+		Set<String> comparable = new HashSet<>(Arrays.asList("vm.a"));
+		ShadowComparator off = new ShadowComparator("VM", false);
+		off.record("vm-1", "vm-1", one, comparable);
+		T.check(!off.isEnabled(), "off");
+		T.check(!off.hasRecords(), "off records nothing");
+		ShadowComparator on = new ShadowComparator("VM", true);
+		on.record("vm-1", "vm-1", one, comparable);
+		T.check(on.hasRecords(), "on records");
+
+		String ca = OverridesTest.readSrc(
+				"src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
+		T.check(OverridesTest.stripComments(ca).replaceAll("\\s+", " ")
+				.contains("static final boolean BULK_SHADOW = true;"),
+				"shipped default unchanged: on (decision pending)");
+		T.check(ca.contains("new ShadowComparator(kind, BULK_SHADOW)"),
+				"every kind's comparator follows the switch");
+		T.check(ca.contains("case \"VirtualMachine\": return 50;"),
+				"VM bulk page of 50");
+
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> pagedVms(r, 5);
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			VSphereClient.BulkStats st = c.retrieveBulk("VirtualMachine",
+					Arrays.asList("config.version"), 2, rows -> { });
+			T.eq(3, st.pages, "three pages");
+			T.check(st.maxPageBytes > 0, "largest page measured");
+			T.check(st.bytes >= st.maxPageBytes * 2, "total over the pages: "
+					+ st.bytes + " vs largest " + st.maxPageBytes);
+			T.check(st.bytes <= st.maxPageBytes * 3, "three pages at most "
+					+ "the largest each");
+		}
+		String sum = on.summary(3, 40, 123456, 45678);
+		T.check(sum.contains("3 page(s), 40 ms, 123456 bytes, largest page "
+				+ "45678 bytes (scores still come from the per-object path)"),
+				sum);
 	}
 
 	static void metrics() {

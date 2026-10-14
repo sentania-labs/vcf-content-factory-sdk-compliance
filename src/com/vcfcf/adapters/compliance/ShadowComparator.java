@@ -37,6 +37,9 @@ public final class ShadowComparator {
 
 	private final String kind;
 	private final int cap;
+	// Review W5: false when shadow mode is off; nothing is recorded, so
+	// nothing is held in memory and the bulk read is not made.
+	private final boolean enabled;
 	// moid -> (control id -> outcome), and moid -> object name.
 	private final Map<String, Map<String, String>> recorded = new HashMap<>();
 	private final Map<String, String> names = new HashMap<>();
@@ -48,12 +51,30 @@ public final class ShadowComparator {
 	private String failure;
 
 	public ShadowComparator(String kind) {
-		this(kind, DISAGREEMENT_LOG_CAP);
+		this(kind, DISAGREEMENT_LOG_CAP, true);
+	}
+
+	/**
+	 * Review W5: {@code enabled} false (shadow mode off) makes
+	 * {@link #record} a no-op, so {@link #hasRecords} stays false and the
+	 * caller skips the bulk read.
+	 */
+	public ShadowComparator(String kind, boolean enabled) {
+		this(kind, DISAGREEMENT_LOG_CAP, enabled);
 	}
 
 	ShadowComparator(String kind, int cap) {
+		this(kind, cap, true);
+	}
+
+	ShadowComparator(String kind, int cap, boolean enabled) {
 		this.kind = kind;
 		this.cap = cap;
+		this.enabled = enabled;
+	}
+
+	public boolean isEnabled() {
+		return enabled;
 	}
 
 	/** The comparable outcome text of one control result. */
@@ -69,7 +90,7 @@ public final class ShadowComparator {
 	public void record(String moid, String name,
 			List<ControlEvaluator.ControlResult> results,
 			java.util.Set<String> comparable) {
-		if (moid == null || results == null) return;
+		if (!enabled || moid == null || results == null) return;
 		Map<String, String> m = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult r : results) {
 			if (comparable.contains(r.scgId)) {
@@ -145,6 +166,19 @@ public final class ShadowComparator {
 					+ " more disagreement(s) not listed)");
 		}
 		return out;
+	}
+
+	/**
+	 * The summary with the response sizes (review W5): total bytes over
+	 * the pages and the largest page, so devel can size the page size and
+	 * the response cap.
+	 */
+	public String summary(int pages, long bulkMillis, long bytes,
+			long maxPageBytes) {
+		String s = summary(pages, bulkMillis);
+		int at = s.lastIndexOf(" ms (scores still come");
+		return s.substring(0, at) + " ms, " + bytes + " bytes, largest page "
+				+ maxPageBytes + " bytes" + s.substring(at + 3);
 	}
 
 	/** The one INFO line per kind per cycle. */

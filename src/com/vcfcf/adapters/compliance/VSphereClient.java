@@ -102,6 +102,8 @@ public final class VSphereClient {
 	private volatile boolean lastNotAuthenticated;
 	// Build 95 (issue #24): the last call's response was over the cap.
 	private volatile boolean lastTooLarge;
+	// Build 95 review W5: bytes of the last 2xx response body parsed.
+	private volatile long lastResponseBytes;
 	// Build 95 review W3: why the last connect() failed, kept until the
 	// next cycle (beginCycle, ensureConnected). While set, no read logs in
 	// again: with bad credentials every SOAP call would otherwise send one
@@ -145,7 +147,7 @@ public final class VSphereClient {
 
 	/**
 	 * Build 95 (issue #24): the most bytes of one SOAP response read into
-	 * memory. The largest legitimate responses are bulk pages (200 VMs with
+	 * memory. The largest legitimate responses are bulk pages (50 VMs with
 	 * their extraConfig and device lists, or 10 hosts with their whole
 	 * advanced-option lists), a few MB to a few tens of MB; 64 MB leaves
 	 * headroom while keeping one response from exhausting the collector
@@ -1875,6 +1877,10 @@ public final class VSphereClient {
 		public int pages;
 		public int objects;
 		public int pathFixes;
+		// Review W5: response bytes over all pages, and the largest page,
+		// so devel can size the page and the 64 MB cap.
+		public long bytes;
+		public long maxPageBytes;
 		public List<String> pathSet = new ArrayList<>();
 		public List<String> droppedPaths = new ArrayList<>();
 	}
@@ -2048,6 +2054,13 @@ public final class VSphereClient {
 		}
 		st.pages++;
 		st.objects += rows.size();
+		long bytes = lastResponseBytes;
+		st.bytes += bytes;
+		if (bytes > st.maxPageBytes) st.maxPageBytes = bytes;
+		if (log != null && log.isDebugEnabled()) {
+			logDebug("vSphere SOAP: bulk " + type + " page " + st.pages + ": "
+					+ rows.size() + " object(s), " + bytes + " bytes");
+		}
 		openToken[0] = token;
 		handler.page(rows);
 	}
@@ -2252,6 +2265,7 @@ public final class VSphereClient {
 		lastNotAuthenticated = false;
 		lastInvalidProperty = null;
 		lastTooLarge = false;
+		lastResponseBytes = 0;
 
 		URL url = new URL(vcenterUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -2297,6 +2311,7 @@ public final class VSphereClient {
 					// thrown to the catch below, which drops the connection
 					// and keeps the transport error.
 					doc = parseXmlOrThrow(body);
+					lastResponseBytes = body.bytesRead();
 					// Closing after the parse returns the connection for
 					// reuse (the JDK drains what is left).
 					try { body.close(); } catch (Exception ignored) {}
@@ -2354,6 +2369,11 @@ public final class VSphereClient {
 
 		boolean exceeded() {
 			return exceeded;
+		}
+
+		/** Review W5: bytes read through the stream so far. */
+		long bytesRead() {
+			return read;
 		}
 
 		private void count(long n) throws ResponseTooLarge {
