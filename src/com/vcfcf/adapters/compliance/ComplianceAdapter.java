@@ -171,8 +171,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		// Build 95 (issue #23): an instance edit re-runs configure on the
 		// same adapter object; the previous vCenter session is logged out
-		// and the previous Suite API client closed, so an edit no longer
-		// leaves a live session and HTTP pools behind in the collector JVM.
+		// and the previous Suite API token released, so an edit no longer
+		// leaves a live session behind in the collector JVM (review N14:
+		// the Suite API client itself is not closed; see onDiscard).
 		// Review W4: the new clients are built first, swapped in, and only
 		// then are the old ones released, so a cycle still running never
 		// sees a null client. Review N13 and W12: that cycle keeps the old
@@ -2569,9 +2570,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	@Override
 	public void onDiscard() {
-		// Review W4: the holder keeps the (now closed) clients, so a cycle
-		// still running fails its remaining reads instead of an NPE or a
-		// fresh login.
+		// Review W4: the holder keeps the released clients, so a cycle
+		// still running never meets a null client. Review N14: only the
+		// vSphere client is closed; that cycle's remaining vCenter
+		// inventory reads fail instead of logging in again. The Suite API
+		// client is not closed (discard only releases its token, and its
+		// next call acquires a new one), so a cycle spanning an edit or a
+		// discard logs in to the local VCF Ops again, keeps pushing to its
+		// own objects, and leaves that one token unreleased until it
+		// expires. A closed state in the Suite API client is framework
+		// code.
 		Configured<SuiteApiStitcher, ComplianceStitcher> c = configured;
 		if (c != null) {
 			releaseClients(c.vsphere, c.suite);
@@ -2580,13 +2588,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	}
 
 	/**
-	 * Build 95 (issue #23): log the vCenter session out and close the Suite
-	 * API client. Used by configure (after the new clients are swapped in,
-	 * review W4) and by discard. {@code disconnect()} marks the vCenter
-	 * client closed first, so a cycle still using it fails its calls
-	 * instead of logging in again, and bounds the Logout wait
+	 * Build 95 (issue #23): log the vCenter session out and release the
+	 * Suite API token. Used by configure (after the new holder is
+	 * published, review W4) and by discard. {@code disconnect()} marks the
+	 * vCenter client closed first, so a cycle still using it fails its
+	 * calls instead of logging in again, and bounds the Logout wait
 	 * ({@code VSphereClient.LOGOUT_TIMEOUT_MS}). Never throws: a failed
-	 * logout leaves only an idle session for vCenter to expire.
+	 * logout leaves only an idle session for vCenter to expire. Review
+	 * N14: the Suite API client is not closed and acquires a new token if
+	 * a cycle still running calls it again (see onDiscard).
 	 */
 	private void releaseClients(VSphereClient oldVsphere,
 			SuiteApiStitcher oldSuite) {
