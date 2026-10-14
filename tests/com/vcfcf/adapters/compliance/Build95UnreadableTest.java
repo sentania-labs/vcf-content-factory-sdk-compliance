@@ -227,6 +227,23 @@ public final class Build95UnreadableTest {
 				+ "esxcli unavailable (esxcli-unavailable: no esxcli "
 				+ "session), 1 control", two.reasonText(4), "two causes");
 
+		// Review N12: the text does not depend on read order. Equal
+		// counts are ordered by plain words, and the detail shown is the
+		// alphabetically first one logged for the cause.
+		ObjectUnreadable fwd = new ObjectUnreadable();
+		fwd.record("soap-fault: NoPermission (b)", 1);
+		fwd.record("esxcli-unavailable: no esxcli session", 2);
+		fwd.record("soap-fault: NoPermission (a)", 1);
+		ObjectUnreadable rev = new ObjectUnreadable();
+		rev.record("soap-fault: NoPermission (a)", 1);
+		rev.record("esxcli-unavailable: no esxcli session", 2);
+		rev.record("soap-fault: NoPermission (b)", 1);
+		String tie = "esxcli unavailable (esxcli-unavailable: no esxcli "
+				+ "session), 2 controls; permission refused (soap-fault: "
+				+ "NoPermission (a)), 2 controls";
+		T.eq(tie, fwd.reasonText(4), "tie, one read order");
+		T.eq(tie, rev.reasonText(4), "tie, the other read order");
+
 		// The reason is capped.
 		ObjectUnreadable many = new ObjectUnreadable();
 		StringBuilder longDetail = new StringBuilder();

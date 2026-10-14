@@ -170,8 +170,10 @@ benchmark depends on the version)`: its controls are not invented.
 is given in plain words, followed by the logged detail in brackets, for
 example `host not responding (host-not-connected:
 connectionState=notResponding)`. With several causes, each is followed by
-its control count and they are listed most controls first, separated by
-"; ", at most 1000 characters (then "(+N more causes)"). The plain words
+its control count and they are listed most controls first (equal counts
+in alphabetical order of the plain words, and the alphabetically first
+logged detail of each cause, so the text does not change with the order
+the controls were read in), separated by "; ", at most 1000 characters (then "(+N more causes)"). The plain words
 per logged reason code:
 
 | Reason code | Plain words |

@@ -17,9 +17,13 @@ import java.util.TreeSet;
  * <p>The adapter records every unreadable reason it already logs (the same
  * strings {@link UnreadableReasons} counts per cycle) while it reads one
  * object, then {@link #reasonText} turns them into one line: per cause, the
- * cause in plain words ({@link #plainWords}), the logged detail of its
- * first occurrence, and how many controls it covers when more than one
- * cause applies. Causes are listed most controls first.
+ * cause in plain words ({@link #plainWords}), one logged detail for it,
+ * and how many controls it covers when more than one cause applies.
+ * Causes are listed most controls first. The text does not depend on the
+ * order the controls were read in (review N12: read order can change
+ * between cycles, and a reshuffled reason would churn the property):
+ * causes with the same count are ordered by their plain words, and the
+ * detail shown is the alphabetically first one logged for the cause.
  */
 public final class ObjectUnreadable {
 
@@ -32,7 +36,7 @@ public final class ObjectUnreadable {
 	/** One cause: the plain words, the first detail, the control count. */
 	private static final class Cause {
 		final String plain;
-		final String detail;
+		String detail;
 		int count;
 
 		Cause(String plain, String detail) {
@@ -41,17 +45,20 @@ public final class ObjectUnreadable {
 		}
 	}
 
-	// plain words -> cause, in first-seen order (ties keep that order).
+	// plain words -> cause. Insertion order is not used for output.
 	private final Map<String, Cause> causes = new LinkedHashMap<>();
 
 	/** Record {@code count} unreadable controls for one logged reason. */
 	public void record(String reason, int count) {
 		if (count <= 0) return;
 		String plain = plainWords(reason);
+		String detail = reason == null ? "" : reason.trim();
 		Cause c = causes.get(plain);
 		if (c == null) {
-			c = new Cause(plain, reason == null ? "" : reason.trim());
+			c = new Cause(plain, detail);
 			causes.put(plain, c);
+		} else if (detail.compareTo(c.detail) < 0) {
+			c.detail = detail;
 		}
 		c.count += count;
 	}
@@ -78,7 +85,9 @@ public final class ObjectUnreadable {
 					: "";
 		}
 		List<Cause> list = new ArrayList<>(causes.values());
-		list.sort((a, b) -> Integer.compare(b.count, a.count));
+		list.sort((a, b) -> a.count != b.count
+				? Integer.compare(b.count, a.count)
+				: a.plain.compareTo(b.plain));
 		boolean several = list.size() > 1;
 		// Room kept for the "(+N more causes)" suffix while more follow.
 		final int reserve = 24;
