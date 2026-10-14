@@ -32,6 +32,17 @@ import com.sun.net.httpserver.HttpServer;
  */
 final class FakeVCenter implements AutoCloseable {
 
+	static {
+		// The JDK HttpServer writes response headers and body as separate
+		// TCP segments; with Nagle on, a kept-alive client then waits for
+		// its delayed ACK (about 40 ms a call). Measured 2026-10-14: 44 ms
+		// per call reused vs 2.7 ms per new connection with Nagle, about
+		// 4 ms either way with TCP_NODELAY. The stall is this test server's,
+		// not the client's, so the fake turns Nagle off like a production
+		// proxy would.
+		System.setProperty("sun.net.httpserver.nodelay", "true");
+	}
+
 	static final class Req {
 		final String action;
 		final String body;
