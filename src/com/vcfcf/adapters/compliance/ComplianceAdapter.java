@@ -1178,12 +1178,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.versionUnreadable++;
 		rollup.recordVersionUnreadable(kind);
 		logWarn(kind.rollupName + " " + name + ": " + d.profileName
-				+ " and no previous benchmark; nothing collected: score 0, "
-				+ "non-compliant, collection_failed=1");
+				+ " and no previous benchmark; nothing collected: only "
+				+ "has_unreadable=1 and the reason are pushed");
 		if (resourceId != null) {
 			long ts = System.currentTimeMillis();
+			// Build 95: nothing readable pushes the flag and the reason
+			// only; the last read values stay.
 			stitcher.pushProperties(resourceId,
-					ComplianceDecisions.profileNameProps(d.profileName), ts);
+					ComplianceDecisions.versionUnreadableProps(d.profileName),
+					ts);
 			stitcher.pushStats(resourceId,
 					ComplianceDecisions.versionUnreadableStats(), ts);
 		}
@@ -1482,6 +1485,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			stop.check("host " + hostInfo.name);
+			beginObject();
 			String hostId = hostInfo.moid;
 			String hostName = hostInfo.name;
 			cs.hosts++;
@@ -1789,6 +1793,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		for (VSphereClient.VmInfo vm : vms) {
 			stop.check("VM " + vm.name);
+			beginObject();
 			// Build 88: vSphere Pod VMs (guest id crx*) are out of scope:
 			// skipped before matching, scoring and the rollup, counted in
 			// Rollup|VM|skipped_pods only. VCF Ops models them as kind Pod.
@@ -1910,6 +1915,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> seen) {
 		String resourceName = config.vcenterHost;
 		String moid = "vcenter";
+		beginObject();
 		seen.add(LastBenchmarkMemory.key(BenchmarkSelector.Kind.VCENTER,
 				moid));
 
@@ -2123,6 +2129,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen, Shadow shadow) {
+		beginObject();
 		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
 		if (he == null) {
 			rollup.recordUnmatched(kind, name, moid);
@@ -2326,10 +2333,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 	}
 
+	/**
+	 * Build 95: the unreadable reasons of the object being read now,
+	 * published on it as unreadable_reason. Reset by {@link #beginObject}
+	 * before each object (one collect thread per instance).
+	 */
+	private ObjectUnreadable objectUnreadable = new ObjectUnreadable();
+
+	/** Build 95: start recording the next object's unreadable reasons. */
+	private void beginObject() {
+		objectUnreadable = new ObjectUnreadable();
+	}
+
 	/** Record {@code count} unreadable controls on one object for a reason. */
 	private void noteUnreadable(String resourceName, String reason, int count) {
 		if (count <= 0) return;
 		cycleReasons.record(reason, count);
+		objectUnreadable.record(reason, count);
 		logDebug("Unreadable on " + resourceName + ": " + count
 				+ " control(s): " + reason);
 	}
@@ -2344,6 +2364,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String why = reasons.get(c.parameter);
 			if (why == null) why = "unknown: no reason recorded";
 			cycleReasons.record(why, 1);
+			objectUnreadable.record(why, 1);
 			logDebug("Unreadable " + c.controlId + " on " + resourceName
 					+ " (" + c.readRecipe + "): " + why);
 		}
@@ -2394,6 +2415,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void noteUnreadableControl(String resourceName,
 			BenchmarkProfile.Control c, String why) {
 		cycleReasons.record(why, 1);
+		objectUnreadable.record(why, 1);
 		logDebug("Unreadable " + c.controlId + " on " + resourceName + " ("
 				+ c.readRecipe + "): " + why);
 	}
@@ -2438,8 +2460,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private void pushProfileNamePropertyOnly(String resourceId,
 			String profileName, ComplianceDecisions.SkipPush skip) {
-		ComplianceDecisions.pushObject(stitcher, resourceId,
-				ComplianceDecisions.profileNameProps(profileName),
+		java.util.Map<String, String> props = new java.util.LinkedHashMap<>(
+				ComplianceDecisions.profileNameProps(profileName));
+		props.putAll(ComplianceDecisions.unreadableProps("", ""));
+		ComplianceDecisions.pushObject(stitcher, resourceId, props,
 				ComplianceDecisions.nothingEvaluatedStats(), skip,
 				System.currentTimeMillis());
 		logInfo("Pushed profile_name='" + profileName + "' to resource="
@@ -2454,8 +2478,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private void pushNoBenchmark(String resourceId, String label) {
 		long ts = System.currentTimeMillis();
-		stitcher.pushProperties(resourceId,
-				ComplianceDecisions.profileNameProps(label), ts);
+		java.util.Map<String, String> props = new java.util.LinkedHashMap<>(
+				ComplianceDecisions.profileNameProps(label));
+		props.putAll(ComplianceDecisions.unreadableProps("", ""));
+		stitcher.pushProperties(resourceId, props, ts);
 		stitcher.pushStats(resourceId, ComplianceDecisions.noBenchmarkStats(),
 				ts);
 	}
@@ -2476,7 +2502,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceDecisions.SkipPush skip) {
 		ComplianceDecisions.pushObject(stitcher, resourceId,
 				ComplianceDecisions.complianceProps(cr, profileName,
-						siteOverriddenFor(profileName)),
+						siteOverriddenFor(profileName),
+						objectUnreadable.reasonText(cr.unreadableCount)),
 				ComplianceDecisions.complianceStats(cr), skip,
 				System.currentTimeMillis());
 	}

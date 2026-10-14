@@ -20,6 +20,8 @@ public final class Build95UnreadableTest {
 
 	public static void main(String[] args) throws Exception {
 		unreadableNotPushed();
+		perObjectSignals();
+		adapterWiring();
 		System.out.println("Build95UnreadableTest: all assertions passed");
 	}
 
@@ -129,5 +131,199 @@ public final class Build95UnreadableTest {
 		T.near(-1, skip.stats.get(K + unread + "|Compliant"), "skip still -1");
 		T.check(skip.props.get(K + unread + "|Actual")
 				.contains("skipped by override file ovr"), "skip text");
+	}
+
+	/**
+	 * Point 2: has_unreadable every cycle, unreadable_count, the
+	 * unreadable_reason property (plain words plus the logged detail, for
+	 * every reason code), unreadable_controls (capped, "+N more"); an
+	 * object with nothing readable pushes only its unreadable signals.
+	 */
+	static void perObjectSignals() {
+		// has_unreadable on every payload.
+		ControlEvaluator.ComplianceResult cr = mixed();
+		Map<String, Double> stats = ComplianceDecisions.complianceStats(cr);
+		T.near(1, stats.get(ComplianceDecisions.HAS_UNREADABLE), "mixed: 1");
+		T.near(1, stats.get(K + "unreadable_count"), "mixed: count");
+		ControlEvaluator.ComplianceResult clean =
+				new ControlEvaluator.ComplianceResult("h", 1, 0, 1, 0, 100.0,
+						Arrays.asList(new ControlEvaluator.ControlResult(
+								"esx.a", "1", "1", true, "d")));
+		T.near(0, ComplianceDecisions.complianceStats(clean)
+				.get(ComplianceDecisions.HAS_UNREADABLE), "clean: 0");
+		T.near(0, ComplianceDecisions.noBenchmarkStats()
+				.get(ComplianceDecisions.HAS_UNREADABLE), "no benchmark: 0");
+		T.near(0, ComplianceDecisions.nothingEvaluatedStats()
+				.get(ComplianceDecisions.HAS_UNREADABLE), "nothing evaluated: 0");
+
+		// The reason and controls properties.
+		Map<String, String> props = ComplianceDecisions.complianceProps(cr,
+				"VMware_SCG_9.1", null, "permission refused (soap-fault: x)");
+		T.eq("permission refused (soap-fault: x)",
+				props.get(ComplianceDecisions.UNREADABLE_REASON), "reason");
+		T.eq("esx.c", props.get(ComplianceDecisions.UNREADABLE_CONTROLS),
+				"controls");
+		T.eq("VMware_SCG_9.1", props.get(K + "profile_name"), "profile kept");
+		Map<String, String> cleanProps = ComplianceDecisions.complianceProps(
+				clean, "VMware_SCG_9.1", null, null);
+		T.eq("", cleanProps.get(ComplianceDecisions.UNREADABLE_REASON),
+				"clean: reason cleared, never left from an earlier cycle");
+		T.eq("", cleanProps.get(ComplianceDecisions.UNREADABLE_CONTROLS),
+				"clean: controls cleared");
+		T.eq("unknown cause (no reason recorded)",
+				ComplianceDecisions.complianceProps(cr, "p", null, null)
+						.get(ComplianceDecisions.UNREADABLE_REASON),
+				"never an empty reason beside has_unreadable = 1");
+
+		// Plain words for every reason code the adapter logs, with the
+		// logged detail kept.
+		String[][] codes = {
+			{"esxcli-host-unreachable: system.ntp.get (connect timed out)",
+				"host unreachable for esxcli"},
+			{"esxcli-unavailable: no esxcli session", "esxcli unavailable"},
+			{"soap-fault: NoPermission: Permission to perform this operation "
+				+ "was denied. (config.option)", "permission refused"},
+			{"soap-fault: InvalidProperty (config.x)",
+				"vCenter returned a fault"},
+			{"missing-element: config.network.dnsConfig not returned",
+				"setting not returned by vCenter"},
+			{"extraconfig-unreadable: ReadFault: NoPermission",
+				"VM advanced settings unreadable"},
+			{"vami-session: POST /api/session HTTP 401",
+				"appliance session refused"},
+			{"vami-http-403: GET access/ssh", "appliance permission refused"},
+			{"vami-http-500: GET access/ssh", "appliance returned HTTP 500"},
+			{"host-not-connected: connectionState=notResponding",
+				"host not responding"},
+			{"host-not-connected: connectionState=disconnected",
+				"host disconnected"},
+			{"response-too-large: over the 64 MB cap (RetrieveProperties)",
+				"vCenter response over the size cap"},
+			{"advanced-settings-unreadable: host flapped (x)",
+				"host disconnected during the read"},
+			{"vcenter-settings-unreadable: ReadFault: x",
+				"vCenter advanced settings unreadable"},
+			{"version-unreadable: benchmark unknown: ESX version unreadable",
+				"product version unreadable"},
+			{"brand-new-code: x", "could not be read (brand-new-code)"},
+		};
+		for (String[] c : codes) {
+			T.eq(c[1], ObjectUnreadable.plainWords(c[0]), c[0]);
+			ObjectUnreadable one = new ObjectUnreadable();
+			one.record(c[0], 3);
+			T.eq(c[1] + " (" + c[0] + ")", one.reasonText(3),
+					"plain words plus the logged detail: " + c[0]);
+		}
+
+		// Several causes: most controls first, each with its count.
+		ObjectUnreadable two = new ObjectUnreadable();
+		two.record("esxcli-unavailable: no esxcli session", 1);
+		two.record("soap-fault: NoPermission (a)", 2);
+		two.record("soap-fault: NoPermission (b)", 1);
+		T.eq("permission refused (soap-fault: NoPermission (a)), 3 controls; "
+				+ "esxcli unavailable (esxcli-unavailable: no esxcli "
+				+ "session), 1 control", two.reasonText(4), "two causes");
+
+		// The reason is capped.
+		ObjectUnreadable many = new ObjectUnreadable();
+		StringBuilder longDetail = new StringBuilder();
+		for (int i = 0; i < 300; i++) longDetail.append('x');
+		for (int i = 0; i < 20; i++) {
+			many.record("brand-" + i + ": " + longDetail, 20 - i);
+		}
+		String capped = many.reasonText(400);
+		T.check(capped.length() <= ObjectUnreadable.REASON_CAP,
+				"reason capped: " + capped.length());
+		T.check(capped.matches("(?s).*\\(\\+\\d+ more causes?\\)$"),
+				"cut reason ends with +N more causes: " + capped);
+		ObjectUnreadable huge = new ObjectUnreadable();
+		huge.record("brand-x: " + longDetail + longDetail + longDetail
+				+ longDetail, 1);
+		T.check(huge.reasonText(1).length() <= ObjectUnreadable.REASON_CAP,
+				"one cause over the cap is cut");
+
+		// The controls list is capped with "+N more".
+		List<String> ids = new ArrayList<>();
+		for (int i = 0; i < 25; i++) ids.add(String.format("esx.c%02d", i));
+		String ct = ObjectUnreadable.controlsText(ids);
+		T.check(ct.startsWith("esx.c00, esx.c01, "), "sorted: " + ct);
+		T.check(ct.endsWith("esx.c19 (+5 more)"), "20 named, +5 more: " + ct);
+		T.eq("", ObjectUnreadable.controlsText(new ArrayList<>()), "none");
+
+		// Nothing readable: only the unreadable signals.
+		Map<String, BenchmarkProfile> all = new BenchmarkLoader().loadAll(".");
+		ControlEvaluator.ComplianceResult whole =
+				ControlEvaluator.evaluateControlsUnreadable(
+						all.get("VMware_SCG_9.1").hostControls(), "h");
+		T.check(ComplianceDecisions.nothingReadable(whole), "nothing readable");
+		Map<String, Double> ws = ComplianceDecisions.complianceStats(whole);
+		T.eq(new java.util.TreeSet<>(Arrays.asList(
+				ComplianceDecisions.HAS_UNREADABLE, K + "unreadable_count",
+				K + "collection_failed")), new java.util.TreeSet<>(ws.keySet()),
+				"nothing readable: flag family only (no score, no counters)");
+		Map<String, String> wp = ComplianceDecisions.complianceProps(whole,
+				"VMware_SCG_9.1", null, "host not responding (x)");
+		T.eq(new java.util.TreeSet<>(Arrays.asList(
+				ComplianceDecisions.UNREADABLE_REASON,
+				ComplianceDecisions.UNREADABLE_CONTROLS)),
+				new java.util.TreeSet<>(wp.keySet()),
+				"nothing readable: reason and controls only");
+		T.check(wp.get(ComplianceDecisions.UNREADABLE_CONTROLS)
+				.contains("more)"), "a whole host is capped");
+
+		// Version unreadable: flag and reason, controls not invented.
+		Map<String, Double> vs = ComplianceDecisions.versionUnreadableStats();
+		T.near(1, vs.get(ComplianceDecisions.HAS_UNREADABLE), "version: flag");
+		T.check(!vs.containsKey(K + "unreadable_count"), "version: no count");
+		Map<String, String> vp = ComplianceDecisions.versionUnreadableProps(
+				"benchmark unknown: ESX version unreadable");
+		T.eq("product version unreadable (version-unreadable: benchmark "
+				+ "unknown: ESX version unreadable)",
+				vp.get(ComplianceDecisions.UNREADABLE_REASON), "version reason");
+		T.eq(ComplianceDecisions.VERSION_UNREADABLE_CONTROLS,
+				vp.get(ComplianceDecisions.UNREADABLE_CONTROLS),
+				"version: controls not invented");
+	}
+
+	/**
+	 * Point 2 wiring (the adapter needs the SDK, so it is pinned from
+	 * source): every per-object path starts a fresh reason record before
+	 * its reads, every reason the adapter logs is also recorded for the
+	 * object, the push carries the object's reason, and a version
+	 * unreadable object pushes its flag and reason.
+	 */
+	static void adapterWiring() throws Exception {
+		String ca = new String(java.nio.file.Files.readAllBytes(
+				java.nio.file.Paths.get("src/com/vcfcf/adapters/compliance/"
+						+ "ComplianceAdapter.java")),
+				java.nio.charset.StandardCharsets.UTF_8);
+		String[][] loops = {
+			{"for (VSphereClient.HostInfo hostInfo : hosts) {",
+				"getHostProductVersion"},
+			{"for (VSphereClient.VmInfo vm : vms) {", "getVmExtraConfig"},
+			{"private ComplianceStitcher.HostEntry collectVCenter(",
+				"getVCenterAdvancedSettings"},
+			{"private void collectVimObject(", "readAndEvaluateVim"},
+		};
+		for (String[] l : loops) {
+			int at = ca.indexOf(l[0]);
+			T.check(at >= 0, "loop: " + l[0]);
+			int begin = ca.indexOf("beginObject();", at);
+			int read = ca.indexOf(l[1], at);
+			T.check(begin > at && begin < read,
+					"beginObject() before the reads in " + l[0]);
+		}
+		for (String m : new String[] {"private void noteUnreadable(",
+				"private void noteReadReasons(",
+				"private void noteUnreadableControl("}) {
+			int at = ca.indexOf(m);
+			int end = ca.indexOf("\n\t}\n", at);
+			T.check(at >= 0 && ca.substring(at, end)
+					.contains("objectUnreadable.record("), m + " records");
+		}
+		T.check(ca.contains("objectUnreadable.reasonText(cr.unreadableCount)"),
+				"the push carries the object's reason");
+		T.check(ca.contains("ComplianceDecisions.versionUnreadableProps("),
+				"version unreadable pushes its reason");
 	}
 }

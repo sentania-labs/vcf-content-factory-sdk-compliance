@@ -54,11 +54,12 @@ public final class ComplianceDecisionsTest {
 		}
 		T.check(!nb.containsKey(K + "score"), "nb never pushes a score");
 		Map<String, Double> vu = ComplianceDecisions.versionUnreadableStats();
-		T.near(1, vu.get(K + "non_compliant"), "version unreadable is nc");
-		T.near(0, vu.get(K + "no_benchmark"), "version unreadable not nb");
-		// Build 65 (W1): nothing collected -> score 0, collection_failed 1,
-		// and no invented unreadable_count.
-		T.near(0, vu.get(K + "score"), "version unreadable scores 0");
+		// Build 95: nothing readable pushes the flag only (no score 0, no
+		// non_compliant, no counters); build 65's collection_failed = 1
+		// stays, and no invented unreadable_count.
+		T.near(1, vu.get(ComplianceDecisions.HAS_UNREADABLE), "flagged");
+		T.check(!vu.containsKey(K + "non_compliant"), "no nc pushed");
+		T.check(!vu.containsKey(K + "score"), "no score pushed");
 		T.near(1, vu.get(K + "collection_failed"), "collection_failed = 1");
 		T.check(!vu.containsKey(K + "unreadable_count"),
 				"no invented unreadable_count");
@@ -72,14 +73,16 @@ public final class ComplianceDecisionsTest {
 						Arrays.asList(new ControlEvaluator.ControlResult(
 								"esx.x", "(unreadable)", "5", false, "d", true)));
 		Map<String, Double> cs = ComplianceDecisions.complianceStats(allUnread);
-		// Build 63: all unreadable = nothing collected = score 0, pushed.
-		T.near(0, cs.get(K + "score"), "all unreadable scores 0");
+		// Build 95: all unreadable = nothing readable: only the unreadable
+		// signals go out, the last read values stay.
+		T.check(!cs.containsKey(K + "score"), "all unreadable: no score");
 		T.near(3, cs.get(K + "unreadable_count"), "unreadable counted apart");
 		T.near(1, cs.get(K + "collection_failed"),
 				"all unreadable = collection failed");
-		T.near(0, cs.get(K + "pass_count"), "pass zeroed when nothing scored");
-		T.near(0, cs.get(K + "fail_count"), "fail zeroed when nothing scored");
-		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
+		T.near(1, cs.get(ComplianceDecisions.HAS_UNREADABLE), "flagged");
+		T.check(!cs.containsKey(K + "pass_count"), "no pass_count");
+		T.check(!cs.containsKey(K + "fail_count"), "no fail_count");
+		T.check(!cs.containsKey(K + "non_compliant"), "no non_compliant");
 		// Build 95: an unreadable control is not pushed (was -1).
 		T.check(!cs.containsKey(K + "esx.x|Compliant"),
 				"unreadable control not pushed");

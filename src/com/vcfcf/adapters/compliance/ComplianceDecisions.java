@@ -50,6 +50,17 @@ public final class ComplianceDecisions {
 
 	static final String K = "VCF-CF Compliance|";
 
+	/**
+	 * Build 95 (Scott 2026-10-14): 1 when some control of the object could
+	 * not be read this cycle, else 0; pushed on every object every cycle.
+	 * The "Compliance data not collected" alerts fire on it.
+	 */
+	public static final String HAS_UNREADABLE = K + "has_unreadable";
+	/** Build 95: why, in plain words plus the logged detail (property). */
+	public static final String UNREADABLE_REASON = K + "unreadable_reason";
+	/** Build 95: the unreadable control ids, capped (property). */
+	public static final String UNREADABLE_CONTROLS = K + "unreadable_controls";
+
 	// ----- benchmark decision --------------------------------------------
 
 	public enum Outcome { SCORE, NO_BENCHMARK, VERSION_UNREADABLE }
@@ -132,16 +143,39 @@ public final class ComplianceDecisions {
 	// ----- per-object payloads -------------------------------------------
 
 	/**
+	 * Build 95: true when nothing on the object could be read this cycle:
+	 * controls were attempted and every one was unreadable (a host vCenter
+	 * reports not responding, a whole read channel refused). Such an object
+	 * pushes only its unreadable signals ({@link #complianceStats}).
+	 */
+	public static boolean nothingReadable(ControlEvaluator.ComplianceResult cr) {
+		return cr.totalCount == 0 && cr.unreadableCount > 0;
+	}
+
+	/**
 	 * Stats for an evaluated object. Score (build 63, owner decision):
 	 * unreadable controls count as failing
 	 * ({@link ControlEvaluator#score}); pushed whenever at least one control
-	 * was attempted, so an all-unreadable object reads 0. Only with nothing
-	 * attempted is score omitted (never a stand-in). pass_count /
-	 * fail_count / unreadable_count are always pushed and stay separate.
+	 * was read. Only with nothing attempted is score omitted (never a
+	 * stand-in). pass_count / fail_count / unreadable_count are pushed and
+	 * stay separate.
+	 *
+	 * <p>Build 95 (Scott 2026-10-14): {@link #HAS_UNREADABLE} is pushed every
+	 * cycle (1 with any unreadable control). An object with nothing
+	 * readable ({@link #nothingReadable}) pushes only its unreadable signals
+	 * (has_unreadable, unreadable_count, collection_failed): no score, no
+	 * pass / fail / total, no non_compliant, so its last read values stay as
+	 * they were and the flag says they are not current.
 	 */
 	public static Map<String, Double> complianceStats(
 			ControlEvaluator.ComplianceResult cr) {
 		Map<String, Double> stats = new LinkedHashMap<>();
+		if (nothingReadable(cr)) {
+			stats.put(HAS_UNREADABLE, 1.0);
+			stats.put(K + "unreadable_count", (double) cr.unreadableCount);
+			stats.put(K + "collection_failed", 1.0);
+			return stats;
+		}
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
 			// Build 95 (Scott 2026-10-14, "if we have missing data we just
 			// don't log it"): a control that could not be read this cycle
@@ -164,7 +198,32 @@ public final class ComplianceDecisions {
 				cr.failCount, cr.unreadableCount) ? 1.0 : 0.0);
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "collection_failed", collectionFailed(cr) ? 1.0 : 0.0);
+		stats.put(HAS_UNREADABLE, cr.unreadableCount > 0 ? 1.0 : 0.0);
 		return stats;
+	}
+
+	/** Build 95: the ids of the controls a result could not read. */
+	public static Set<String> unreadableIds(ControlEvaluator.ComplianceResult cr) {
+		Set<String> out = new TreeSet<>();
+		if (cr == null) return out;
+		for (ControlEvaluator.ControlResult r : cr.controlResults) {
+			if (r.unreadable) out.add(r.scgId);
+		}
+		return out;
+	}
+
+	/**
+	 * Build 95: the two unreadable properties of an object:
+	 * {@link #UNREADABLE_REASON} and {@link #UNREADABLE_CONTROLS}. Both
+	 * are pushed every cycle, "" when every control was read, so a reason
+	 * from an earlier cycle never lingers.
+	 */
+	public static Map<String, String> unreadableProps(String reason,
+			String controls) {
+		Map<String, String> props = new LinkedHashMap<>();
+		props.put(UNREADABLE_REASON, reason == null ? "" : reason);
+		props.put(UNREADABLE_CONTROLS, controls == null ? "" : controls);
+		return props;
 	}
 
 	/**
@@ -200,6 +259,27 @@ public final class ComplianceDecisions {
 	public static Map<String, String> complianceProps(
 			ControlEvaluator.ComplianceResult cr, String profileName,
 			Set<String> siteOverridden) {
+		return complianceProps(cr, profileName, siteOverridden, null);
+	}
+
+	/**
+	 * Build 95: as {@link #complianceProps(ControlEvaluator.ComplianceResult,
+	 * String, Set)}, with the object's unreadable_reason ({@code reason};
+	 * null: from the count alone, see {@link ObjectUnreadable#reasonText})
+	 * and unreadable_controls. An object with nothing readable
+	 * ({@link #nothingReadable}) pushes those two properties only.
+	 */
+	public static Map<String, String> complianceProps(
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			Set<String> siteOverridden, String reason) {
+		String why = cr.unreadableCount == 0 ? ""
+				: (reason != null && !reason.isEmpty() ? reason
+						: new ObjectUnreadable().reasonText(cr.unreadableCount));
+		Map<String, String> unread = unreadableProps(why,
+				ObjectUnreadable.controlsText(unreadableIds(cr)));
+		if (nothingReadable(cr)) {
+			return unread;
+		}
 		Map<String, String> props = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
 			// Build 95: an unreadable control's Actual, Expected and
@@ -220,6 +300,7 @@ public final class ComplianceDecisions {
 			props.put(base + "|Description", ctrl.description);
 		}
 		props.put(K + "profile_name", profileName);
+		props.putAll(unread);
 		return props;
 	}
 
@@ -229,6 +310,7 @@ public final class ComplianceDecisions {
 		stats.put(K + "no_benchmark", 1.0);
 		stats.put(K + "non_compliant", 0.0);
 		stats.put(K + "collection_failed", 0.0);
+		stats.put(HAS_UNREADABLE, 0.0);
 		return stats;
 	}
 
@@ -238,28 +320,41 @@ public final class ComplianceDecisions {
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "non_compliant", 0.0);
 		stats.put(K + "collection_failed", 0.0);
+		stats.put(HAS_UNREADABLE, 0.0);
 		return stats;
 	}
 
 	/**
 	 * Governing version unreadable and no previous benchmark (build 58 B2,
-	 * build 65 W1): nothing could be collected, so by the build 63 rule
-	 * (unreadable counts as failing) the object scores 0, is non-compliant,
-	 * and {@code collection_failed} = 1 raises its "Compliance data not
-	 * collected" alert. unreadable_count is NOT pushed: the adapter does not
-	 * know which benchmark's controls apply, so it will not invent a count.
+	 * build 65 W1): nothing could be collected. Build 95 (Scott
+	 * 2026-10-14): nothing readable pushes only the unreadable signals,
+	 * has_unreadable = 1 and collection_failed = 1 (no score 0, no
+	 * counters, no non_compliant; the last read values stay as they were).
+	 * unreadable_count is NOT pushed: the adapter does not know which
+	 * benchmark's controls apply, so it will not invent a count.
 	 */
 	public static Map<String, Double> versionUnreadableStats() {
 		Map<String, Double> stats = new LinkedHashMap<>();
-		stats.put(K + "score", 0.0);
-		stats.put(K + "pass_count", 0.0);
-		stats.put(K + "fail_count", 0.0);
-		stats.put(K + "total_count", 0.0);
-		stats.put(K + "no_benchmark", 0.0);
-		stats.put(K + "non_compliant", 1.0);
+		stats.put(HAS_UNREADABLE, 1.0);
 		stats.put(K + "collection_failed", 1.0);
 		return stats;
 	}
+
+	/**
+	 * Build 95: the properties of a version-unreadable object: its reason
+	 * ("product version unreadable" and the label the selector gave, e.g.
+	 * "benchmark unknown: ESX version unreadable") and, since the benchmark
+	 * and so its controls are unknown, a plain statement in place of ids.
+	 */
+	public static Map<String, String> versionUnreadableProps(String label) {
+		ObjectUnreadable u = new ObjectUnreadable();
+		u.record("version-unreadable: " + label, 1);
+		return unreadableProps(u.reasonText(1), VERSION_UNREADABLE_CONTROLS);
+	}
+
+	/** Build 95: unreadable_controls of a version-unreadable object. */
+	public static final String VERSION_UNREADABLE_CONTROLS =
+			"(not known: the benchmark depends on the version)";
 
 	private static Map<String, Double> zeroCounters() {
 		Map<String, Double> stats = new LinkedHashMap<>();

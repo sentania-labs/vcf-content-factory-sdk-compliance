@@ -1219,8 +1219,9 @@ public final class OverridesTest {
 		// The push marks site-overridden controls.
 		inOrder(body(ca, "private void pushComplianceViaClient("),
 				"pushComplianceViaClient",
-				"ComplianceDecisions.complianceProps(cr, profileName, "
-						+ "siteOverriddenFor(profileName))");
+				"ComplianceDecisions.complianceProps(cr, profileName,",
+				"siteOverriddenFor(profileName),",
+				"objectUnreadable.reasonText(cr.unreadableCount))");
 
 		// The counts are the in-force ones, and the alert flag is the
 		// snapshot's (which covers fetch failures, W2).
