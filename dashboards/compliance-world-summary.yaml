@@ -16,13 +16,14 @@ summary_for: "vcfcf_compliance:ComplianceWorld"
 
 widgets:
 
-  # Row 1: Environment Compliance (page object ComplianceWorld) | Scan.
+  # Row 1: Environment Compliance (page object ComplianceWorld) |
+  # Objects with Unreadable Controls (build 95) | Scan.
   - id: env_compliance_scoreboard
     type: Scoreboard
     title: "Environment Compliance"
-    coords: {x: 1, y: 1, w: 9, h: 4}
+    coords: {x: 1, y: 1, w: 4, h: 5}
     self_provider: false
-    box_columns: 4
+    box_columns: 2
     metrics:
       # Controls Passing (build 95, was Average Score): controls passed
       # over controls evaluated, environment-wide (a ratio of sums, see
@@ -72,10 +73,22 @@ widgets:
         label: "Objects Scored"
         color_method: 1
 
+  # Build 95 (Scott 2026-10-14): every object whose last cycle could not
+  # read some controls (has_unreadable = 1), beside the Controls Passing
+  # tile: object, kind, count, reason. Descendants of the page object
+  # (ComplianceWorld > each vCenter > its inventory); the view filters on
+  # the flag.
+  - id: unreadable_objects_view
+    type: View
+    title: "Objects with Unreadable Controls"
+    coords: {x: 5, y: 1, w: 5, h: 5}
+    self_provider: false
+    view: "[VCF Content Factory] Compliance Objects with Unreadable Controls"
+
   - id: scan_time
     type: PropertyList
     title: "Scan"
-    coords: {x: 10, y: 1, w: 3, h: 4}
+    coords: {x: 10, y: 1, w: 3, h: 5}
     self_provider: false
     property_list:
       visual_theme: 0
@@ -93,7 +106,7 @@ widgets:
   - id: vcenter_object_type_view
     type: View
     title: "Compliance by vCenter and Object Type"
-    coords: {x: 1, y: 5, w: 12, h: 8}
+    coords: {x: 1, y: 6, w: 12, h: 8}
     self_provider: false
     select_first_row: true
     view: "[VCF Content Factory] Compliance by vCenter and Object Type"
@@ -102,7 +115,7 @@ widgets:
   - id: env_score_trend
     type: MetricChart
     title: "Environment Score Trend"
-    coords: {x: 1, y: 18, w: 12, h: 7}
+    coords: {x: 1, y: 19, w: 12, h: 7}
     self_provider: false
     metrics:
       - adapter_kind: vcfcf_compliance
@@ -120,7 +133,7 @@ widgets:
     type: View
     title: "Objects by SCG Version"
     # Build 95 (issue #32): full width, so every SCG column shows.
-    coords: {x: 1, y: 13, w: 12, h: 5}
+    coords: {x: 1, y: 14, w: 12, h: 5}
     self_provider: false
     view: "[VCF Content Factory] Compliance Objects by SCG Version"
 
@@ -128,7 +141,7 @@ widgets:
   - id: open_compliance_alerts
     type: AlertList
     title: "Open Compliance Alerts"
-    coords: {x: 1, y: 25, w: 12, h: 7}
+    coords: {x: 1, y: 26, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
     # depth 4: input is the selected vCenter row of the view above (select_first_row, so never the ComplianceWorld itself); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).

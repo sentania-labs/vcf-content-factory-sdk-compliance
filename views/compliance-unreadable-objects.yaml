@@ -1,0 +1,52 @@
+id: 17eb4fd5-5562-46ab-96d3-f3a308702e91
+name: "[VCF Content Factory] Compliance Objects with Unreadable Controls"
+description: >
+  Every object the VCF-CF Compliance adapter could not fully read on its
+  last cycle (VCF-CF Compliance|has_unreadable = 1), across ESX hosts,
+  VMs, vCenters, clusters, distributed switches and distributed
+  portgroups: the object, its kind, how many controls were unreadable and
+  why (the cause in plain words plus the detail the adapter logged).
+  Adapter build 95 (Scott 2026-10-14): an unreadable control is not
+  pushed, so its last value and alert stay as they were, and the object's
+  score and the pass rates count only what was read. This list is where
+  that missing data shows. Its "Compliance data not collected" alert
+  fires after two cycles. An object whose product version could not be
+  read has no count (its controls are not known). Feeds the Environment
+  Overview and the Compliance World Summary, beside the Controls Passing
+  tile.
+subjects:
+  - adapter_kind: VMWARE
+    resource_kind: HostSystem
+  - adapter_kind: VMWARE
+    resource_kind: VirtualMachine
+  - adapter_kind: VMWARE
+    resource_kind: VMwareAdapter Instance
+  - adapter_kind: VMWARE
+    resource_kind: ClusterComputeResource
+  - adapter_kind: VMWARE
+    resource_kind: VmwareDistributedVirtualSwitch
+  - adapter_kind: VMWARE
+    resource_kind: DistributedVirtualPortgroup
+subject:
+  # The vendor shape for a 0/1 flag (mem|guestOSMemNotCollecting == 1):
+  # EQUALS on the metric, no transform. Applied to every subject kind.
+  filter:
+    - filter_type: metrics
+      metric_key: "VCF-CF Compliance|has_unreadable"
+      condition: EQUALS
+      value: 1
+columns:
+  # Unbound columns (multi-subject view): each resolves on every kind.
+  - attribute: VCF-CF Compliance|object_kind
+    display_name: "Kind"
+    is_property: true
+    is_string_attribute: true
+  - attribute: VCF-CF Compliance|unreadable_count
+    display_name: "Unreadable Controls"
+  - attribute: VCF-CF Compliance|unreadable_reason
+    display_name: "Reason"
+    is_property: true
+    is_string_attribute: true
+
+released: false
+version: "1.0.0"

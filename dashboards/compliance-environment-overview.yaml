@@ -32,12 +32,14 @@ widgets:
   - id: env_compliance_scoreboard
     type: Scoreboard
     title: "Environment Compliance"
-    coords: {x: 1, y: 1, w: 8, h: 5}
+    # Build 95: narrower (two boxes a row) to make room for the Objects
+    # with Unreadable Controls list beside it; the first row is one taller.
+    coords: {x: 1, y: 1, w: 4, h: 6}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
       resource_kind: ComplianceWorld
-    box_columns: 4
+    box_columns: 2
     metrics:
       # Controls Passing (build 95, was Average Score): controls passed
       # over controls evaluated, environment-wide (a ratio of sums, see
@@ -87,6 +89,22 @@ widgets:
         label: "Objects Scored"
         color_method: 1
 
+  # ── Build 95 (Scott 2026-10-14): Objects with Unreadable Controls,
+  #     beside the Controls Passing tile. Every object whose last cycle
+  #     could not read some controls (has_unreadable = 1): object, kind,
+  #     count, reason. Self-provider pinned vSphere World, descendants of
+  #     the six kinds; the view filters on the flag. ─────────────────────
+
+  - id: unreadable_objects_view
+    type: View
+    title: "Objects with Unreadable Controls"
+    coords: {x: 5, y: 1, w: 5, h: 6}
+    self_provider: true
+    pin:
+      adapter_kind: VMWARE
+      resource_kind: "vSphere World"
+    view: "[VCF Content Factory] Compliance Objects with Unreadable Controls"
+
   # ── W2: About this dashboard ─────────────────────────────────────────
 
   - id: about_text
@@ -94,7 +112,9 @@ widgets:
     title: "About This Dashboard"
     # Build 95 (issue #34): shorter text and one more row of height, so
     # the last line no longer runs under the widget's EDIT link.
-    coords: {x: 9, y: 1, w: 4, h: 5}
+    # Build 95: one column narrower and one row taller (the unreadable
+    # list sits between it and the scoreboard).
+    coords: {x: 10, y: 1, w: 3, h: 6}
     text: >
       <p><b>Controls Passing</b>: controls passed over controls evaluated,
       from what was read. Unreadable objects are listed apart.</p>
@@ -108,7 +128,7 @@ widgets:
   - id: vcenter_object_type_view
     type: View
     title: "Compliance by vCenter and Object Type"
-    coords: {x: 1, y: 6, w: 12, h: 8}
+    coords: {x: 1, y: 7, w: 12, h: 8}
     self_provider: true
     # Owner decision: keep the default (true) explicit so W6 populates
     # with the first vCenter's alerts on load instead of sitting blank.
@@ -122,7 +142,7 @@ widgets:
     type: View
     title: "Objects by SCG Version"
     # Build 95 (issue #32): full width, so every SCG column shows.
-    coords: {x: 1, y: 14, w: 12, h: 5}
+    coords: {x: 1, y: 15, w: 12, h: 5}
     self_provider: true
     pin:
       adapter_kind: VMWARE
@@ -135,7 +155,7 @@ widgets:
   - id: env_score_trend
     type: MetricChart
     title: "Environment Score Trend"
-    coords: {x: 1, y: 19, w: 12, h: 7}
+    coords: {x: 1, y: 20, w: 12, h: 7}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -162,7 +182,7 @@ widgets:
   - id: open_compliance_alerts
     type: AlertList
     title: "Open Compliance Alerts"
-    coords: {x: 1, y: 26, w: 12, h: 7}
+    coords: {x: 1, y: 27, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
     # depth 4: input is a VMwareAdapter Instance (vCenter); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).

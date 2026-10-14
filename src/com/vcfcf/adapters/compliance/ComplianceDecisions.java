@@ -60,6 +60,34 @@ public final class ComplianceDecisions {
 	public static final String UNREADABLE_REASON = K + "unreadable_reason";
 	/** Build 95: the unreadable control ids, capped (property). */
 	public static final String UNREADABLE_CONTROLS = K + "unreadable_controls";
+	/**
+	 * Build 95: the object's kind in words (property), pushed with every
+	 * object payload, so the "Objects with unreadable controls" list (one
+	 * view over six VMWARE kinds) can show what each row is.
+	 */
+	public static final String OBJECT_KIND = K + "object_kind";
+
+	/** Build 95: the object_kind text for a kind. */
+	public static String objectKindLabel(BenchmarkSelector.Kind kind) {
+		if (kind == null) return "";
+		switch (kind) {
+			case HOST: return "ESX host";
+			case VM: return "VM";
+			case VCENTER: return "vCenter";
+			case CLUSTER: return "Cluster";
+			case VDS: return "Distributed switch";
+			case PORTGROUP: return "Distributed portgroup";
+			default: return kind.rollupName;
+		}
+	}
+
+	/** Build 95: {@code props} with {@link #OBJECT_KIND} added (a copy). */
+	public static Map<String, String> withObjectKind(Map<String, String> props,
+			BenchmarkSelector.Kind kind) {
+		Map<String, String> out = new LinkedHashMap<>(props);
+		if (kind != null) out.put(OBJECT_KIND, objectKindLabel(kind));
+		return out;
+	}
 
 	// ----- benchmark decision --------------------------------------------
 

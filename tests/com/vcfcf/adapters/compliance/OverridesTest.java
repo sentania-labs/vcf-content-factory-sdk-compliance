@@ -1221,7 +1221,7 @@ public final class OverridesTest {
 				"pushComplianceViaClient",
 				"ComplianceDecisions.complianceProps(cr, profileName,",
 				"siteOverriddenFor(profileName),",
-				"objectUnreadable.reasonText(cr.unreadableCount))");
+				"objectUnreadable.reasonText(cr.unreadableCount)),");
 
 		// The counts are the in-force ones, and the alert flag is the
 		// snapshot's (which covers fetch failures, W2).

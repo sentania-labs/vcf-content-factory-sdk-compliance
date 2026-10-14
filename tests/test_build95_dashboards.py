@@ -11,6 +11,10 @@
   highest score present.
 - #34: the About text on the Environment Overview is short and its box
   one row taller, so it no longer runs under the EDIT link.
+- Scott's decision 2026-10-14 (point 4): an "Objects with Unreadable
+  Controls" list (object, kind, count, reason; the list view filtered on
+  has_unreadable = 1 over the six kinds) sits next to the Controls
+  Passing tile on the Environment Overview and the World Summary.
 
 The visual result still needs a look on devel; this pins the YAML.
 Standard library only (line parsing, like the other guards).
@@ -96,6 +100,41 @@ class Build95DashboardTest(unittest.TestCase):
         # Nothing overlaps: the next row starts below the first row.
         _, vy, _, _ = coords(widget(text, "vcenter_object_type_view"))
         self.assertGreaterEqual(vy, y + h)
+
+    def test_unreadable_list(self):
+        view_name = ("[VCF Content Factory] Compliance Objects with "
+                     "Unreadable Controls")
+        text = read("views/compliance-unreadable-objects.yaml")
+        self.assertIn('name: "%s"' % view_name, text)
+        kinds = re.findall(r"^    resource_kind:\s*(.+?)\s*$", text, re.M)
+        self.assertEqual(kinds, [
+            "HostSystem", "VirtualMachine", "VMwareAdapter Instance",
+            "ClusterComputeResource", "VmwareDistributedVirtualSwitch",
+            "DistributedVirtualPortgroup"])
+        flt = re.search(r"^  filter:\n((?:    .*\n)+)", text, re.M).group(1)
+        self.assertIn('metric_key: "VCF-CF Compliance|has_unreadable"', flt)
+        self.assertRegex(flt, r"condition:\s*EQUALS")
+        self.assertRegex(flt, r"value:\s*1\b")
+        self.assertEqual(columns(text), [
+            "VCF-CF Compliance|object_kind",
+            "VCF-CF Compliance|unreadable_count",
+            "VCF-CF Compliance|unreadable_reason"])
+        self.assertIn("views/compliance-unreadable-objects.yaml",
+                      read("adapter.yaml"))
+        for name in ["compliance-environment-overview.yaml",
+                     "compliance-world-summary.yaml"]:
+            with self.subTest(dashboard=name):
+                dash = read("dashboards/" + name)
+                block = widget(dash, "unreadable_objects_view")
+                self.assertIsNotNone(block, "list widget present")
+                self.assertRegex(block, r"type:\s*View")
+                self.assertIn('view: "%s"' % view_name, block)
+                x, y, w, h = coords(block)
+                sx, sy, sw, sh = coords(widget(dash,
+                                               "env_compliance_scoreboard"))
+                self.assertEqual(y, sy, "same row as the scoreboard")
+                self.assertEqual(x, sx + sw, "directly right of the tile")
+                self.assertGreaterEqual(w, 5, "wide enough for the reason")
 
     def test_no_overlap(self):
         for name in ["compliance-environment-overview.yaml",

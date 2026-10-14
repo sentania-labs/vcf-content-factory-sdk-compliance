@@ -22,6 +22,7 @@ public final class Build95UnreadableTest {
 		unreadableNotPushed();
 		perObjectSignals();
 		adapterWiring();
+		objectKind();
 		System.out.println("Build95UnreadableTest: all assertions passed");
 	}
 
@@ -308,7 +309,7 @@ public final class Build95UnreadableTest {
 		for (String[] l : loops) {
 			int at = ca.indexOf(l[0]);
 			T.check(at >= 0, "loop: " + l[0]);
-			int begin = ca.indexOf("beginObject();", at);
+			int begin = ca.indexOf("beginObject(", at);
 			int read = ca.indexOf(l[1], at);
 			T.check(begin > at && begin < read,
 					"beginObject() before the reads in " + l[0]);
@@ -325,5 +326,39 @@ public final class Build95UnreadableTest {
 				"the push carries the object's reason");
 		T.check(ca.contains("ComplianceDecisions.versionUnreadableProps("),
 				"version unreadable pushes its reason");
+	}
+
+	/**
+	 * Point 4: the "Objects with unreadable controls" list shows each
+	 * row's kind from VCF-CF Compliance|object_kind, pushed with every
+	 * object payload (the push helpers add it; pinned from source).
+	 */
+	static void objectKind() throws Exception {
+		String[][] want = {{"HOST", "ESX host"}, {"VM", "VM"},
+				{"VCENTER", "vCenter"}, {"CLUSTER", "Cluster"},
+				{"VDS", "Distributed switch"},
+				{"PORTGROUP", "Distributed portgroup"}};
+		for (String[] w : want) {
+			BenchmarkSelector.Kind k = BenchmarkSelector.Kind.valueOf(w[0]);
+			Map<String, String> props = ComplianceDecisions.withObjectKind(
+					ComplianceDecisions.unreadableProps("r", "c"), k);
+			T.eq(w[1], props.get(ComplianceDecisions.OBJECT_KIND), w[0]);
+			T.eq("r", props.get(ComplianceDecisions.UNREADABLE_REASON),
+					"the rest kept");
+		}
+		String ca = new String(java.nio.file.Files.readAllBytes(
+				java.nio.file.Paths.get("src/com/vcfcf/adapters/compliance/"
+						+ "ComplianceAdapter.java")),
+				java.nio.charset.StandardCharsets.UTF_8);
+		for (String m : new String[] {"private void pushComplianceViaClient(",
+				"private void pushProfileNamePropertyOnly(",
+				"private void pushNoBenchmark(",
+				"private void recordVersionUnreadable("}) {
+			int at = ca.indexOf(m);
+			int end = ca.indexOf("\n\t}\n", at);
+			T.check(at >= 0 && ca.substring(at, end)
+					.contains("ComplianceDecisions.withObjectKind("),
+					m + " pushes object_kind");
+		}
 	}
 }
