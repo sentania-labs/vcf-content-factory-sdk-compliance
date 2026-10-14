@@ -21,7 +21,8 @@ import java.util.Set;
  *       prefix-cap reason; cluster paths still reach
  *       {@code configurationEx};</li>
  *   <li>a session that lapses mid-cycle logs in again and the call is
- *       retried once;</li>
+ *       retried once; a failed re-login is not tried again until the next
+ *       cycle, and a failed login leaves no session behind (review W3);</li>
  *   <li>connections are reused, and a server-closed connection is
  *       replaced cleanly;</li>
  *   <li>bulk reads page with RetrievePropertiesEx /
@@ -47,6 +48,8 @@ public final class Build95CollectionTest {
 		listingNamesReused();
 		prefixCap();
 		reloginMidCycle();
+		failedReloginLatched();
+		failedLoginLeavesNoSession();
 		connectionReuse();
 		bulkPaging();
 		bulkPathFixAndFailedPage();
@@ -227,6 +230,113 @@ public final class Build95CollectionTest {
 			T.eq(0, f.count("CurrentTime"), "no keepalive involved");
 			int rp = f.count("RetrieveProperties");
 			T.eq(3, rp, "the failed call was retried once (1 + 2)");
+		}
+	}
+
+	/**
+	 * Review W3: with a bad credential, one cycle sends one failed Login,
+	 * not one per SOAP call (SSO lockout), every later read fails
+	 * (UNREADABLE, never a default) without touching vCenter, and the next
+	 * cycle tries once more.
+	 */
+	static void failedReloginLatched() throws Exception {
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> perObject(r, FakeVCenter.map(
+					"host-1|runtime.connectionState", "<val>connected</val>",
+					"host-1|config.lockdownMode", "<val>lockdownNormal</val>"),
+					null);
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			c.beginCycle();
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem", "host-1");
+			T.eq("connected", c.getHostConnectionState(h), "before expiry");
+			f.loginFails = true;    // the password was changed in SSO
+			f.expireSessions();     // and the session lapses mid-cycle
+			T.eq(null, c.getHostConnectionState(h),
+					"the call whose re-login failed reads nothing");
+			T.eq(2, f.count("Login"), "one failed re-login");
+			T.check(c.loginFailure() != null, "the failure is remembered");
+			int calls = f.requests.size();
+			List<BenchmarkProfile.Control> ctl = Arrays.asList(
+					vim("esx.lockdown", "HostSystem", "lockdown",
+							"lockdownNormal", "scalar:config.lockdownMode"));
+			for (int i = 0; i < 20; i++) {
+				boolean threw = false;
+				try {
+					c.getHostConnectionState(h);
+				} catch (VimOptions.ReadFault e) {
+					threw = e.getMessage().contains("not logging in again");
+				}
+				T.check(threw, "a later read fails, naming the latch");
+				Map<String, Object> v = null;
+				try {
+					v = c.readVimProperties(h, ctl);
+				} catch (VimOptions.ReadFault e) {
+					v = null;
+				}
+				T.check(v == null || v.get("lockdown") == VSphereClient.UNREADABLE,
+						"a later recipe read is UNREADABLE, never a value");
+			}
+			T.eq(2, f.count("Login"), "no further Login this cycle");
+			T.eq(calls, f.requests.size(), "no call reached vCenter after the "
+					+ "failed re-login");
+
+			// Next cycle: one more attempt; with the credential fixed it
+			// works again.
+			f.loginFails = false;
+			c.ensureConnected();
+			c.beginCycle();
+			T.check(c.loginFailure() == null, "latch cleared by the new cycle");
+			T.eq("connected", c.getHostConnectionState(h), "next cycle reads");
+			T.eq(3, f.count("Login"), "one Login in the next cycle");
+
+			// beginCycle alone clears the latch too.
+			f.loginFails = true;
+			f.expireSessions();
+			T.eq(null, c.getHostConnectionState(h), "failed again");
+			f.loginFails = false;
+			c.beginCycle();
+			T.eq("connected", c.getHostConnectionState(h),
+					"after beginCycle a read may log in again");
+		}
+	}
+
+	/**
+	 * Review W3: a failed Login leaves no half-made session. vCenter sets
+	 * the session cookie on RetrieveServiceContent, before Login; the
+	 * client must not take that cookie and the ServiceContent references
+	 * for a live session.
+	 */
+	static void failedLoginLeavesNoSession() throws Exception {
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> perObject(r, FakeVCenter.map(
+					"host-1|runtime.connectionState", "<val>connected</val>"),
+					null);
+			f.loginFails = true;
+			VSphereClient c = f.client();
+			boolean threw = false;
+			try {
+				c.ensureConnected();
+			} catch (Exception e) {
+				threw = true;
+			}
+			T.check(threw, "a failed Login fails the cycle's connect");
+			int calls = f.requests.size();
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem", "host-1");
+			threw = false;
+			try {
+				c.getHostConnectionState(h);
+			} catch (VimOptions.ReadFault e) {
+				threw = true;
+			}
+			T.check(threw, "a read fails at once");
+			T.eq(calls, f.requests.size(), "and sends nothing, the "
+					+ "pre-login cookie in particular");
+			for (FakeVCenter.Req r : f.requests) {
+				T.check(!r.action.endsWith("RetrieveProperties"),
+						"nothing was read on the unauthenticated cookie");
+			}
+			T.eq(1, f.count("Login"), "one Login");
 		}
 	}
 

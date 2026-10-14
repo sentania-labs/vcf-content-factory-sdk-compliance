@@ -278,8 +278,10 @@ public final class EsxcliCycleCacheTest {
 
 		// VSphereClient.beginCycle is exactly that call (SDK class: source).
 		String vs = read("src/com/vcfcf/adapters/compliance/VSphereClient.java");
-		T.eq("EsxcliSoapClient.beginCycleOn(esxcli);",
-				body(vs, "public void beginCycle()"),
+		// Build 95 review W3: it also clears the cycle's failed-login latch
+		// (Build95CollectionTest covers that behaviour).
+		T.check(body(vs, "public void beginCycle()")
+				.endsWith("EsxcliSoapClient.beginCycleOn(esxcli);"),
 				"VSphereClient.beginCycle delegates to beginCycleOn");
 
 		// The adapter's cycle body starts with ensureConnected, beginCycle.

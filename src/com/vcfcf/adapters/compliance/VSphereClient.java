@@ -102,6 +102,15 @@ public final class VSphereClient {
 	private volatile boolean lastNotAuthenticated;
 	// Build 95 (issue #24): the last call's response was over the cap.
 	private volatile boolean lastTooLarge;
+	// Build 95 review W3: why the last connect() failed, kept until the
+	// next cycle (beginCycle, ensureConnected). While set, no read logs in
+	// again: with bad credentials every SOAP call would otherwise send one
+	// more Login and could trip the SSO lockout policy.
+	private volatile String loginFailure;
+	// Build 95 review W3: the cookie a connect() in progress captured; it
+	// becomes the session only once Login has succeeded.
+	private volatile boolean connecting;
+	private volatile String pendingCookie;
 
 	/**
 	 * Build 95 (issue #24): the most bytes of one SOAP response read into
@@ -207,7 +216,32 @@ public final class VSphereClient {
 	// Session lifecycle
 	// -----------------------------------------------------------------------
 
+	/**
+	 * Log in: RetrieveServiceContent, then Login. Build 95 review W3: the
+	 * session fields (the cookie, the PropertyCollector and the other
+	 * ServiceContent references, the about values, the esxcli client) are
+	 * set only after Login succeeds, so a failed Login never leaves a
+	 * half-made session that {@link #ensureSession} would take for a live
+	 * one. A failure is remembered ({@link #loginFailure}) until the next
+	 * cycle, and no read logs in again before then.
+	 */
 	public void connect() throws Exception {
+		connecting = true;
+		pendingCookie = null;
+		try {
+			connectOnce();
+			loginFailure = null;
+		} catch (Exception e) {
+			loginFailure = e.getClass().getSimpleName() + ": "
+					+ e.getMessage();
+			throw e;
+		} finally {
+			connecting = false;
+			pendingCookie = null;
+		}
+	}
+
+	private void connectOnce() throws Exception {
 		// RetrieveServiceContent does not require a session cookie.
 		String body =
 				"<RetrieveServiceContent xmlns=\"urn:vim25\">"
@@ -221,28 +255,32 @@ public final class VSphereClient {
 		if (rv == null) {
 			throw new Exception("RetrieveServiceContent: no returnval");
 		}
-		this.propertyCollector = moRefOf(rv, "propertyCollector");
-		this.viewManager = moRefOf(rv, "viewManager");
-		this.rootFolder = moRefOf(rv, "rootFolder");
-		this.sessionManager = moRefOf(rv, "sessionManager");
-		this.settingOptionMgr = moRefOf(rv, "setting");
+		MoRef pc = moRefOf(rv, "propertyCollector");
+		MoRef vm = moRefOf(rv, "viewManager");
+		MoRef rf = moRefOf(rv, "rootFolder");
+		MoRef sm = moRefOf(rv, "sessionManager");
+		MoRef setting = moRefOf(rv, "setting");
+		String uuid = null;
+		String fullName = null;
+		String version = null;
 		Element about = firstDirectChild(rv, "about");
 		if (about != null) {
-			this.aboutInstanceUuid = childText(about, "instanceUuid");
-			this.aboutFullName = childText(about, "fullName");
-			this.aboutVersion = childText(about, "version");
+			uuid = childText(about, "instanceUuid");
+			fullName = childText(about, "fullName");
+			version = childText(about, "version");
 		}
-		if (sessionManager == null || propertyCollector == null
-				|| rootFolder == null) {
+		if (sm == null || pc == null || rf == null) {
 			throw new Exception("RetrieveServiceContent: incomplete content "
 					+ "(sessionManager/propertyCollector/rootFolder missing)");
 		}
 
-		// Login — establishes the vmware_soap_session cookie.
+		// Login: establishes the vmware_soap_session cookie. A cookie set
+		// on RetrieveServiceContent is not a session until Login succeeds.
+		pendingCookie = null;
 		String loginBody =
 				"<Login xmlns=\"urn:vim25\">"
 				+ "<_this type=\"SessionManager\">"
-				+ xmlEscape(sessionManager.value) + "</_this>"
+				+ xmlEscape(sm.value) + "</_this>"
 				+ "<userName>" + xmlEscape(username) + "</userName>"
 				+ "<password>" + xmlEscape(password) + "</password>"
 				+ "</Login>";
@@ -250,15 +288,26 @@ public final class VSphereClient {
 		if (loginResp == null) {
 			throw new Exception("Login failed (no response / SOAP fault)");
 		}
-		if (sessionCookie == null) {
+		String cookie = pendingCookie;
+		if (cookie == null) {
 			throw new Exception("Login succeeded but no session cookie was "
 					+ "returned");
 		}
 
+		// Login succeeded: only now does the client hold a session.
+		this.propertyCollector = pc;
+		this.viewManager = vm;
+		this.rootFolder = rf;
+		this.sessionManager = sm;
+		this.settingOptionMgr = setting;
+		this.aboutInstanceUuid = uuid;
+		this.aboutFullName = fullName;
+		this.aboutVersion = version;
+		this.sessionCookie = cookie;
+
 		// esxcli reader rides this session cookie; its cache is emptied
 		// per cycle by beginCycle().
-		this.esxcli = new EsxcliSoapClient(vcenterUrl, sessionCookie,
-				sslFactory);
+		this.esxcli = new EsxcliSoapClient(vcenterUrl, cookie, sslFactory);
 		this.esxcli.setMetrics(metrics);
 	}
 
@@ -290,10 +339,12 @@ public final class VSphereClient {
 	 * {@link #ensureConnected}. Empties the esxcli result cache so this
 	 * cycle reads every host's esxcli commands again (a stale cached pass
 	 * would be a false pass). No login, no vCenter call. A no-op when there
-	 * is no session. Build 86: the body is exactly the SDK-free helper, so
-	 * EsxcliCycleCacheTest covers the delegation (and pins this body).
+	 * is no session. Build 86: the esxcli part is exactly the SDK-free
+	 * helper, so EsxcliCycleCacheTest covers the delegation. Build 95
+	 * review W3: a new cycle may log in again after a failed login.
 	 */
 	public void beginCycle() {
+		loginFailure = null;
 		EsxcliSoapClient.beginCycleOn(esxcli);
 	}
 
@@ -318,6 +369,9 @@ public final class VSphereClient {
 	 * again, retry once).
 	 */
 	public void ensureConnected() throws Exception {
+		// Build 95 review W3: the cycle's one session check always tries
+		// (one Login per cycle at most when the credential is bad).
+		loginFailure = null;
 		if (sessionCookie == null || propertyCollector == null) {
 			connect();
 			return;
@@ -348,8 +402,22 @@ public final class VSphereClient {
 	 */
 	private void ensureSession() throws Exception {
 		if (sessionCookie == null || propertyCollector == null) {
+			String failed = loginFailure;
+			if (failed != null) {
+				// Build 95 review W3: one failed login per cycle, never one
+				// per read (SSO lockout). The read fails, so its controls
+				// are UNREADABLE, never a default.
+				throw new VimOptions.ReadFault("vCenter login failed earlier "
+						+ "this cycle (" + failed + "); not logging in again "
+						+ "until the next cycle");
+			}
 			connect();
 		}
+	}
+
+	/** Build 95 review W3: why login failed this cycle, or null. */
+	String loginFailure() {
+		return loginFailure;
 	}
 
 	// -----------------------------------------------------------------------
@@ -2004,7 +2072,14 @@ public final class VSphereClient {
 			// Build 95 (issue #17): with one keepalive per cycle, a session
 			// that lapses mid-cycle shows up here. Log in again and retry
 			// this call once; a failed login leaves the call failed (null,
-			// so the read is UNREADABLE), never a default.
+			// so the read is UNREADABLE), never a default. Review W3: after
+			// one failed login this cycle, no call tries again.
+			String failed = loginFailure;
+			if (failed != null) {
+				lastFault = "session not authenticated; not logging in again "
+						+ "this cycle (login failed: " + failed + ")";
+				return null;
+			}
 			reloggingIn = true;
 			try {
 				logWarn("vSphere SOAP: session not authenticated on "
@@ -2281,7 +2356,13 @@ public final class VSphereClient {
 				if (semi >= 0) pair = pair.substring(0, semi);
 				pair = pair.trim();
 				if (pair.startsWith("vmware_soap_session")) {
-					this.sessionCookie = pair;
+					// Build 95 review W3: during connect() the cookie waits
+					// for Login to succeed before it becomes the session.
+					if (connecting) {
+						this.pendingCookie = pair;
+					} else {
+						this.sessionCookie = pair;
+					}
 					return;
 				}
 			}

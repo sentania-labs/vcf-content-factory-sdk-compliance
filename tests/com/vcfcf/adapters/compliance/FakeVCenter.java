@@ -28,7 +28,10 @@ import com.sun.net.httpserver.HttpServer;
  *
  * <p>Sessions: Login issues a fresh cookie; {@link #expireSessions} makes
  * every issued cookie invalid, after which any authenticated call answers
- * a NotAuthenticated fault, as vCenter does when a session lapses.
+ * a NotAuthenticated fault, as vCenter does when a session lapses. Like
+ * vCenter, RetrieveServiceContent already sets a vmware_soap_session cookie,
+ * which is not authenticated until Login succeeds (review W3).
+ * {@link #loginFails} makes Login answer InvalidLogin (a bad credential).
  */
 final class FakeVCenter implements AutoCloseable {
 
@@ -77,6 +80,8 @@ final class FakeVCenter implements AutoCloseable {
 	final List<Req> requests = Collections.synchronizedList(new ArrayList<>());
 	final Set<String> validCookies = Collections.synchronizedSet(new HashSet<>());
 	volatile Function<Req, Resp> handler = r -> fault("NotImplemented", "");
+	/** Review W3: Login answers InvalidLogin while true. */
+	volatile boolean loginFails;
 	private final HttpServer server;
 	private int sessions;
 
@@ -146,6 +151,12 @@ final class FakeVCenter implements AutoCloseable {
 					+ "<version>9.0.0</version>"
 					+ "<instanceUuid>uuid-1</instanceUuid></about>"
 					+ "</returnval>");
+			// vCenter sets the (not yet authenticated) session cookie here.
+			ex.getResponseHeaders().add("Set-Cookie",
+					"vmware_soap_session=\"anon\"; Path=/; HttpOnly");
+		} else if (op.equals("Login") && loginFails) {
+			resp = fault("InvalidLogin", "Cannot complete login due to an "
+					+ "incorrect user name or password.");
 		} else if (op.equals("Login")) {
 			String c;
 			synchronized (this) {
