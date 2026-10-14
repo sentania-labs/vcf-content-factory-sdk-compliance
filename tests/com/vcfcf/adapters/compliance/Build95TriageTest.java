@@ -19,6 +19,9 @@ import java.util.Map;
  *       from the stream; a response over the cap fails the call
  *       (UNREADABLE, reason response-too-large), and the next call works
  *       on a fresh connection.</li>
+ *   <li>#23 / #28: configure releases the previous vCenter session and
+ *       Suite API client before making new ones; the dead REST client
+ *       field is gone.</li>
  * </ul>
  * Run from the repo root.
  */
@@ -32,6 +35,7 @@ public final class Build95TriageTest {
 		hostListingFailure();
 		stopBetweenObjects();
 		responseCap();
+		releaseOnReconfigure();
 		System.out.println("Build95TriageTest: all assertions passed");
 	}
 
@@ -205,6 +209,44 @@ public final class Build95TriageTest {
 					"reason category: " + why);
 			T.eq("connected", c.getHostConnectionState(h),
 					"the next call works on a fresh connection");
+		}
+	}
+
+	/** #23 (leak part) and #28 (dead vcApi). */
+	static void releaseOnReconfigure() throws Exception {
+		String ca = OverridesTest.readSrc(CA);
+		String code = OverridesTest.stripComments(ca);
+		T.check(!code.contains("vcApi"), "no vcApi field or use (#28)");
+		OverridesTest.inOrder(OverridesTest.body(ca,
+				"protected void configureAdapter("), "configureAdapter",
+				"releaseClients();",
+				"this.vsphere = new VSphereClient(",
+				"this.suiteStitcher = SuiteApiStitcher.create(");
+		T.eq(1, OverridesTest.count(OverridesTest.body(ca,
+				"protected void configureAdapter("), "releaseClients();"),
+				"released once per configure");
+		OverridesTest.inOrder(OverridesTest.body(ca,
+				"private void releaseClients()"), "releaseClients",
+				"vsphere = null;", "suiteStitcher = null;", "stitcher = null;",
+				"oldVsphere.disconnect();", "oldSuite.discard();");
+		T.check(OverridesTest.body(ca, "public void onDiscard()")
+				.startsWith("releaseClients();"), "discard releases too");
+
+		// disconnect() logs the session out on vCenter, and a released
+		// client logs in again only if used again.
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> Build95CollectionTest.perObject(r,
+					FakeVCenter.map("host-1|runtime.connectionState",
+							"<val>connected</val>"), null);
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			T.eq(1, f.validCookies.size(), "one live session");
+			c.disconnect();
+			T.eq(1, f.count("Logout"), "session logged out");
+			T.eq(1, f.count("Login"), "no re-login to log out");
+			FakeVCenter.Req lo = f.of("Logout").get(0);
+			T.check(lo.cookie != null && lo.cookie.contains("s1"),
+					"the session's own cookie was logged out");
 		}
 	}
 }

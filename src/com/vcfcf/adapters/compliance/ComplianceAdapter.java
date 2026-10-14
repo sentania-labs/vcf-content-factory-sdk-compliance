@@ -54,7 +54,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	private static final String ADAPTER_KIND = "vcfcf_compliance";
 
-	private volatile VCenterApiClient vcApi;
 	private volatile VSphereClient vsphere;
 	private volatile BenchmarkLoader benchmarkLoader;
 	private volatile SuiteApiStitcher suiteStitcher;
@@ -167,9 +166,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			logWarn(tlsNotice);
 		}
 
-		this.vcApi = new VCenterApiClient(
-				config.baseUrl(), config.username, config.password,
-				sslContextFor(config.vcenterHost));
+		// Build 95 (issue #23): an instance edit re-runs configure on the
+		// same adapter object; log the previous vCenter session out and
+		// close the previous Suite API client before replacing them, so an
+		// edit no longer leaves a live session and HTTP pools behind in the
+		// collector JVM. (Issue #28: the REST client built here was never
+		// used by collection; it is gone. Test Connection builds its own.)
+		releaseClients();
 
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
@@ -295,7 +298,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	protected VcfCfTester<ComplianceConfig> getTester() {
 		// Build 46 onTest NPE fix: the controller invokes Test-connection on a
 		// FRESH instance — onConfigure (configureAdapter) has NOT run, so the
-		// instance fields (this.vcApi, this.config) are still null. The base's
+		// instance fields (this.config and the clients) are still null. The base's
 		// onTest also passes the still-null this.config as `cfg`. So the tester
 		// must be fully self-contained: derive everything it needs from the
 		// ResourceConfig the platform carries on the TestParam, never from
@@ -2466,9 +2469,35 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	@Override
 	public void onDiscard() {
-		if (vcApi != null) vcApi.logout();
-		if (vsphere != null) vsphere.disconnect();
-		if (suiteStitcher != null) suiteStitcher.discard();
+		releaseClients();
 		super.onDiscard();
+	}
+
+	/**
+	 * Build 95 (issue #23): log the vCenter session out and close the Suite
+	 * API client, then forget both. Used by configure (before new ones are
+	 * made) and by discard. Never throws: a failed logout leaves only an
+	 * idle session for vCenter to expire.
+	 */
+	private void releaseClients() {
+		VSphereClient oldVsphere = vsphere;
+		SuiteApiStitcher oldSuite = suiteStitcher;
+		vsphere = null;
+		suiteStitcher = null;
+		stitcher = null;
+		if (oldVsphere != null) {
+			try {
+				oldVsphere.disconnect();
+			} catch (RuntimeException e) {
+				logWarn("Releasing the previous vCenter session failed: " + e);
+			}
+		}
+		if (oldSuite != null) {
+			try {
+				oldSuite.discard();
+			} catch (RuntimeException e) {
+				logWarn("Releasing the previous Suite API client failed: " + e);
+			}
+		}
 	}
 }
