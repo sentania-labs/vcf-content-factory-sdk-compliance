@@ -468,7 +468,7 @@ public final class ComplianceDecisionsTest {
 				"collectVimObject(");
 
 		inOrder(body(ca, "private boolean kindPushable("), "kindPushable",
-				"boolean failed = present && stitcher.loadFailed(resourceKind);",
+				"boolean failed = present && cycle.stitcher.loadFailed(resourceKind);",
 				"if (ComplianceDecisions.kindPushable(present, failed)) { return true; }",
 				"rollup.markIncomplete(kind);",
 				"return false;");

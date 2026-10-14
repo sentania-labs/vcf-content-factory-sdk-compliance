@@ -12,9 +12,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * cycle (see {@link ComplianceDecisions#decide}). It holds no cleanup state
  * (per-control cleanup reads live values from VCF Ops every cycle, see
  * {@link ComplianceDecisions#staleZeroControls}), so nothing periodic wipes
- * it. It is emptied only by a collector restart (in-memory) or an instance
- * edit ({@link #clear()} from configure, since an edit can change the
- * benchmark mode), and trimmed to objects still in inventory.
+ * it. It lives in one configuration's {@link Configured} holder, so it
+ * starts empty after a collector restart (in-memory) or an instance edit
+ * (a new holder, since an edit can change the vCenter or the benchmark
+ * mode; build 95 review W12), and is trimmed to objects still in
+ * inventory.
  *
  * <p>No SDK dependencies.
  */
@@ -43,7 +45,7 @@ public final class LastBenchmarkMemory {
 		applied.keySet().retainAll(seenKeys);
 	}
 
-	/** Instance edit: the benchmark mode may have changed. */
+	/** Empty the memory (the tests; the adapter uses a new holder). */
 	public void clear() {
 		applied.clear();
 	}

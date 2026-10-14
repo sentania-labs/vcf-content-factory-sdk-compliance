@@ -1134,7 +1134,7 @@ public final class OverridesTest {
 				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
 						+ "bundled, cycleOverrides.skipped);",
 				"ComplianceDecisions.orphanProps(stale, p.profileName, "
-						+ "cycleOverrides.skipped, cycleConfig.overridesFile)");
+						+ "cycleOverrides.skipped, cycle.account.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its
 		// skipped controls in force, every cycle, and the cleanup treats
@@ -1150,7 +1150,7 @@ public final class OverridesTest {
 		inOrder(skipIn, "skipInForce",
 				"ComplianceDecisions.skipPush(kind,",
 				"cycleUnadjusted.get(d.profileName), r.skipped,",
-				"cycleConfig.overridesFile);");
+				"cycle.account.overridesFile);");
 		T.check(!skipIn.contains("latest"),
 				"the skip push never depends on a read-back");
 		T.check(!skipIn.contains("stitcher."),
@@ -1161,7 +1161,7 @@ public final class OverridesTest {
 				"private void pushComplianceViaClient(",
 				"private void pushProfileNamePropertyOnly("}) {
 			String b = body(ca, sig);
-			inOrder(b, sig, "ComplianceDecisions.pushObject(stitcher, "
+			inOrder(b, sig, "ComplianceDecisions.pushObject(cycle.stitcher, "
 					+ "resourceId,", "skip,");
 			T.check(!b.contains("stitcher.push"), sig
 					+ ": only the merged push");
@@ -1211,10 +1211,11 @@ public final class OverridesTest {
 		// Review N2: an account stored as Custom zeroes the retired
 		// bucket in its rollup push, and only once.
 		inOrder(ca, "zeroCustomBucket",
-				"this.zeroCustomBucket = storedAsCustom;",
+				"newSuite, newStitcher, storedAsCustom);",
+				"cycle.zeroCustomBucketPending()",
 				"ComplianceRollup.zeroRetiredCustom(stats);",
 				"stitcher.pushStats(vcEntry.resourceId, stats,",
-				"zeroCustomBucket = false;");
+				"cycle.customBucketZeroed();");
 
 		// The push marks site-overridden controls.
 		inOrder(body(ca, "private void pushComplianceViaClient("),

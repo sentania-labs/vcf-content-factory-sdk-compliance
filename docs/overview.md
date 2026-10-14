@@ -357,7 +357,11 @@ collection continues; compliance is never failed over a stitch error.
   that cycle to the new settings part-way: it finishes on the clients it
   started with, which the edit has closed, so its remaining reads are
   unreadable (never read from another vCenter), and the next cycle uses
-  the new settings.
+  the new settings and starts fresh: nothing the interrupted cycle
+  recorded (the benchmark each object was scored against, the vCenter
+  object it resolved) carries over, so the next cycle never scores the
+  new vCenter against the old one's benchmark or flags "not collected"
+  on the old vCenter.
 
 - **Stop Collecting stops within one object (build 95, issue #16).**
   Stopping collection on the account abandons the running cycle before the

@@ -74,7 +74,7 @@ public final class Build95TriageTest {
 		OverridesTest.inOrder(OverridesTest.body(ca,
 				"private java.util.Map<String, String> collectHosts("),
 				"collectHosts", "ComplianceDecisions.listOrHoldBack(",
-				"return vsphere.getHosts();",
+				"return cycle.vsphere.getHosts();",
 				"rollup, BenchmarkSelector.Kind.HOST,",
 				"if (hosts == null) { return hostVersions; }");
 		// The cycle still runs every other kind after collectHosts returns.
@@ -347,35 +347,35 @@ public final class Build95TriageTest {
 		T.check(!code.contains("vcApi"), "no vcApi field or use (#28)");
 		// Configure needs the SDK, so its order is pinned from source:
 		// build, swap, then release (no null window, review W4). Review
-		// N13: configure swaps the configured* fields; the cycle copies
-		// them at its start (tests/test_cycle_snapshot.py).
+		// N13 and W12: configure publishes one holder; the cycle copies it
+		// at its start (tests/test_cycle_snapshot.py, SnapshotHolderTest).
 		String configure = OverridesTest.body(ca,
 				"protected void configureAdapter(");
 		OverridesTest.inOrder(configure, "configureAdapter",
-				"VSphereClient oldVsphere = this.configuredVsphere;",
-				"SuiteApiStitcher oldSuite = this.configuredSuite;",
+				"Configured<SuiteApiStitcher, ComplianceStitcher> old = "
+						+ "this.configured;",
 				"VSphereClient newVsphere = new VSphereClient(",
 				"newSuite = SuiteApiStitcher.create(",
-				"this.configuredVsphere = newVsphere;",
-				"this.configuredSuite = newSuite;",
-				"this.configuredStitcher = newStitcher;",
-				"releaseClients(oldVsphere, oldSuite);");
+				"this.configured = new Configured<>(account, newVsphere, "
+						+ "newLoader,",
+				"newSuite, newStitcher, storedAsCustom);",
+				"releaseClients(old.vsphere, old.suite);");
 		T.eq(1, OverridesTest.count(configure, "releaseClients("),
 				"released once per configure");
 		String flat = code.replaceAll("\\s+", " ");
-		for (String nul : new String[] {"vsphere = null;",
-				"this.vsphere = null;", "stitcher = null;",
-				"configuredVsphere = null;", "configuredStitcher = null;",
-				"configuredSuite = null;"}) {
-			T.check(!flat.contains(" " + nul), "no client field is nulled: "
+		for (String nul : new String[] {"configured = null;",
+				"this.configured = null;", "cycle = null;",
+				"this.cycle = null;"}) {
+			T.check(!flat.contains(" " + nul), "no holder field is nulled: "
 					+ nul);
 		}
 		OverridesTest.inOrder(OverridesTest.body(ca,
 				"private void releaseClients("), "releaseClients",
 				"oldVsphere.disconnect();", "oldSuite.discard();");
-		T.check(OverridesTest.body(ca, "public void onDiscard()")
-				.startsWith("releaseClients(configuredVsphere, configuredSuite);"),
-				"discard releases too");
+		OverridesTest.inOrder(OverridesTest.body(ca, "public void onDiscard()"),
+				"onDiscard",
+				"Configured<SuiteApiStitcher, ComplianceStitcher> c = configured;",
+				"releaseClients(c.vsphere, c.suite);");
 
 		// disconnect() logs the session out on vCenter and closes the
 		// client: no later call logs in again.

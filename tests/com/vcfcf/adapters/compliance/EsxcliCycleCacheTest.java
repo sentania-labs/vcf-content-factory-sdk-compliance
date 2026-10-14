@@ -302,9 +302,9 @@ public final class EsxcliCycleCacheTest {
 		// Build 93: that helper is ensureConnected plus the certificate
 		// message.
 		T.check(body(ca, "private void ensureVCenterConnected()")
-				.startsWith("try { vsphere.ensureConnected();"),
+				.startsWith("try { cycle.vsphere.ensureConnected();"),
 				"the helper connects first");
-		T.eq("vsphere.beginCycle()", stmts[0].trim(),
+		T.eq("cycle.vsphere.beginCycle()", stmts[0].trim(),
 				"first statement after the connect (before any read)");
 		T.check(body(ca, "private void collectWorld(")
 				.contains("collectWorldCycle(worldRc, out);"),

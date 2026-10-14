@@ -264,17 +264,17 @@ public final class CertificateTest {
 		// Build 95 review W4: configure builds the client into a local
 		// before swapping it in.
 		OverridesTest.inOrder(ca, "SOAP client", "VSphereClient newVsphere = "
-				+ "new VSphereClient(", "config.vcenterHost,",
-				"sslSocketFactoryFor(config.vcenterHost),");
+				+ "new VSphereClient(", "account.vcenterHost,",
+				"sslSocketFactoryFor(account.vcenterHost),");
 		OverridesTest.inOrder(ca, "Test Connection client",
 				"VCenterApiClient testApi = new VCenterApiClient(",
 				"testCfg.baseUrl(),",
 				"sslContextFor(testCfg.vcenterHost));");
-		// Review N13: the cycle reads its account copy (cycleConfig).
+		// Review N13 and W12: the cycle reads its holder copy's account.
 		OverridesTest.inOrder(ca, "VAMI client", "new VamiApiClient(",
-				"cycleConfig.baseUrl(),",
-				"sslContextFor(cycleConfig.vcenterHost),", "this::logWarn);");
-		T.eq(3, OverridesTest.count(ca, "sslContextFor(cycleConfig.vcenterHost)")
+				"cycle.account.baseUrl(),",
+				"sslContextFor(cycle.account.vcenterHost),", "this::logWarn);");
+		T.eq(3, OverridesTest.count(ca, "sslContextFor(cycle.account.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(testCfg.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(dialledHost)"),
 				"every context build names the dialled host");
@@ -349,18 +349,20 @@ public final class CertificateTest {
 				"} catch (Exception e) {",
 				"markCycleNotCollected(e);",
 				"throw e;",
-				"vsphere.beginCycle();");
+				"cycle.vsphere.beginCycle();");
 		OverridesTest.inOrder(ca, "the marker",
 				"private void markCycleNotCollected(Exception cause) {",
-				"ComplianceDecisions.markNotCollected(lastVcResourceId,",
+				"ComplianceDecisions.markNotCollected(cycle.lastVcResourceId(),",
 				"st.loadVCenterAdapterInstance();",
 				"st.matchVCenterAdapterInstance(",
-				"cycleConfig.vcenterHost, null);",
+				"cycle.account.vcenterHost, null);",
 				"st.pushStats(rid, stats,",
 				"} catch (RuntimeException e) {");
+		// Review W12: the id lives in the configuration's holder (a new
+		// holder starts empty); the cycle writes it only through its copy.
 		OverridesTest.inOrder(ca, "last resolved id kept per configure",
-				"this.lastVcResourceId = null;",
-				"lastVcResourceId = vcEntry.resourceId;",
+				"this.configured = new Configured<>(",
+				"cycle.rememberVcResourceId(vcEntry.resourceId);",
 				"pushRollup(vcEntry, rollup);");
 	}
 
