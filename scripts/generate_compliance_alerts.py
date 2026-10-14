@@ -45,25 +45,33 @@ adapter never pushes):
   (Compliant -1) does not close a real finding at a 5 minute interval. The
   hand-written score symptoms and alert in describe.xml use the same 1 / 3
   (pinned by tests/test_generate_compliance_alerts.py). The collection
-  alerts below keep 1 / 1 (COLLECTION_WAIT_CYCLE / COLLECTION_CANCEL_CYCLE):
-  they report the cycle that could not be read and should clear on the
-  first cycle that reads.
+  alerts below keep 1 / 1 (COLLECTION_WAIT_CYCLE / COLLECTION_CANCEL_CYCLE),
+  except their has_unreadable symptom (build 95, Scott 2026-10-14: fire
+  after two consecutive cycles, cancel after one clean cycle), which waits
+  2 and cancels 1 (UNREADABLE_WAIT_CYCLE / UNREADABLE_CANCEL_CYCLE); the
+  alert's own wait of 1 adds no cycle, so the alert fires on the second
+  consecutive unreadable cycle and clears on the first cycle that reads.
 * Symptom severity from the SCG priority: P0 Critical, P1 Immediate,
   P2 Warning.
 * Collection alerts (build 63, owner decision "If unreadable = not
   collected/etc, let's count it as failing, but can we tell the user it's
   failing to collect?"): one alert per resource kind (6), type 15
   subType 21, impact badge risk, all six sharing one recommendation that
-  explains what unreadable means and what to check. Each alert fires on
-  either of two Immediate symptoms (build 65): `VCF-CF
-  Compliance|unreadable_count > 0` (some settings unreadable) OR `VCF-CF
-  Compliance|collection_failed = 1` (nothing could be read, including a
-  version that could not be read). The vCenter alert has a third
-  symptom (build 79), `VCF-CF Compliance|Rollup|incomplete = 1`: an
-  inventory listing failed (or, since build 88, the VCF Ops resource list
-  for a kind could not be read) and rollup keys were held back. Ids use the
-  `vcfcf_compliance_collection_` prefix, distinct from the per-control
-  `vcfcf_compliance_ctl_` ids. nameKeys from 2000.
+  explains what unreadable means and what to check. Build 95 (Scott
+  2026-10-14, "flag the stale metric, and then that becomes an alarm"):
+  each alert fires on one Immediate symptom, `VCF-CF
+  Compliance|has_unreadable = 1` (some or all of the object's controls
+  could not be read this cycle, a version that could not be read
+  included), waiting 2 cycles and cancelling after 1. The build 65
+  unreadable_count / collection_failed pair is retired. One symptom goes
+  bare under <State> (a <SymptomSets> container needs two children). The
+  vCenter alert keeps a second symptom (build 79), `VCF-CF
+  Compliance|Rollup|incomplete = 1` (wait 1, cancel 1): an inventory
+  listing failed (or, since build 88, the VCF Ops resource list for a kind
+  could not be read) and rollup keys were held back; its two symptoms go
+  in an "or" <SymptomSets>. Ids use the `vcfcf_compliance_collection_`
+  prefix, distinct from the per-control `vcfcf_compliance_ctl_` ids.
+  nameKeys from 2000.
 * Overrides alert (build 90, the factory's
   knowledge/designs/sdk-adapters/compliance-overrides-file.md): one alert
   on the vCenter object (`VMwareAdapter Instance`), "Compliance overrides
@@ -131,10 +139,16 @@ CONTROL_WAIT_CYCLE = 1
 CONTROL_CANCEL_CYCLE = 3
 COLLECTION_WAIT_CYCLE = 1
 COLLECTION_CANCEL_CYCLE = 1
+# Build 95: the has_unreadable symptom fires after two consecutive cycles
+# and cancels after one clean cycle (Scott 2026-10-14).
+UNREADABLE_WAIT_CYCLE = 2
+UNREADABLE_CANCEL_CYCLE = 1
 
 NAMEKEY_BASE = 1000   # generated nameKeys: 1000 + 3*i (+0 sym, +1 alert, +2 rec)
 COLLECTION_NAMEKEY_BASE = 2000   # 2000 + 2*i (+0 sym, +1 alert); rec 2100
-COLLECTION_FAILED_NAMEKEY_BASE = 2020   # 2020 + i: collection_failed symptoms
+# Build 95: the build 65 collection_failed symptoms (nameKeys 2020 + i)
+# are retired; has_unreadable covers both cases.
+HAS_UNREADABLE_METRIC = "VCF-CF Compliance|has_unreadable"
 # Build 79: third symptom on the vCenter collection alert only.
 ROLLUP_INCOMPLETE_SYMPTOM = "vcfcf_compliance_collection_vcenter_rollup_incomplete"
 ROLLUP_INCOMPLETE_NAMEKEY = 2030
@@ -185,18 +199,21 @@ COLLECTION_KINDS = [
 COLLECTION_REC_ID = "vcfcf_compliance_collection_check"
 COLLECTION_REC_TEXT = (
     "The compliance adapter could not read one or more security settings on "
-    "this object, so they were not collected and count as failing in its "
-    "compliance score (they are not reported as violations, and raise no "
-    "per-control alert). Common causes: the object or its ESX host is "
-    "disconnected or not responding in vCenter; the adapter's vCenter "
-    "account lacks read permission for the setting; or the read method is "
-    "not supported on this product version. If the object's product "
-    "version itself could not be read, nothing was collected: the object "
-    "scores 0 and collection_failed is 1. To see which settings: open "
-    "the object's VCF-CF Compliance metrics; unreadable_count gives the "
-    "number, and each control whose Compliant value is -1 with Actual "
-    "\"(unreadable)\" is one of them (the compliance dashboards' object "
-    "lists show the count in their Unreadable column). Check the object's "
+    "this object for two collection cycles in a row (VCF-CF "
+    "Compliance|has_unreadable = 1). An unreadable setting is not pushed: "
+    "its last Compliant value and any per-control alert stay as they were, "
+    "and the object's score and the pass rates count only the settings "
+    "that were read, so the values shown for it are not current. Common "
+    "causes: the object or its ESX host is disconnected or not responding "
+    "in vCenter; the adapter's vCenter account lacks read permission for "
+    "the setting; or the read method is not supported on this product "
+    "version. If nothing on the object could be read (its product version "
+    "included), no score is pushed at all. To see which settings and why: "
+    "open the object's VCF-CF Compliance properties; unreadable_reason "
+    "gives the cause in plain words with the detail the adapter logged, "
+    "unreadable_controls the control ids and unreadable_count the number "
+    "(the Objects with Unreadable Controls list on the Environment Overview "
+    "shows them for every object). Check the object's "
     "connection state in vCenter, the adapter account's permissions "
     "(read-only at the vCenter root, propagated to children), and the "
     "adapter log for read errors naming this object (the log also gives, "
@@ -217,12 +234,6 @@ COLLECTION_REC_TEXT = (
     "log names the kind and the Suite API error). The "
     "alert clears on the first collection cycle in which every setting is "
     "read and every listing succeeds.")
-
-
-def collection_failed_symptom_id(unreadable_sid: str) -> str:
-    """Build 65: the collection_failed symptom paired with a kind's
-    unreadable_count symptom."""
-    return unreadable_sid[:-len("_unreadable")] + "_failed"
 
 
 def collection_ids():
@@ -423,33 +434,17 @@ def render(controls: list):
             f'                       nameKey="{nk}"\n'
             f'                       adapterKind="VMWARE"\n'
             f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-            f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
-            f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
+            f'                       waitCycle="{UNREADABLE_WAIT_CYCLE}"\n'
+            f'                       cancelCycle="{UNREADABLE_CANCEL_CYCLE}">\n'
             f'      <State severity="Immediate">\n'
             f'        <Condition type="metric" '
-            f'key="VCF-CF Compliance|unreadable_count"\n'
-            f'                   operator="&gt;" value="0"\n'
-            f'                   valueType="numeric" thresholdType="static"/>\n'
-            f'      </State>\n'
-            f'    </SymptomDefinition>\n')
-        fsid = collection_failed_symptom_id(sid)
-        fnk = COLLECTION_FAILED_NAMEKEY_BASE + i
-        sym.append(
-            f'    <SymptomDefinition id="{fsid}"\n'
-            f'                       nameKey="{fnk}"\n'
-            f'                       adapterKind="VMWARE"\n'
-            f'                       resourceKind="{xml_attr(ops_kind)}"\n'
-            f'                       waitCycle="{COLLECTION_WAIT_CYCLE}"\n'
-            f'                       cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
-            f'      <State severity="Immediate">\n'
-            f'        <Condition type="metric" '
-            f'key="VCF-CF Compliance|collection_failed"\n'
+            f'key="{HAS_UNREADABLE_METRIC}"\n'
             f'                   operator="=" value="1"\n'
             f'                   valueType="numeric" thresholdType="static"/>\n'
             f'      </State>\n'
             f'    </SymptomDefinition>\n')
-        props.append(f"{fnk}={prop_value('Compliance data collection failed on ' + label)}")
-        extra_sets = ""
+        sym_set = (
+            f'SymptomSet ref="{sid}" operator="and"\n')
         if kind == "VCenterAdapterInstance":
             sym.append(
                 f'    <SymptomDefinition id="{ROLLUP_INCOMPLETE_SYMPTOM}"\n'
@@ -467,9 +462,23 @@ def render(controls: list):
                 f'    </SymptomDefinition>\n')
             props.append(f"{ROLLUP_INCOMPLETE_NAMEKEY}="
                          + prop_value("Compliance inventory listing failed on vCenter"))
-            extra_sets = (
+            # Two symptoms: an "or" container with both children.
+            sets = (
+                f'        <SymptomSets operator="or">\n'
+                f'          <{sym_set}'
+                f'                      aggregation="any" applyOn="self" '
+                f'negateCondition="false"/>\n'
                 f'          <SymptomSet ref="{ROLLUP_INCOMPLETE_SYMPTOM}" operator="and"\n'
                 f'                      aggregation="any" applyOn="self" '
+                f'negateCondition="false"/>\n'
+                f'        </SymptomSets>\n')
+        else:
+            # Build 95: one symptom goes bare under <State>; VCF Operations
+            # rejects a <SymptomSets> container with fewer than two
+            # children (build 91).
+            sets = (
+                f'        <{sym_set}'
+                f'                    aggregation="any" applyOn="self" '
                 f'negateCondition="false"/>\n')
         alert.append(
             f'    <AlertDefinition id="{aid}"\n'
@@ -481,15 +490,7 @@ def render(controls: list):
             f'cancelCycle="{COLLECTION_CANCEL_CYCLE}">\n'
             f'      <State severity="Automatic">\n'
             f'        <Impact type="badge" key="risk"/>\n'
-            f'        <SymptomSets operator="or">\n'
-            f'          <SymptomSet ref="{sid}" operator="and"\n'
-            f'                      aggregation="any" applyOn="self" '
-            f'negateCondition="false"/>\n'
-            f'          <SymptomSet ref="{fsid}" operator="and"\n'
-            f'                      aggregation="any" applyOn="self" '
-            f'negateCondition="false"/>\n'
-            + extra_sets +
-            f'        </SymptomSets>\n'
+            + sets +
             f'        <Recommendations>\n'
             f'          <Recommendation ref="{COLLECTION_REC_ID}" priority="1"/>\n'
             f'        </Recommendations>\n'
@@ -587,9 +588,10 @@ def main(argv: list) -> int:
           + ", ".join(f"{k}={by_kind[k]}" for k in KIND_ORDER if k in by_kind),
           file=sys.stderr)
     print(f"[generate_compliance_alerts] plus {len(collection_ids())} "
-          f"collection alerts (unreadable_count > 0 OR collection_failed = 1, "
+          f"collection alerts (has_unreadable = 1, wait "
+          f"{UNREADABLE_WAIT_CYCLE} cancel {UNREADABLE_CANCEL_CYCLE}, "
           f"plus Rollup|incomplete = 1 on the vCenter; "
-          f"{2 * len(collection_ids()) + 1} symptoms) and 1 shared collection "
+          f"{len(collection_ids()) + 1} symptoms) and 1 shared collection "
           f"recommendation", file=sys.stderr)
     print("[generate_compliance_alerts] plus 1 overrides alert (Summary|"
           "overrides_not_loaded = 1 on the vCenter; 1 symptom, 1 "
