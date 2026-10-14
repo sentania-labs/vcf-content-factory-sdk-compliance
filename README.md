@@ -177,7 +177,7 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   (the control ids, the first 20 then "+N more"). An object with nothing
   readable this cycle (a host vCenter reports not responding, for example)
   pushes only those signals, so its last score and Controls Evaluated stay
-  on screen, not current: the **Not Fully Read** column (`has_unreadable`)
+  on screen, not current: the **Not Read** column (`has_unreadable`)
   beside the score in the six per-kind views, and the same row in the ESX
   Hosts dashboard's host details, show it. A partial read outage still
   moves the score, over what was read, either way (hiding a passing control

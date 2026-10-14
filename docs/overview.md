@@ -142,7 +142,7 @@ controls_evaluated, controls_passed, pass_rate}` and
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment controls passing, beside it the objects with unreadable controls (build 95), non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Fully Read in the host list and the host details marks it (build 95). |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks. The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Read in the host list and the host details marks it (build 95). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 | [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88, binds on 9.0.x from build 89; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the objects with unreadable controls, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
@@ -226,7 +226,7 @@ collection continues; compliance is never failed over a stitch error.
   setting unreadable, or its version unreadable with no previous SCG)
   pushes only those signals and `collection_failed` = 1: no score, no
   counters, no `non_compliant`, so its last values stay on screen, not
-  current; the Not Fully Read column (`has_unreadable`) beside the score in
+  current; the Not Read column (`has_unreadable`) beside the score in
   the six per-kind views, and the same row in the ESX Hosts host details,
   mark them. A version-unreadable object gets no
   `unreadable_count` (its controls are not known). The flag drives the

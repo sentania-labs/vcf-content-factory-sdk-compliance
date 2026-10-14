@@ -16,7 +16,7 @@
   ids; the list view filtered on has_unreadable = 1 over the six kinds)
   sits next to the Controls
   Passing tile on the Environment Overview and the World Summary.
-- Review B2: Not Fully Read (has_unreadable) sits directly beside the
+- Review B2: Not Read (has_unreadable) sits directly beside the
   score in the six per-kind views (summed in the totals row) and in the
   ESX Hosts host details, so a score kept from an earlier cycle is never
   shown without its tell; no view description still names "Controls
@@ -159,10 +159,16 @@ class Build95DashboardTest(unittest.TestCase):
                 self.assertNotIn("score", [cols[k].split("|")[-1]
                                            for k in summed])
                 self.assertNotIn("Controls Evaluated = 0", text)
-                self.assertIn("Not Fully Read", text)
+                # Devel: a short header, so it is not cut off at the
+                # right edge of the 10+ column host and VM views.
+                self.assertRegex(text, r"- attribute: %s\n\s+display_name: "
+                                 r'"Not Read"\n' % re.escape(flag))
+                self.assertNotIn("Fully Read", text)
         block = widget(read("dashboards/compliance-esxi-hosts.yaml"),
                        "host_compliance_details")
         self.assertIn('metric_key: "%s"' % flag, block)
+        self.assertRegex(block, r'metric_key: "%s"\n(?:(?!.*metric_key).*\n)*?\s+label: '
+                         r'"Not Read"\n' % re.escape(flag))
 
     def test_no_overlap(self):
         for name in ["compliance-environment-overview.yaml",

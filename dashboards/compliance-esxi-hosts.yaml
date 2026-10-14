@@ -7,7 +7,7 @@ description: >
   remediation. "Which controls fail" comes from the per-control
   compliance alerts (subType 21), one alert per failing control. The
   Host Score Heatmap colors by score alone, so a host that could not be
-  read keeps its last color; Not Fully Read in the host list and the
+  read keeps its last color; Not Read in the host list and the
   host details marks it (build 95). See
   knowledge/designs/dashboards/compliance-esxi-hosts.md.
 
@@ -138,7 +138,7 @@ widgets:
           resource_kind: HostSystem
           metric_key: "VCF-CF Compliance|has_unreadable"
           metric_name: "VCF-CF Compliance|Has Unreadable"
-          label: "Not Fully Read"
+          label: "Not Read"
         - adapter_kind: VMWARE
           resource_kind: HostSystem
           metric_key: "VCF-CF Compliance|total_count"

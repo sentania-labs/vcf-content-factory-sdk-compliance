@@ -160,7 +160,7 @@ unreadable, or its version unreadable with no previous SCG) pushes only
 = 1, `unreadable_reason`, `unreadable_controls` and `object_kind`: no
 score, no pass / fail / total, no `non_compliant`, no per-control value.
 Its last score and `total_count` stay on screen, not current: the Not
-Fully Read column (`has_unreadable`) beside the score in the six per-kind
+Read column (`has_unreadable`) beside the score in the six per-kind
 views, and the same row in the ESX Hosts host details, mark them (the
 ESX Hosts heatmap colors by score alone and does not). A
 version-unreadable object's `unreadable_controls` reads `(not known: the
@@ -295,8 +295,8 @@ and pass rate. The object is flagged instead: `has_unreadable` = 1 with
 on the Objects with Unreadable Controls view beside the Controls Passing
 tile, and after two cycles in a row its "Compliance data not collected"
 alert fires (see Alerts). An object with nothing readable pushes only
-those signals, so its last score stays on screen, marked by Not Fully
-Read beside it in the per-kind views and the host details. A partial
+those signals, so its last score stays on screen, marked by Not Read
+beside it in the per-kind views and the host details. A partial
 read outage still moves the score, over what was read, and can raise or
 cancel Host Compliance Score Degraded; only a whole-object outage leaves
 the score untouched. This replaces the build 63 rule (owner decision 2026-09-23), under
@@ -398,7 +398,7 @@ Compliance World Summary tab:
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment controls passing, beside it the objects with unreadable controls (build 95), non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Fully Read in the host list and the host details marks it (build 95). |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Read in the host list and the host details marks it (build 95). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 | [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the objects with unreadable controls, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
