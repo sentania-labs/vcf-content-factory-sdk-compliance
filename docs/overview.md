@@ -324,6 +324,29 @@ collection continues; compliance is never failed over a stitch error.
   "last-known score" carry-forward for unreadable hosts and the
   `Rollup|Host|scored_stale` key are retired.
 
+- **What a cycle costs is in the log (build 95, issue #17).** The
+  "ComplianceAdapter collection complete" INFO line ends with
+  `timing: ...`: wall time, SOAP calls and Suite API calls for inventory,
+  host reads, VM reads, network reads (switches, portgroups, clusters),
+  vCenter reads, esxcli, pushes, the bulk shadow and everything else, then
+  the cycle totals. Time is counted once: a push made inside the host loop
+  counts as pushes, not host reads. The same build cuts calls without
+  changing results: one session keepalive per cycle instead of one per
+  read, inventory names taken from the listing call, connections kept
+  open between calls, and a property path that does not resolve never
+  falls back to fetching a host's or VM's whole configuration (those
+  controls are unreadable with reason `prefix-cap`).
+
+- **Bulk read shadow (build 95).** After each kind is scored, the adapter
+  also reads that kind's objects in a few paged bulk calls, evaluates the
+  same controls from that data and compares. Nothing it finds changes a
+  score, a push or an alert. Each cycle logs one INFO line per kind,
+  starting `Bulk shadow <kind>:`, with the controls compared and the
+  disagreements, and one `Bulk shadow disagreement:` line per difference
+  (object, control, per-object value, bulk value; the first 25 per kind).
+  Zero disagreements across every vCenter is what lets a later build
+  score from the bulk reads, which grow with pages instead of objects.
+
 - **Stale per-control results clean themselves up, every cycle.** VCF Ops
   keeps a metric's last value, so a control that failed (`Compliant` = 0)
   under an object's previous SCG would keep its alert open after the

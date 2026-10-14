@@ -93,6 +93,20 @@ public final class ComplianceStitcher
 	private final java.util.Set<String> failedLoads =
 			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
+	// Build 95 (issue #17): this cycle's measurement, null for none. Every
+	// Suite API call made through this class is counted; pushes are timed
+	// as the pushes phase.
+	private volatile CycleMetrics metrics;
+
+	public void setMetrics(CycleMetrics m) {
+		this.metrics = m;
+	}
+
+	private void countCall() {
+		CycleMetrics m = metrics;
+		if (m != null) m.suiteCall();
+	}
+
 	public ComplianceStitcher(SuiteApiStitcher stitcher, Logger logger) {
 		this.stitcher = stitcher;
 		this.logger = logger;
@@ -282,6 +296,7 @@ public final class ComplianceStitcher
 			String enc = java.net.URLEncoder.encode(resourceKind, "UTF-8");
 			int collected = 0;
 			for (int page = 0; ; page++) {
+				countCall();
 				String body = stitcher.get(
 						"/api/resources?adapterKind=VMWARE&resourceKind=" + enc
 						+ "&pageSize=" + ComplianceDecisions.RESOURCE_PAGE_SIZE
@@ -474,6 +489,7 @@ public final class ComplianceStitcher
 		for (String path : ComplianceDecisions.latestCompliantPaths(
 				resourceIds, controlIds, ComplianceDecisions.URL_BUDGET)) {
 			try {
+				countCall();
 				SimpleJson parsed = SimpleJson.parse(stitcher.get(path));
 				if (parsed == null || parsed.isNull()) {
 					return new LatestRead(null, requests, returned,
@@ -538,14 +554,22 @@ public final class ComplianceStitcher
 	public void pushProperties(String resourceId,
 			Map<String, String> properties, long timestamp) {
 		if (properties.isEmpty()) return;
-		stitcher.pushProperties(resourceId, properties, timestamp);
+		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
+				CycleMetrics.Phase.PUSHES)) {
+			countCall();
+			stitcher.pushProperties(resourceId, properties, timestamp);
+		}
 	}
 
 	@Override
 	public void pushStats(String resourceId,
 			Map<String, Double> stats, long timestamp) {
 		if (stats.isEmpty()) return;
-		stitcher.pushStats(resourceId, stats, timestamp);
+		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
+				CycleMetrics.Phase.PUSHES)) {
+			countCall();
+			stitcher.pushStats(resourceId, stats, timestamp);
+		}
 	}
 
 	public int size() {

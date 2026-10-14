@@ -169,6 +169,14 @@ final class EsxcliSoapClient {
 
 	private final Transport transport;
 
+	// Build 95 (issue #17): this cycle's measurement, null for none.
+	private volatile CycleMetrics metrics;
+
+	/** Build 95: count this client's SOAP calls into {@code m}. */
+	void setMetrics(CycleMetrics m) {
+		this.metrics = m;
+	}
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
 		this.sdkUrl = sdkUrl;
@@ -617,32 +625,42 @@ final class EsxcliSoapClient {
 				+ "<soapenv:Body>" + soapBody + "</soapenv:Body>"
 				+ "</soapenv:Envelope>";
 
+		CycleMetrics m = metrics;
+		if (m != null) m.soapCall();
 		URL url = new URL(sdkUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 		if (conn instanceof HttpsURLConnection) {
 			// Same chain and name checks as the vCenter session (build 93).
 			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
-		conn.setRequestMethod("POST");
-		conn.setDoOutput(true);
-		conn.setConnectTimeout(30000);
-		conn.setReadTimeout(120000);
-		conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
-		conn.setRequestProperty("SOAPAction", soapAction);
-		if (sessionCookie != null && !sessionCookie.isEmpty()) {
-			conn.setRequestProperty("Cookie", sessionCookie);
-		}
+		int code;
+		byte[] respBytes;
+		try {
+			conn.setRequestMethod("POST");
+			conn.setDoOutput(true);
+			conn.setConnectTimeout(30000);
+			conn.setReadTimeout(120000);
+			conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
+			conn.setRequestProperty("SOAPAction", soapAction);
+			if (sessionCookie != null && !sessionCookie.isEmpty()) {
+				conn.setRequestProperty("Cookie", sessionCookie);
+			}
 
-		byte[] payload = envelope.getBytes(StandardCharsets.UTF_8);
-		try (OutputStream os = conn.getOutputStream()) {
-			os.write(payload);
-		}
+			byte[] payload = envelope.getBytes(StandardCharsets.UTF_8);
+			try (OutputStream os = conn.getOutputStream()) {
+				os.write(payload);
+			}
 
-		int code = conn.getResponseCode();
-		InputStream is = (code >= 200 && code < 300)
-				? conn.getInputStream() : conn.getErrorStream();
-		byte[] respBytes = drain(is);
-		conn.disconnect();
+			code = conn.getResponseCode();
+			InputStream is = (code >= 200 && code < 300)
+					? conn.getInputStream() : conn.getErrorStream();
+			respBytes = drain(is);
+		} catch (java.io.IOException e) {
+			// Build 95 (issue #17): connections are reused after a good
+			// call (no disconnect); a failed one is dropped, never reused.
+			conn.disconnect();
+			throw e;
+		}
 		if (code < 200 || code >= 300) {
 			// SOAP fault (500) or auth failure — command-failed upstream.
 			return null;

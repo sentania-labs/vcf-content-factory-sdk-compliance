@@ -174,7 +174,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		this.vsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
 				sslSocketFactoryFor(config.vcenterHost),
-				componentLogger(VSphereClient.class));
+				clientLog(componentLogger(VSphereClient.class)));
 
 		this.benchmarkLoader = new BenchmarkLoader();
 		// HOLD (owner decision pending): "Read vCenter appliance settings".
@@ -419,6 +419,59 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// getCollector
 	// -----------------------------------------------------------------------
 
+	/**
+	 * Build 95: the platform logger as the SDK-free {@link VSphereClient.Log}
+	 * (null stays null: the client then logs nothing).
+	 */
+	private static VSphereClient.Log clientLog(
+			final com.integrien.alive.common.adapter3.Logger l) {
+		if (l == null) return null;
+		return new VSphereClient.Log() {
+			@Override public void info(String m) { l.info(m); }
+			@Override public void debug(String m) { l.debug(m); }
+			@Override public void warn(String m) { l.warn(m); }
+			@Override public boolean isDebugEnabled() {
+				return l.isDebugEnabled();
+			}
+		};
+	}
+
+	/**
+	 * Build 95 (bulk-collection design build B): the internal switch for the
+	 * bulk-read shadow comparison. On: after each kind is scored the
+	 * per-object way, the same objects are read in paged bulk calls,
+	 * evaluated locally and compared, and the differences logged. Scores,
+	 * pushes and alerts still come only from the per-object path. Not a
+	 * user setting.
+	 */
+	static final boolean BULK_SHADOW = true;
+
+	/**
+	 * Build 95: objects per bulk page. Hosts small (each carries its whole
+	 * config.option list, about a thousand settings), VMs larger, the
+	 * low-count kinds in between.
+	 */
+	static int bulkPageSize(String type) {
+		switch (type) {
+			case "HostSystem": return 10;
+			case "VirtualMachine": return 200;
+			case "ClusterComputeResource": return 50;
+			default: return 100;
+		}
+	}
+
+	// Build 95 (issue #17): this cycle's measurement (phases and calls).
+	private volatile CycleMetrics cycleMetrics;
+
+	private CycleMetrics.Scope phase(CycleMetrics.Phase p) {
+		return CycleMetrics.scope(cycleMetrics, p);
+	}
+
+	private void countSuiteCall() {
+		CycleMetrics m = cycleMetrics;
+		if (m != null) m.suiteCall();
+	}
+
 	@Override
 	protected VcfCfCollector<ComplianceConfig> getCollector() {
 		return new VcfCfCollector<ComplianceConfig>() {
@@ -464,10 +517,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			throws Exception {
 		long cycleStartNs = System.nanoTime();
 		boolean completed = false;
+		// Build 95 (issue #17): per-phase time and call counts for the
+		// summary line; measurement only.
+		CycleMetrics metrics = new CycleMetrics();
+		cycleMetrics = metrics;
+		if (vsphere != null) vsphere.setMetrics(metrics);
+		if (stitcher != null) stitcher.setMetrics(metrics);
 		try {
 			collectWorldCycle(worldRc, out);
 			completed = true;
 		} finally {
+			if (vsphere != null) vsphere.setMetrics(null);
+			if (stitcher != null) stitcher.setMetrics(null);
+			cycleMetrics = null;
 			long ms = (System.nanoTime() - cycleStartNs) / 1_000_000L;
 			if (completed) {
 				logInfo("ComplianceAdapter cycle took " + ms + " ms");
@@ -573,7 +635,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		logInfo("stitcher=" + (stitcher != null));
 		if (stitcher != null) {
-			loadStitcherResources();
+			try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
+				loadStitcherResources();
+			}
 		}
 
 		String vcVersion = null;
@@ -590,14 +654,22 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		CycleStats cs = new CycleStats();
 		java.util.Set<String> seen = new java.util.HashSet<>();
 
-		java.util.Map<String, String> hostVersions =
-				collectHosts(selector, rollup, cs, seen);
-		collectVms(selector, hostVersions, rollup, cs, seen);
-		ComplianceStitcher.HostEntry vcEntry =
-				collectVCenter(selector, vcVersion, rollup, cs, seen);
-		collectDvs(selector, vcVersion, rollup, cs, seen);
-		collectDvpg(selector, vcVersion, rollup, cs, seen);
-		collectClusters(selector, vcVersion, rollup, cs, seen);
+		java.util.Map<String, String> hostVersions;
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.HOSTS)) {
+			hostVersions = collectHosts(selector, rollup, cs, seen);
+		}
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.VMS)) {
+			collectVms(selector, hostVersions, rollup, cs, seen);
+		}
+		ComplianceStitcher.HostEntry vcEntry;
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.VCENTER)) {
+			vcEntry = collectVCenter(selector, vcVersion, rollup, cs, seen);
+		}
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.NETWORK)) {
+			collectDvs(selector, vcVersion, rollup, cs, seen);
+			collectDvpg(selector, vcVersion, rollup, cs, seen);
+			collectClusters(selector, vcVersion, rollup, cs, seen);
+		}
 
 		// Forget applied-profile history for objects no longer in inventory.
 		memory.retain(seen);
@@ -660,7 +732,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ "scored), " + rollup.skippedPods() + " vSphere Pod VM(s) "
 				+ "skipped, "
 				+ cs.cleanedKeys + " stale per-control key(s) marked "
-				+ "not evaluated on " + cs.cleanedObjects + " object(s)");
+				+ "not evaluated on " + cs.cleanedObjects + " object(s)"
+				+ (cycleMetrics != null ? "; " + cycleMetrics.summary() : ""));
 	}
 
 	private static int unmatchedTotal(ComplianceRollup rollup) {
@@ -741,7 +814,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private OverridesStore.Snapshot refreshOverrides() {
 		final SuiteApiStitcher sas = suiteStitcher;
-		OverridesStore.Fetcher fetcher = sas == null ? null : sas::get;
+		OverridesStore.Fetcher fetcher = sas == null ? null : path -> {
+			countSuiteCall();
+			return sas.get(path);
+		};
 		OverridesStore.Snapshot snap = overridesStore.refresh(
 				config.overridesFile, fetcher, Instant.now());
 		switch (snap.status) {
@@ -919,9 +995,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// accepted add to a deleted world's id would never clear a cache.
 		ComplianceDecisions.WorldLink link = ComplianceDecisions.linkWorld(
 				vcEntry == null ? null : vcEntry.resourceId,
-				() -> sas.findSingletonResourceId(ADAPTER_KIND,
-						"ComplianceWorld"),
-				sas::addChild);
+				() -> {
+					countSuiteCall();
+					return sas.findSingletonResourceId(ADAPTER_KIND,
+							"ComplianceWorld");
+				},
+				(parent, child) -> {
+					countSuiteCall();
+					return sas.addChild(parent, child);
+				});
 		switch (link.outcome) {
 			case ACCEPTED:
 				// Asynchronous on the platform side: accepted, not proven.
@@ -1329,7 +1411,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			BenchmarkSelector selector, ComplianceRollup rollup,
 			CycleStats cs, java.util.Set<String> seen) throws Exception {
 		java.util.Map<String, String> hostVersions = new java.util.HashMap<>();
-		java.util.List<VSphereClient.HostInfo> hosts = vsphere.getHosts();
+		java.util.List<VSphereClient.HostInfo> hosts;
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
+			hosts = vsphere.getHosts();
+		}
 		if (hosts.isEmpty()) {
 			logWarn("No hosts returned from vCenter SOAP");
 			return hostVersions;
@@ -1337,6 +1422,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("vSphere SOAP: " + hosts.size() + " hosts");
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.HOST,
 				"HostSystem", rollup);
+		Shadow shadow = new Shadow("Host", "HostSystem");
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			String hostId = hostInfo.moid;
@@ -1461,6 +1547,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
+			if (!wholeHostUnreadable) {
+				// Build 95: a wholly unreadable host is a known state, not
+				// a comparison.
+				shadow.record(hostId, hostName, hostControls, cr);
+			}
 
 			// Build 87: one WARN per host per cycle naming a host whose
 			// esxcli reads were skipped (esxcli-host-unreachable).
@@ -1517,7 +1608,88 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " with no VCF Ops resource); per-host "
 				+ "scores at DEBUG, at INFO for hosts with unreadable "
 				+ "controls");
+		runShadow(shadow);
 		return hostVersions;
+	}
+
+	/**
+	 * Build 95 (bulk-collection design build B): one kind's shadow
+	 * comparison for this cycle: the per-object results recorded while the
+	 * kind is scored, and the controls each object was scored against (its
+	 * benchmark's slice), so the bulk result is evaluated against the same
+	 * controls.
+	 */
+	private static final class Shadow {
+		final ShadowComparator comparator;
+		final java.util.Map<String, java.util.List<BenchmarkProfile.Control>>
+				controls = new java.util.HashMap<>();
+		String type;
+
+		Shadow(String kind, String type) {
+			this.comparator = new ShadowComparator(kind);
+			this.type = type;
+		}
+
+		void record(String moid, String name,
+				java.util.List<BenchmarkProfile.Control> slice,
+				ControlEvaluator.ComplianceResult cr) {
+			if (moid == null || cr == null) return;
+			comparator.record(moid, name, cr.controlResults,
+					VSphereClient.bulkComparable(type, slice));
+			if (comparator.isRecorded(moid)) controls.put(moid, slice);
+		}
+	}
+
+	/**
+	 * Build 95: read the kind in paged bulk calls, evaluate each object
+	 * locally and compare with what the per-object path recorded. One INFO
+	 * summary, then one INFO line per disagreement (capped). Never changes
+	 * a score or a push, never fails the cycle: a failed bulk read is
+	 * reported in the summary. In this shadow build a failed page does not
+	 * hold the kind back, because the kind's numbers come from the
+	 * per-object path, which succeeded.
+	 */
+	private void runShadow(Shadow sh) {
+		if (!BULK_SHADOW || sh == null || !sh.comparator.hasRecords()) return;
+		java.util.Set<String> paths = new java.util.LinkedHashSet<>();
+		java.util.Set<java.util.List<BenchmarkProfile.Control>> slices =
+				java.util.Collections.newSetFromMap(
+						new java.util.IdentityHashMap<>());
+		slices.addAll(sh.controls.values());
+		for (java.util.List<BenchmarkProfile.Control> slice : slices) {
+			paths.addAll(VSphereClient.bulkPaths(sh.type, slice));
+		}
+		final int[] pages = {0};
+		long t0 = System.nanoTime();
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.SHADOW)) {
+			VSphereClient.BulkStats st = vsphere.retrieveBulk(sh.type, paths,
+					bulkPageSize(sh.type), rows -> {
+						pages[0]++;
+						for (VSphereClient.BulkRow row : rows) {
+							String moid = row.ref.value;
+							java.util.List<BenchmarkProfile.Control> slice =
+									sh.controls.get(moid);
+							sh.comparator.compare(moid, slice == null ? null
+									: vsphere.evaluateBulkRow(row, slice,
+											moid));
+						}
+					});
+			if (!st.droppedPaths.isEmpty() || st.pathFixes > 0) {
+				logInfo("Bulk shadow " + sh.comparator.summaryKind()
+						+ ": vCenter rejected " + st.pathFixes
+						+ " path(s) as invalid for " + sh.type
+						+ "; read with " + st.pathSet + (st.droppedPaths
+						.isEmpty() ? "" : ", dropped " + st.droppedPaths));
+			}
+		} catch (Exception e) {
+			sh.comparator.fail(e.getClass().getSimpleName() + ": "
+					+ e.getMessage());
+		}
+		long ms = (System.nanoTime() - t0) / 1_000_000L;
+		logInfo(sh.comparator.summary(pages[0], ms));
+		for (String line : sh.comparator.disagreementLines()) {
+			logInfo("Bulk shadow disagreement: " + line);
+		}
 	}
 
 	/** Every advanced_setting and vim/esxcli control folded to UNREADABLE. */
@@ -1532,7 +1704,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Map<String, String> hostVersions, ComplianceRollup rollup,
 			CycleStats cs, java.util.Set<String> seen) {
 		java.util.List<VSphereClient.VmInfo> vms;
-		try {
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			vms = vsphere.getVms();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate VMs: " + e.getMessage());
@@ -1546,6 +1718,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("vSphere SOAP: " + vms.size() + " VMs");
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.VM,
 				"VirtualMachine", rollup);
+		Shadow shadow = new Shadow("VM", "VirtualMachine");
 
 		for (VSphereClient.VmInfo vm : vms) {
 			// Build 88: vSphere Pod VMs (guest id crx*) are out of scope:
@@ -1618,6 +1791,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
+			shadow.record(vm.moid, vm.name, vmControls, cr);
 
 			ComplianceDecisions.SkipPush skip =
 					skipInForce(BenchmarkSelector.Kind.VM, d);
@@ -1628,6 +1802,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("VM compliance: " + cs.vms + " VMs seen, "
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
 				+ "of scope; named at DEBUG)");
+		runShadow(shadow);
 	}
 
 	/**
@@ -1761,7 +1936,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> seen) {
 		if (stitcher == null) return;   // nothing to push onto; skip the reads
 		java.util.List<VSphereClient.DvsInfo> switches;
-		try {
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			switches = vsphere.getDvSwitches();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVS: " + e.getMessage());
@@ -1777,13 +1952,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"VmwareDistributedVirtualSwitch", rollup)) {
 			return;
 		}
+		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type);
 		for (VSphereClient.DvsInfo dvs : switches) {
 			cs.dvs++;
 			ComplianceStitcher.HostEntry he = stitcher.matchDvs(dvs.name,
 					dvs.moid);
 			collectVimObject(BenchmarkSelector.Kind.VDS, dvs.moRef, dvs.name,
-					dvs.moid, he, selector, vcVersion, rollup, cs, seen);
+					dvs.moid, he, selector, vcVersion, rollup, cs, seen,
+					shadow);
 		}
+		runShadow(shadow);
 	}
 
 	private void collectDvpg(BenchmarkSelector selector, String vcVersion,
@@ -1791,7 +1969,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> seen) {
 		if (stitcher == null) return;
 		java.util.List<VSphereClient.DvpgInfo> pgs;
-		try {
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			pgs = vsphere.getDvPortgroups();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate DVPG: " + e.getMessage());
@@ -1807,14 +1985,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"DistributedVirtualPortgroup", rollup)) {
 			return;
 		}
+		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type);
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			cs.dvpg++;
 			ComplianceStitcher.HostEntry he = stitcher.matchDvpg(pg.name,
 					pg.moid);
 			collectVimObject(BenchmarkSelector.Kind.PORTGROUP, pg.moRef,
 					pg.name, pg.moid, he, selector, vcVersion, rollup, cs,
-					seen);
+					seen, shadow);
 		}
+		runShadow(shadow);
 	}
 
 	/**
@@ -1828,7 +2008,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> seen) {
 		if (stitcher == null) return;
 		java.util.List<VSphereClient.ClusterInfo> clusters;
-		try {
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			clusters = vsphere.getClusters();
 		} catch (Exception e) {
 			logWarn("Failed to enumerate ClusterComputeResource: "
@@ -1846,14 +2026,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"ClusterComputeResource", rollup)) {
 			return;
 		}
+		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type);
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			cs.clusters++;
 			ComplianceStitcher.HostEntry he = stitcher.matchCluster(
 					cluster.name, cluster.moid);
 			collectVimObject(BenchmarkSelector.Kind.CLUSTER, cluster.moRef,
 					cluster.name, cluster.moid, he, selector, vcVersion,
-					rollup, cs, seen);
+					rollup, cs, seen, shadow);
 		}
+		runShadow(shadow);
 	}
 
 	/**
@@ -1869,7 +2051,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			VSphereClient.MoRef moRef, String name, String moid,
 			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
-			java.util.Set<String> seen) {
+			java.util.Set<String> seen, Shadow shadow) {
 		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
 		if (he == null) {
 			rollup.recordUnmatched(kind, name, moid);
@@ -1903,9 +2085,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				cr = emptyResult(name);       // non-vSAN: genuinely N/A
 			} else {
 				cr = readAndEvaluateVim(moRef, controls, name);
+				shadow.record(moid, name, controls, cr);
 			}
 		} else {
 			cr = readAndEvaluateVim(moRef, controls, name);
+			shadow.record(moid, name, controls, cr);
 		}
 		if (cr == null) {
 			cr = unreadableVimResult(controls, name);
