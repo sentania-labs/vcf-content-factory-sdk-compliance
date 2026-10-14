@@ -65,6 +65,10 @@ final class FakeVCenter implements AutoCloseable {
 		final int status;
 		final String inner;
 		boolean close;
+		// Review N2: send the headers and half the body, then stall for
+		// stallMs (a transfer that stops mid-body: the client's read
+		// times out).
+		long stallMs;
 
 		Resp(int status, String inner) {
 			this.status = status;
@@ -73,6 +77,11 @@ final class FakeVCenter implements AutoCloseable {
 
 		Resp closing() {
 			close = true;
+			return this;
+		}
+
+		Resp stalled(long ms) {
+			stallMs = ms;
 			return this;
 		}
 	}
@@ -212,6 +221,18 @@ final class FakeVCenter implements AutoCloseable {
 		ex.getResponseHeaders().add("Content-Type", "text/xml; charset=utf-8");
 		if (resp.close) ex.getResponseHeaders().add("Connection", "close");
 		ex.sendResponseHeaders(resp.status, out.length);
+		if (resp.stallMs > 0) {
+			OutputStream os = ex.getResponseBody();
+			os.write(out, 0, out.length / 2);
+			os.flush();
+			try {
+				Thread.sleep(resp.stallMs);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			ex.close();
+			return;
+		}
 		try (OutputStream os = ex.getResponseBody()) {
 			os.write(out);
 		}

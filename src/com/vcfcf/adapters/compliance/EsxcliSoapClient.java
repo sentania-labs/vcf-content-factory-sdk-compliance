@@ -681,13 +681,11 @@ final class EsxcliSoapClient {
 				if (is != null) {
 					body = new VSphereClient.CappedInputStream(is,
 							VSphereClient.MAX_SOAP_RESPONSE_BYTES);
-					try {
-						doc = VSphereClient.parseXml(body);
-					} finally {
-						if (!body.exceeded()) {
-							try { body.close(); } catch (Exception ignored) {}
-						}
-					}
+					// Review N2: an I/O failure mid-body is a transport
+					// failure (the catch below drops the connection), not
+					// an unparsable answer.
+					doc = VSphereClient.parseXmlOrThrow(body);
+					try { body.close(); } catch (Exception ignored) {}
 				}
 			} else {
 				// The fault body is not used; read (bounded) and drop it so

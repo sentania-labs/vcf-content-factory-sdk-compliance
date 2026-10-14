@@ -215,6 +215,60 @@ public final class Build95TriageTest {
 			T.eq("connected", c.getHostConnectionState(h),
 					"the next call works on a fresh connection");
 		}
+
+		// Review N2: a 2xx whose body stops mid-transfer (a read timeout,
+		// not the cap) keeps the transport error as the reason, as build 94
+		// did, instead of "missing-element", and drops the connection; the
+		// next call works on a fresh one.
+		try (FakeVCenter f = new FakeVCenter()) {
+			boolean[] cut = {false};
+			Map<String, String> table = FakeVCenter.map(
+					"host-1|config.service", "<val><service><key>TSM-SSH</key>"
+					+ "<running>false</running></service></val>",
+					"host-1|runtime.connectionState", "<val>connected</val>");
+			f.handler = r -> {
+				FakeVCenter.Resp resp = Build95CollectionTest.perObject(r,
+						table, null);
+				if (cut[0]) {
+					cut[0] = false;
+					return resp.stalled(1500);
+				}
+				return resp;
+			};
+			VSphereClient c = f.client();
+			c.setReadTimeoutMs(300);
+			c.ensureConnected();
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem",
+					"host-1");
+			T.eq("connected", c.getHostConnectionState(h), "before");
+			java.util.List<BenchmarkProfile.Control> ssh = java.util.Arrays
+					.asList(Build95CollectionTest.vim("esx.ssh", "HostSystem",
+							"ssh", "false", "service_state:TSM-SSH:running"));
+			T.eq(Boolean.FALSE, c.readVimProperties(h, ssh).get("ssh"),
+					"read normally");
+			cut[0] = true;
+			Map<String, Object> v = c.readVimProperties(h, ssh);
+			T.check(v.get("ssh") == VSphereClient.UNREADABLE,
+					"a body stalled mid-transfer: UNREADABLE, never a value");
+			String why = c.lastReadReasons().get("ssh");
+			T.check(why != null && why.startsWith("exception: ")
+					&& why.contains("SocketTimeoutException"), "the reason "
+					+ "names the transport error, not a missing element: "
+					+ why);
+			int portsBefore = ports(f).size();
+			T.eq("connected", c.getHostConnectionState(h),
+					"the next call works");
+			T.eq(portsBefore + 1, ports(f).size(),
+					"on a new connection (the broken one was dropped)");
+		}
+	}
+
+	private static java.util.Set<Integer> ports(FakeVCenter f) {
+		java.util.Set<Integer> out = new java.util.HashSet<>();
+		synchronized (f.requests) {
+			for (FakeVCenter.Req r : f.requests) out.add(r.clientPort);
+		}
+		return out;
 	}
 
 	/** #23 (leak part, review W4) and #28 (dead vcApi). */

@@ -127,6 +127,12 @@ public final class VSphereClient {
 	static final int LOGOUT_TIMEOUT_MS = 5000;
 
 	private volatile int logoutTimeoutMs = LOGOUT_TIMEOUT_MS;
+	private volatile int readTimeoutMs = READ_TIMEOUT_MS;
+
+	/** Test seam (review N2): a shorter read timeout for normal calls. */
+	void setReadTimeoutMs(int ms) {
+		this.readTimeoutMs = ms;
+	}
 
 	/** Test seam (review W4): a shorter Logout wait. */
 	void setLogoutTimeoutMs(int ms) {
@@ -2217,7 +2223,7 @@ public final class VSphereClient {
 	private Document postOnce(String soapBody, String soapAction,
 			boolean authenticated) throws Exception {
 		return postOnce(soapBody, soapAction, authenticated,
-				CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
+				CONNECT_TIMEOUT_MS, readTimeoutMs);
 	}
 
 	private Document postOnce(String soapBody, String soapAction,
@@ -2278,15 +2284,13 @@ public final class VSphereClient {
 				InputStream is = conn.getInputStream();
 				if (is != null) {
 					body = new CappedInputStream(is, maxResponseBytes);
-					try {
-						doc = parseXml(body);
-					} finally {
-						// Closing after the parse returns the connection
-						// for reuse (the JDK drains what is left).
-						if (!body.exceeded()) {
-							try { body.close(); } catch (Exception ignored) {}
-						}
-					}
+					// Review N2: an I/O failure mid-body (or the cap) is
+					// thrown to the catch below, which drops the connection
+					// and keeps the transport error.
+					doc = parseXmlOrThrow(body);
+					// Closing after the parse returns the connection for
+					// reuse (the JDK drains what is left).
+					try { body.close(); } catch (Exception ignored) {}
 				}
 			} else {
 				faultBody = readCapped(conn.getErrorStream(),
@@ -2467,6 +2471,30 @@ public final class VSphereClient {
 	static Document parseXml(InputStream in) {
 		try {
 			return newBuilder().parse(in);
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Build 95 review N2: as {@link #parseXml}, but an I/O failure while
+	 * the body is read (a read timeout or a connection dropped mid-body,
+	 * or the cap) is thrown, not folded into null, so the caller drops the
+	 * connection and the read's reason names the transport error, as it
+	 * did before the streaming parse. Null only when the body is empty or
+	 * not XML.
+	 */
+	static Document parseXmlOrThrow(InputStream in) throws java.io.IOException {
+		DocumentBuilder b;
+		try {
+			b = newBuilder();
+		} catch (Exception e) {
+			return null;
+		}
+		try {
+			return b.parse(in);
+		} catch (java.io.IOException e) {
+			throw e;
 		} catch (Exception e) {
 			return null;
 		}
