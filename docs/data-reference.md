@@ -432,8 +432,16 @@ is not pushed, so the count shown is from an earlier cycle; its
 `unreadable_controls` reads `(not known: ...)` and is current. It is the signal for missing
 data: the percentages count only what was read, so an object or a whole
 kind that could not be read keeps its last value on the tiles and in the
-table, and appears here. An empty list means every object was fully read
-on its last cycle.
+table, and appears here. An empty list means every object the adapter
+visited on its last cycle was fully read. It says nothing about objects
+the cycle did not visit: when a kind's listing failed (that kind is held
+back) or vCenter could not be reached at all, those objects keep the
+flag from their last visit, so they stay off (or on) the list as they
+were. Both cases set `Rollup|incomplete` = 1 on the vCenter, which
+raises "Compliance data not collected (vCenter)"; an unreachable vCenter
+also leaves the ComplianceWorld resource in collection status down (no
+connection) or error (login or certificate), and the adapter log names
+the failed listing or the connection error.
 
 Builds 61 to 85 bundled four super metrics on `vSphere World` for those
 tiles ("[VCF Content Factory] Compliance Average Score", "... Non-Compliant
