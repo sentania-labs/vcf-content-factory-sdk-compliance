@@ -45,32 +45,9 @@ widgets:
     coords: {x: 1, y: 13, w: 7, h: 8}
     criticality: [2, 3, 4]
     mode: all
+    # depth 1: input is a VirtualMachine; no descendant carries compliance alerts, so 1 level is already full coverage.
     depth: 1
-    alert_definitions:
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_copy"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_console_paste"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_shrink"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_disk_shrinking_wiper"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_deactivate_non_essential_3d_features"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_dvfilter"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_efi_boot_types"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_ft_encrypted"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_device_connectable_deactivate"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_isolation_tools_dnd_deactivate"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_console_connections"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_limit_setinfo_size"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_enable"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_retention"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_log_rotation_size"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_minimize_console_vnc_use"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_pci_passthrough"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_restrict_host_info"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_secure_boot"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_transparentpagesharing_inter_vm_enabled"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_virtual_hardware"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmotion_encrypted"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_ctl_vm_vmrc_lock"
-        - "AlertDefinition-vcfcf_compliance-vcfcf_compliance_collection_vm"
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
   # ── W4: Compliance Details, driven by W2 ────────────────────────────
 

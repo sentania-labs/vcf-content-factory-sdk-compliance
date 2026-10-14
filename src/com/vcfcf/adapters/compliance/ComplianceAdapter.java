@@ -467,6 +467,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ cycleReasons.summary());
 		}
 
+		// Build 88: one INFO line per kind naming objects with no matching
+		// VCF Ops resource (Rollup|<K>|unmatched; first 20 named).
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			String line = rollup.unmatchedLogLine(k);
+			if (line != null) {
+				logInfo(line);
+			}
+		}
+
 		pushRollup(vcEntry, rollup);
 		// Known limitation: this edge is added, never removed. A vCenter whose
 		// compliance instance is deleted stays a ComplianceWorld child. See
@@ -493,8 +502,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ cs.clusters + " ClusterComputeResource, "
 				+ cs.noBenchmark + " object(s) without a benchmark, "
 				+ cs.versionUnreadable + " with an unreadable version, "
+				+ unmatchedTotal(rollup) + " with no VCF Ops resource (not "
+				+ "scored), " + rollup.skippedPods() + " vSphere Pod VM(s) "
+				+ "skipped, "
 				+ cs.cleanedKeys + " stale per-control key(s) marked "
 				+ "not evaluated on " + cs.cleanedObjects + " object(s)");
+	}
+
+	private static int unmatchedTotal(ComplianceRollup rollup) {
+		int n = 0;
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			n += rollup.unmatched(k);
+		}
+		return n;
 	}
 
 	/**
@@ -548,7 +568,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.Map<String, Double> stats = rollup.toStats();
 		if (!rollup.incompleteKinds().isEmpty()) {
 			logWarn("Inventory listing failed this cycle for "
-					+ rollup.incompleteKinds() + ": their Rollup keys, and the "
+					+ rollup.incompleteKinds() + " (the vCenter listing, or "
+					+ "since build 88 the VCF Ops resource list for the kind; "
+					+ "see the WARN above): their Rollup keys, and the "
 					+ "cross-kind Rollup|All and Rollup|Benchmark keys, are NOT "
 					+ "pushed this cycle (previous values kept rather than "
 					+ "under-counted)");
@@ -926,6 +948,33 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// ----- Per-kind collectors --------------------------------------------
 
 	/**
+	 * Build 88: whether this cycle can push to objects of {@code kind}
+	 * ({@link ComplianceDecisions#kindPushable}). When the VCF Ops resource
+	 * list for the kind could not be read, every object would otherwise be
+	 * reported as unmatched and the kind's counts would drop to 0; instead
+	 * the kind is skipped and marked incomplete, so its Rollup keys (and
+	 * All and Benchmark) keep their previous values and Rollup|incomplete is
+	 * 1 for the cycle, as for a failed vCenter listing.
+	 */
+	private boolean kindPushable(BenchmarkSelector.Kind kind,
+			String resourceKind, ComplianceRollup rollup) {
+		boolean present = stitcher != null;
+		boolean failed = present && stitcher.loadFailed(resourceKind);
+		if (ComplianceDecisions.kindPushable(present, failed)) {
+			return true;
+		}
+		rollup.markIncomplete(kind);
+		if (failed) {
+			logWarn(kind.rollupName + " objects not scored this cycle: the "
+					+ "VCF Ops " + resourceKind + " resource list could not "
+					+ "be read (see the ComplianceStitcher fetchResources WARN "
+					+ "above), so no object can be matched or pushed; "
+					+ "Rollup|" + kind.rollupName + " keys held back");
+		}
+		return false;
+	}
+
+	/**
 	 * Hosts. Returns host MOID -> ESX version (null values allowed) so VMs
 	 * can follow their host in Auto mode.
 	 */
@@ -939,6 +988,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return hostVersions;
 		}
 		logInfo("vSphere SOAP: " + hosts.size() + " hosts");
+		boolean pushable = kindPushable(BenchmarkSelector.Kind.HOST,
+				"HostSystem", rollup);
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			String hostId = hostInfo.moid;
@@ -948,6 +999,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				seen.add(LastBenchmarkMemory.key(
 						BenchmarkSelector.Kind.HOST, hostId));
 			}
+			if (!pushable) continue;
+
+			// Build 88: match before any read. A host with no VCF Ops
+			// resource is counted as unmatched only: not read, not scored,
+			// not in the rollup. VMs on it read its version on demand.
+			ComplianceStitcher.HostEntry he = stitcher.matchHost(hostName,
+					hostId);
+			if (he == null) {
+				rollup.recordUnmatched(BenchmarkSelector.Kind.HOST, hostName,
+						hostId);
+				continue;
+			}
+			String resourceId = he.resourceId;
 
 			String version = null;
 			if (selector.isAuto()) {
@@ -959,10 +1023,6 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				}
 			}
 			if (hostId != null) hostVersions.put(hostId, version);
-
-			ComplianceStitcher.HostEntry he = stitcher == null ? null
-					: stitcher.matchHost(hostName, hostId);
-			String resourceId = he == null ? null : he.resourceId;
 
 			ComplianceDecisions.Decision d = decide(selector,
 					BenchmarkSelector.Kind.HOST, hostId,
@@ -1099,15 +1159,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				if (wholeHostUnreadable) cs.hostsWhollyUnreadable++;
 			}
 
-			if (resourceId != null) {
-				pushComplianceViaClient(resourceId, cr, d.profileName);
-			}
+			pushComplianceViaClient(resourceId, cr, d.profileName);
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
 					ComplianceDecisions.pushedIds(cr));
 		}
 		logInfo("Hosts scored this cycle: " + cs.hostsScored + " of "
 				+ cs.hosts + " (" + cs.hostsNonCompliant + " non-compliant, "
-				+ cs.hostsWhollyUnreadable + " wholly unreadable); per-host "
+				+ cs.hostsWhollyUnreadable + " wholly unreadable, "
+				+ rollup.unmatched(BenchmarkSelector.Kind.HOST)
+				+ " with no VCF Ops resource); per-host "
 				+ "scores at DEBUG, at INFO for hosts with unreadable "
 				+ "controls");
 		return hostVersions;
@@ -1137,19 +1197,38 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		logInfo("vSphere SOAP: " + vms.size() + " VMs");
+		boolean pushable = kindPushable(BenchmarkSelector.Kind.VM,
+				"VirtualMachine", rollup);
 
 		for (VSphereClient.VmInfo vm : vms) {
+			// Build 88: vSphere Pod VMs (guest id crx*) are out of scope:
+			// skipped before matching, scoring and the rollup, counted in
+			// Rollup|VM|skipped_pods only. VCF Ops models them as kind Pod.
+			if (ComplianceDecisions.isPodGuestId(vm.guestId)) {
+				rollup.recordSkippedPod();
+				logDebug("VM " + vm.name + " (" + vm.moid + "): vSphere Pod "
+						+ "(guest id " + vm.guestId + "), out of scope, "
+						+ "not scored");
+				continue;
+			}
 			cs.vms++;
 			if (vm.moid != null) {
 				seen.add(LastBenchmarkMemory.key(
 						BenchmarkSelector.Kind.VM, vm.moid));
 			}
+			if (!pushable) continue;
+
+			// Build 88: match before any read; unmatched is counted only.
+			ComplianceStitcher.HostEntry he = stitcher.matchVm(vm.name,
+					vm.moid);
+			if (he == null) {
+				rollup.recordUnmatched(BenchmarkSelector.Kind.VM, vm.name,
+						vm.moid);
+				continue;
+			}
+			String resourceId = he.resourceId;
 			String hostVersion = selector.isAuto()
 					? vmHostVersion(vm, hostVersions) : null;
-
-			ComplianceStitcher.HostEntry he = stitcher == null ? null
-					: stitcher.matchVm(vm.name, vm.moid);
-			String resourceId = he == null ? null : he.resourceId;
 
 			ComplianceDecisions.Decision d = decide(selector,
 					BenchmarkSelector.Kind.VM, vm.moid,
@@ -1194,13 +1273,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-			if (resourceId != null) {
-				pushComplianceViaClient(resourceId, cr, d.profileName);
-			}
+			pushComplianceViaClient(resourceId, cr, d.profileName);
 			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
 					ComplianceDecisions.pushedIds(cr));
 		}
-		logInfo("VM compliance: " + cs.vms + " VMs seen");
+		logInfo("VM compliance: " + cs.vms + " VMs seen, "
+				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
+				+ "of scope; named at DEBUG)");
 	}
 
 	/**
@@ -1243,25 +1322,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		seen.add(LastBenchmarkMemory.key(BenchmarkSelector.Kind.VCENTER,
 				moid));
 
-		ComplianceStitcher.HostEntry he = null;
-		if (stitcher != null) {
-			String vcInstanceUuid = null;
-			try {
-				vcInstanceUuid = vsphere.getVCenterInstanceUuid();
-			} catch (Exception e) {
-				logWarn("Could not read vCenter instance UUID for stitcher "
-						+ "lookup: " + e.getMessage());
-			}
-			he = stitcher.matchVCenterAdapterInstance(resourceName,
-					vcInstanceUuid);
-			if (he == null) {
-				logWarn("Could not resolve VMwareAdapter Instance for "
-						+ resourceName + " (vcInstanceUuid=" + vcInstanceUuid
-						+ "): vCenter compliance and the per-vCenter rollup "
-						+ "will NOT be pushed");
-			}
+		if (stitcher == null) {
+			return null;   // nothing can be pushed; configureAdapter warned
 		}
-		String resourceId = he == null ? null : he.resourceId;
+		String vcInstanceUuid = null;
+		try {
+			vcInstanceUuid = vsphere.getVCenterInstanceUuid();
+		} catch (Exception e) {
+			logWarn("Could not read vCenter instance UUID for stitcher "
+					+ "lookup: " + e.getMessage());
+		}
+		ComplianceStitcher.HostEntry he = stitcher.matchVCenterAdapterInstance(
+				resourceName, vcInstanceUuid);
+		if (he == null) {
+			logWarn("Could not resolve VMwareAdapter Instance for "
+					+ resourceName + " (vcInstanceUuid=" + vcInstanceUuid
+					+ "): vCenter compliance and the per-vCenter rollup "
+					+ "will NOT be pushed");
+			// Build 88: unmatched, counted only (the rollup itself lives on
+			// this object, so it is not pushed this cycle either).
+			rollup.recordUnmatched(BenchmarkSelector.Kind.VCENTER,
+					resourceName, moid);
+			return null;
+		}
+		String resourceId = he.resourceId;
 
 		ComplianceDecisions.Decision d = decide(selector,
 				BenchmarkSelector.Kind.VCENTER, moid,
@@ -1313,12 +1397,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER, d.bucket,
 				cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
 
-		if (resourceId != null) {
-			pushComplianceViaClient(resourceId, cr, d.profileName);
-			logInfo("Pushed vCenter compliance data to " + he.hostName
-					+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
-					+ ")");
-		}
+		pushComplianceViaClient(resourceId, cr, d.profileName);
+		logInfo("Pushed vCenter compliance data to " + he.hostName
+				+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
+				+ ")");
 		afterPush(BenchmarkSelector.Kind.VCENTER, moid, d, resourceId, cs,
 				ComplianceDecisions.pushedIds(cr));
 		return he;
@@ -1341,6 +1423,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		logInfo("vSphere SOAP: " + switches.size() + " DVS");
+		if (!kindPushable(BenchmarkSelector.Kind.VDS,
+				"VmwareDistributedVirtualSwitch", rollup)) {
+			return;
+		}
 		for (VSphereClient.DvsInfo dvs : switches) {
 			cs.dvs++;
 			ComplianceStitcher.HostEntry he = stitcher.matchDvs(dvs.name,
@@ -1367,6 +1453,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		logInfo("vSphere SOAP: " + pgs.size() + " DVPG");
+		if (!kindPushable(BenchmarkSelector.Kind.PORTGROUP,
+				"DistributedVirtualPortgroup", rollup)) {
+			return;
+		}
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			cs.dvpg++;
 			ComplianceStitcher.HostEntry he = stitcher.matchDvpg(pg.name,
@@ -1402,6 +1492,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		logInfo("vSphere SOAP: " + clusters.size()
 				+ " ClusterComputeResource");
+		if (!kindPushable(BenchmarkSelector.Kind.CLUSTER,
+				"ClusterComputeResource", rollup)) {
+			return;
+		}
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			cs.clusters++;
 			ComplianceStitcher.HostEntry he = stitcher.matchCluster(
@@ -1415,10 +1509,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	/**
 	 * Shared body for the vim-property kinds (vDS, portgroup, cluster), all
 	 * governed by the vCenter version (the object's own version, e.g. a vDS
-	 * at 9.0.0 under a 9.1.1 vCenter, is deliberately not read). Evaluated
-	 * whether or not the VMWARE resource is matched this cycle, so the
-	 * rollup counts every inventory object. A FAILED read (vim properties,
-	 * or the cluster vSAN probe) folds every evaluable control to UNREADABLE.
+	 * at 9.0.0 under a 9.1.1 vCenter, is deliberately not read). Build 88:
+	 * an object with no matching VMWARE resource is counted as unmatched
+	 * only and not read (before 88 it was evaluated and counted, though
+	 * nothing could be pushed to it). A FAILED read (vim properties, or the
+	 * cluster vSAN probe) folds every evaluable control to UNREADABLE.
 	 */
 	private void collectVimObject(BenchmarkSelector.Kind kind,
 			VSphereClient.MoRef moRef, String name, String moid,
@@ -1426,7 +1521,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) {
 		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
-		String resourceId = he == null ? null : he.resourceId;
+		if (he == null) {
+			rollup.recordUnmatched(kind, name, moid);
+			return;
+		}
+		String resourceId = he.resourceId;
 
 		ComplianceDecisions.Decision d = decide(selector, kind, moid,
 				BenchmarkSelector.governingVersion(kind, vcVersion, null));
@@ -1465,9 +1564,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 				cr.unreadableCount, cr.score);
-		if (resourceId != null) {
-			pushOrProfileName(resourceId, cr, d.profileName);
-		}
+		pushOrProfileName(resourceId, cr, d.profileName);
 		afterPush(kind, moid, d, resourceId, cs,
 				ComplianceDecisions.pushedIds(cr));
 	}

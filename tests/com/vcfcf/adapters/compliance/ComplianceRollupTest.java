@@ -120,6 +120,206 @@ public final class ComplianceRollupTest {
 		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");
 		T.check(!ComplianceRollup.isNonCompliant(0, 0), "clean -> compliant");
 
+		build88Unmatched();
+		build88Pods();
+		build88DevelWorkedExample();
+
 		System.out.println("ComplianceRollupTest: all assertions passed");
+	}
+
+	/**
+	 * Build 88: an object with no VCF Ops resource is in Rollup|<K>|unmatched
+	 * and nowhere else, for every kind; the key is pushed as 0 on a clean
+	 * cycle; All carries no unmatched key.
+	 */
+	private static void build88Unmatched() {
+		// Clean cycle: every kind's unmatched pushed as 0, skipped_pods 0.
+		Map<String, Double> clean = new ComplianceRollup().toStats();
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			T.near(0, clean.get(P + k.rollupName + "|unmatched"),
+					k.rollupName + "|unmatched pushed as 0 on a clean cycle");
+		}
+		T.near(0, clean.get(P + "VM|skipped_pods"),
+				"VM|skipped_pods pushed as 0 on a clean cycle");
+		T.check(!clean.containsKey(P + "All|unmatched"),
+				"no All|unmatched (per-kind key only)");
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			if (k != BenchmarkSelector.Kind.VM) {
+				T.check(!clean.containsKey(P + k.rollupName + "|skipped_pods"),
+						"skipped_pods only on VM, not " + k.rollupName);
+			}
+		}
+
+		// Per kind: one scored (non-compliant) object, two unmatched.
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			ComplianceRollup r = new ComplianceRollup();
+			r.recordEvaluated(k, "SCG_9.1", 10, 2, 0,
+					ControlEvaluator.score(8, 2, 0));
+			r.recordUnmatched(k, "a-" + k.rollupName, "moid-1");
+			r.recordUnmatched(k, "b-" + k.rollupName, "moid-2");
+			Map<String, Double> s = r.toStats();
+			String n = k.rollupName;
+			T.near(2, s.get(P + n + "|unmatched"), n + " unmatched counted");
+			T.near(1, s.get(P + n + "|scored"), n + " unmatched not scored");
+			T.near(1, s.get(P + n + "|non_compliant"),
+					n + " unmatched not non-compliant");
+			T.near(0, s.get(P + n + "|no_benchmark"),
+					n + " unmatched not no_benchmark");
+			T.near(80, s.get(P + n + "|score_sum"), n + " score_sum");
+			T.near(1, s.get(P + "All|scored"), n + ": All excludes unmatched");
+			T.near(1, s.get(P + "All|non_compliant"), n + ": All nc");
+			T.near(0, s.get(P + "All|no_benchmark"), n + ": All nb");
+			T.near(1, s.get(P + "Benchmark|SCG_9.1|objects"),
+					n + ": unmatched in no benchmark bucket");
+			double objects = 0;
+			for (String b : ComplianceRollup.FIXED_BUCKETS) {
+				objects += s.get(P + "Benchmark|" + b + "|objects");
+			}
+			T.near(1, objects, n + ": buckets count only matched objects");
+			for (BenchmarkSelector.Kind o : BenchmarkSelector.Kind.values()) {
+				if (o != k) {
+					T.near(0, s.get(P + o.rollupName + "|unmatched"),
+							n + ": unmatched stays on its own kind ("
+							+ o.rollupName + ")");
+				}
+			}
+			T.eq(2, r.unmatched(k), n + " unmatched()");
+		}
+
+		// The INFO line: null when none; names and MOIDs; capped.
+		ComplianceRollup r = new ComplianceRollup();
+		T.check(r.unmatchedLogLine(BenchmarkSelector.Kind.HOST) == null,
+				"no line when nothing is unmatched");
+		r.recordUnmatched(BenchmarkSelector.Kind.HOST, "esx09.lab", "host-99");
+		String line = r.unmatchedLogLine(BenchmarkSelector.Kind.HOST);
+		T.check(line != null && line.contains("esx09.lab (host-99)")
+				&& line.startsWith("Host: 1 object(s)")
+				&& line.contains("Rollup|Host|unmatched")
+				&& !line.contains("more)"), "one unmatched host named: " + line);
+		ComplianceRollup big = new ComplianceRollup();
+		int cap = ComplianceRollup.UNMATCHED_LOG_CAP;
+		for (int i = 0; i < cap + 5; i++) {
+			big.recordUnmatched(BenchmarkSelector.Kind.VM, "vm" + i, "vm-" + i);
+		}
+		String bl = big.unmatchedLogLine(BenchmarkSelector.Kind.VM);
+		T.check(bl.contains("vm" + (cap - 1) + " (vm-" + (cap - 1) + ")"),
+				"last name inside the cap is listed");
+		T.check(!bl.contains("vm" + cap + " (vm-" + cap + ")"),
+				"first name past the cap is not listed");
+		T.check(bl.endsWith(" (+5 more)"), "overflow counted: " + bl);
+		T.near(cap + 5, big.toStats().get(P + "VM|unmatched"),
+				"the count is not capped");
+		ComplianceRollup nul = new ComplianceRollup();
+		nul.recordUnmatched(BenchmarkSelector.Kind.VDS, null, null);
+		T.check(nul.unmatchedLogLine(BenchmarkSelector.Kind.VDS)
+				.contains("(no name) (no MOID)"), "null name and MOID labelled");
+
+		// Incomplete kind: unmatched (and skipped_pods for VM) held back with
+		// the kind's other keys, never pushed as a 0 the adapter did not take.
+		ComplianceRollup inc = new ComplianceRollup();
+		inc.recordUnmatched(BenchmarkSelector.Kind.VM, "x", "vm-1");
+		inc.recordSkippedPod();
+		inc.markIncomplete(BenchmarkSelector.Kind.VM);
+		Map<String, Double> is = inc.toStats();
+		T.check(!is.containsKey(P + "VM|unmatched"), "VM unmatched held back");
+		T.check(!is.containsKey(P + "VM|skipped_pods"),
+				"VM skipped_pods held back");
+		T.near(1, is.get(ComplianceRollup.INCOMPLETE_KEY), "incomplete = 1");
+		T.near(0, is.get(P + "Host|unmatched"),
+				"other kinds still pushed (Host unmatched 0)");
+	}
+
+	/**
+	 * Build 88: Pod VMs are counted in VM|skipped_pods only: not scored, not
+	 * unmatched, not in All or any Benchmark bucket.
+	 */
+	private static void build88Pods() {
+		ComplianceRollup r = new ComplianceRollup();
+		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 0, 0,
+				100.0);
+		for (int i = 0; i < 3; i++) {
+			r.recordSkippedPod();
+		}
+		Map<String, Double> s = r.toStats();
+		T.near(3, s.get(P + "VM|skipped_pods"), "pods counted");
+		T.near(1, s.get(P + "VM|scored"), "pods not scored");
+		T.near(0, s.get(P + "VM|non_compliant"), "pods not non-compliant");
+		T.near(0, s.get(P + "VM|unmatched"), "pods are not unmatched");
+		T.near(1, s.get(P + "All|scored"), "pods not in All");
+		T.near(100, s.get(P + "All|avg_score"), "pods not in the average");
+		T.near(1, s.get(P + "Benchmark|SCG_9.1|objects"),
+				"pods in no benchmark bucket");
+		T.near(0, s.get(P + "Benchmark|none|objects"), "nor in none");
+		T.eq(3, r.skippedPods(), "skippedPods()");
+	}
+
+	/**
+	 * Build 88 worked example, the devel numbers from the factory's
+	 * knowledge/designs/sdk-adapters/compliance-rollup-unmatched-and-pod-skip.md:
+	 * wld01's vCenter lists 43 VMs, 18 of them vSphere Pods (each scored
+	 * 78.947 = 15 of 19 by build 87, so non-compliant). Build 87 scored all
+	 * 43; build 88 scores the 25 VMs Ops has. Environment: Objects Scored
+	 * 193 -> 175, Non-Compliant 158 -> 140. The split of the other objects
+	 * across vCenters and kinds is synthetic (only the totals are from
+	 * devel); the Pod effect on wld01 is exact.
+	 */
+	private static void build88DevelWorkedExample() {
+		double pod = ControlEvaluator.score(15, 4, 0);
+		T.near(1500.0 / 19, pod, "a Pod scored 78.947 under build 87");
+
+		// wld01, build 88: 25 real VMs (synthetic: 20 non-compliant), 18 Pods
+		// skipped, every object matched.
+		ComplianceRollup wld01 = new ComplianceRollup();
+		for (int i = 0; i < 25; i++) {
+			boolean fails = i < 20;
+			wld01.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19,
+					fails ? 4 : 0, 0, fails ? pod : 100.0);
+		}
+		for (int i = 0; i < 18; i++) {
+			wld01.recordSkippedPod();
+		}
+		// The same vCenter under build 87: the 18 Pods were scored as VMs.
+		ComplianceRollup wld01b87 = new ComplianceRollup();
+		for (int i = 0; i < 25; i++) {
+			boolean fails = i < 20;
+			wld01b87.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19,
+					fails ? 4 : 0, 0, fails ? pod : 100.0);
+		}
+		for (int i = 0; i < 18; i++) {
+			wld01b87.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19,
+					4, 0, pod);
+		}
+		// Everything else in the environment (synthetic split, real totals):
+		// 175 - 25 = 150 scored, 140 - 20 = 120 non-compliant.
+		ComplianceRollup rest = new ComplianceRollup();
+		for (int i = 0; i < 150; i++) {
+			rest.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10,
+					i < 120 ? 1 : 0, 0, i < 120 ? 90.0 : 100.0);
+		}
+
+		Map<String, Double> w = wld01.toStats();
+		Map<String, Double> w87 = wld01b87.toStats();
+		Map<String, Double> o = rest.toStats();
+		T.near(43, w87.get(P + "VM|scored"), "build 87: wld01 VM scored 43");
+		T.near(25, w.get(P + "VM|scored"), "build 88: wld01 VM scored 25");
+		T.near(18, w.get(P + "VM|skipped_pods"), "wld01 skipped_pods 18");
+		T.near(0, o.get(P + "VM|skipped_pods"), "skipped_pods 0 elsewhere");
+		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
+			T.near(0, w.get(P + k.rollupName + "|unmatched"),
+					"wld01 " + k.rollupName + "|unmatched 0");
+			T.near(0, o.get(P + k.rollupName + "|unmatched"),
+					"elsewhere " + k.rollupName + "|unmatched 0");
+		}
+		// The ComplianceWorld Rollup|Environment sums of Rollup|All.
+		T.near(193, w87.get(P + "All|scored") + o.get(P + "All|scored"),
+				"build 87 environment Objects Scored 193");
+		T.near(158, w87.get(P + "All|non_compliant")
+				+ o.get(P + "All|non_compliant"),
+				"build 87 environment Non-Compliant 158");
+		T.near(175, w.get(P + "All|scored") + o.get(P + "All|scored"),
+				"build 88 environment Objects Scored 175");
+		T.near(140, w.get(P + "All|non_compliant")
+				+ o.get(P + "All|non_compliant"),
+				"build 88 environment Non-Compliant 140");
 	}
 }

@@ -8,8 +8,9 @@ vCenter, vSAN clusters, and distributed switches and portgroups. It checks
 each one against the VMware Security Configuration Guide (SCG) written for
 that object's version. The results show up on objects you already monitor:
 every one gets a compliance score, every failing control raises its own
-alert with VMware's fix attached, and four dashboards give you the big
-picture and let you drill down.
+alert with VMware's fix attached, and four dashboards (plus a Summary tab
+on the pack's Compliance World object) give you the big picture and let
+you drill down.
 
 The pack only reads. It never changes a setting.
 
@@ -53,8 +54,11 @@ absent is currently skipped rather than failed; see Known issues.)
 
 ## The dashboards
 
-Four dashboards install with the pack. These screenshots come from a lab
-with three vCenters.
+Four dashboards install with the pack, plus a Summary tab on the pack's
+Compliance World object: open Compliance World from the inventory and its
+Summary tab shows the environment tiles, the per-vCenter table, the score
+trend, the SCG version spread and the open compliance alerts on one page.
+These screenshots come from a lab with three vCenters.
 
 **Environment Overview** is the landing page: the average score, how many
 objects are non-compliant, how many have no guide for their version, how
@@ -135,6 +139,16 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   re-imported by the same upgrade. Existing alerts are renamed in place
   (alert ids and start times are kept) and existing symptom and alert
   definitions take the new wait and cancel cycles. See [installing.md](docs/installing.md#upgrading).
+- **The counts cover only objects VCF Operations knows about.** (Build
+  88.) A host, VM, cluster, switch or portgroup that vCenter lists but that
+  has no matching object in VCF Operations is not scored and not counted
+  in the totals, because there is nowhere to put its result. Each vCenter
+  object shows how many there were in
+  `VCF-CF Compliance|Rollup|<kind>|unmatched` (0 when none), and the
+  adapter log names them once per cycle. vSphere Pods (the VMs that run
+  Supervisor Pods, which VCF Operations lists as Pods, not VMs) are out of
+  scope: they are skipped and counted in
+  `VCF-CF Compliance|Rollup|VM|skipped_pods`.
 - **Upgrades keep your settings.** An existing account keeps the
   compliance profile it was set to, even if a new version changes the
   default. An account from before version-aware scoring with no stored

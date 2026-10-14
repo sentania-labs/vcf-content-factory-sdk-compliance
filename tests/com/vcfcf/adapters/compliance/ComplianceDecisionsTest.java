@@ -328,7 +328,234 @@ public final class ComplianceDecisionsTest {
 		T.check(ComplianceDecisions.hostScoreLineAtInfo(19),
 				"many unreadable controls: score line at INFO");
 
+		build88PodGuestIds();
+		build88ResourcePages();
+		build88SourcePins();
+
 		System.out.println("ComplianceDecisionsTest: all assertions passed");
+	}
+
+	/**
+	 * Build 88 review W2: a resource list that parsed but is short holds
+	 * the kind back; a missing resourceList is not "0 resources".
+	 */
+	private static void build88ResourcePages() {
+		ComplianceDecisions.ResourcePage C =
+				ComplianceDecisions.ResourcePage.COMPLETE;
+		ComplianceDecisions.ResourcePage N =
+				ComplianceDecisions.ResourcePage.NEXT_PAGE;
+		ComplianceDecisions.ResourcePage I =
+				ComplianceDecisions.ResourcePage.INCOMPLETE;
+		// Missing resourceList.
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, null, 0, 0, 0),
+				"no resourceList, no pageInfo: incomplete");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, 25L, 0, 0, 0),
+				"no resourceList with a total: incomplete");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(false, 0L, 0, 0, 0),
+				"no resourceList, total 0: genuinely empty");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(false, 0L, 5, 0, 1),
+				"no resourceList on a later page: incomplete");
+		// totalCount exceeds the rows returned.
+		T.eq(N, ComplianceDecisions.resourcePageOutcome(true, 12500L, 10000,
+				10000, 0), "first of two pages: read the next");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 12500L, 12500,
+				2500, 1), "second page completes the list");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(true, 12500L, 10000,
+				0, 1), "empty page before the total: incomplete");
+		T.eq(I, ComplianceDecisions.resourcePageOutcome(true, 10001L, 1000,
+				1000, ComplianceDecisions.MAX_RESOURCE_PAGES - 1),
+				"page cap reached short of the total: incomplete");
+		T.eq(N, ComplianceDecisions.resourcePageOutcome(true, 1001L, 1000,
+				1000, 0),
+				"server capped the page below pageSize: keep paging");
+		// Complete lists.
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 25L, 25, 25, 0),
+				"one page, all rows");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, 0L, 0, 0, 0),
+				"empty list, total 0");
+		T.eq(C, ComplianceDecisions.resourcePageOutcome(true, null, 25, 25, 0),
+				"no pageInfo: one unpaged list as returned");
+		T.eq(10000, ComplianceDecisions.RESOURCE_PAGE_SIZE, "page size");
+	}
+
+	/** Build 88: which guest ids are vSphere Pods; when a kind is pushable. */
+	private static void build88PodGuestIds() {
+		for (String id : new String[] {"crxPod1Guest", "crxSys1Guest",
+				"CRXPOD1GUEST", "CrxPod1Guest", "crxFuture2Guest", "crx",
+				" crxPod1Guest"}) {
+			T.check(ComplianceDecisions.isPodGuestId(id), "Pod: '" + id + "'");
+		}
+		for (String id : new String[] {null, "", "  ", "otherLinux64Guest",
+				"vmwarePhoton64Guest", "windows2022srvNext_64Guest",
+				"centos64Guest", "xcrxPod1Guest", "cr", "rhel9_64Guest"}) {
+			T.check(!ComplianceDecisions.isPodGuestId(id),
+					"not a Pod: '" + id + "'");
+		}
+		T.check(ComplianceDecisions.kindPushable(true, false),
+				"stitcher and resource list read: pushable");
+		T.check(!ComplianceDecisions.kindPushable(true, true),
+				"resource list failed: not pushable (held back)");
+		T.check(!ComplianceDecisions.kindPushable(false, false),
+				"no stitcher: not pushable");
+	}
+
+	/**
+	 * Build 88: the adapter wiring needs the SDK jar this runner leaves off
+	 * the classpath, so the order that makes the scope rule hold is pinned
+	 * in the source: Pods skipped before matching, unmatched objects
+	 * recorded and skipped before any read or decision, every kind gated on
+	 * a readable VCF Ops resource list, and the guest id read in the bulk VM
+	 * enumeration.
+	 */
+	private static void build88SourcePins() {
+		String ca = read("src/com/vcfcf/adapters/compliance/ComplianceAdapter.java");
+
+		String vms = body(ca, "private void collectVms(");
+		inOrder(vms, "collectVms",
+				"kindPushable(BenchmarkSelector.Kind.VM, \"VirtualMachine\", rollup)",
+				"if (ComplianceDecisions.isPodGuestId(vm.guestId)) { rollup.recordSkippedPod();",
+				"continue; } cs.vms++;",
+				"if (!pushable) continue;",
+				"stitcher.matchVm(vm.name, vm.moid); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.VM, vm.name, vm.moid); continue; }",
+				"vmHostVersion(vm, hostVersions)",
+				"decide(selector, BenchmarkSelector.Kind.VM",
+				"vsphere.getVmExtraConfig(vm.moRef)",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.VM");
+		noReadBefore(vms, "collectVms", "stitcher.matchVm(");
+
+		String hosts = body(ca, "private java.util.Map<String, String> collectHosts(");
+		inOrder(hosts, "collectHosts",
+				"kindPushable(BenchmarkSelector.Kind.HOST, \"HostSystem\", rollup)",
+				"if (!pushable) continue;",
+				"stitcher.matchHost(hostName, hostId); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.HOST, hostName, hostId); continue; }",
+				"vsphere.getHostProductVersion(hostInfo.moRef)",
+				"decide(selector, BenchmarkSelector.Kind.HOST",
+				"vsphere.getAdvancedSettings(hostInfo.moRef)",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.HOST");
+		noReadBefore(hosts, "collectHosts", "stitcher.matchHost(");
+
+		String vc = body(ca, "private ComplianceStitcher.HostEntry collectVCenter(");
+		inOrder(vc, "collectVCenter",
+				"rollup.recordUnmatched(BenchmarkSelector.Kind.VCENTER, resourceName, moid); return null; }",
+				"decide(selector, BenchmarkSelector.Kind.VCENTER",
+				"vsphere.getVCenterAdvancedSettings()",
+				"rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER");
+
+		String vim = body(ca, "private void collectVimObject(");
+		inOrder(vim, "collectVimObject",
+				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return; }",
+				"decide(selector, kind, moid",
+				"rollup.recordEvaluated(kind");
+		noReadBefore(vim, "collectVimObject", "rollup.recordUnmatched(kind");
+
+		inOrder(body(ca, "private void collectDvs("), "collectDvs",
+				"vsphere.getDvSwitches()",
+				"if (!kindPushable(BenchmarkSelector.Kind.VDS, \"VmwareDistributedVirtualSwitch\", rollup)) { return; }",
+				"collectVimObject(");
+		inOrder(body(ca, "private void collectDvpg("), "collectDvpg",
+				"vsphere.getDvPortgroups()",
+				"if (!kindPushable(BenchmarkSelector.Kind.PORTGROUP, \"DistributedVirtualPortgroup\", rollup)) { return; }",
+				"collectVimObject(");
+		inOrder(body(ca, "private void collectClusters("), "collectClusters",
+				"vsphere.getClusters()",
+				"if (!kindPushable(BenchmarkSelector.Kind.CLUSTER, \"ClusterComputeResource\", rollup)) { return; }",
+				"collectVimObject(");
+
+		inOrder(body(ca, "private boolean kindPushable("), "kindPushable",
+				"boolean failed = present && stitcher.loadFailed(resourceKind);",
+				"if (ComplianceDecisions.kindPushable(present, failed)) { return true; }",
+				"rollup.markIncomplete(kind);",
+				"return false;");
+
+		inOrder(body(ca, "private void collectWorldCycle("), "collectWorldCycle",
+				"String line = rollup.unmatchedLogLine(k); if (line != null) { logInfo(line); }",
+				"pushRollup(vcEntry, rollup);");
+
+		String vs = read("src/com/vcfcf/adapters/compliance/VSphereClient.java");
+		inOrder(body(vs, "public List<VmInfo> getVms("), "getVms",
+				"\"name\", \"runtime.host\", \"config.guestId\");",
+				"if (rows == null) {",
+				"\"name\", \"runtime.host\");",
+				"row.values.get(\"runtime.host\"), true, row.values.get(\"config.guestId\"))");
+
+		String st = read("src/com/vcfcf/adapters/compliance/ComplianceStitcher.java");
+		String fr = body(st, "private List<SimpleJson> fetchResources(");
+		inOrder(fr, "fetchResources",
+				"failedLoads.add(resourceKind);",
+				"for (int page = 0; ; page++) {",
+				"\"&pageSize=\" + ComplianceDecisions.RESOURCE_PAGE_SIZE + \"&page=\" + page);",
+				"if (parsed == null || parsed.isNull()) {",
+				"return out; }",
+				"boolean hasList = list != null && list.isList();",
+				"int rows = hasList ? list.size() : 0;",
+				"collected += rows;",
+				"SimpleJson total = parsed.path(\"pageInfo.totalCount\"); Long totalCount = total.isNull() ? null : total.asLong();",
+				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page);",
+				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); return out; }",
+				"if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {",
+				"return out; }");
+		// The failed mark is cleared in exactly one place: a complete list.
+		T.eq(1, count(fr, "failedLoads.remove("),
+				"fetchResources clears the failed mark only on COMPLETE");
+		T.check(body(st, "public boolean loadFailed(").equals(
+				"return failedLoads.contains(resourceKind);"), "loadFailed body");
+	}
+
+	/**
+	 * No vCenter read ({@code vsphere.}) occurs in {@code src} before
+	 * {@code marker}: an unmatched object costs no read. The one listing
+	 * call ({@code vsphere.getHosts()} / {@code getVms()}) precedes the loop
+	 * and is allowed.
+	 */
+	private static void noReadBefore(String src, String where, String marker) {
+		int at = src.indexOf(marker);
+		T.check(at >= 0, where + ": found " + marker);
+		String head = src.substring(0, at)
+				.replace("vsphere.getHosts()", "")
+				.replace("vsphere.getVms()", "");
+		T.check(!head.contains("vsphere."),
+				where + ": no vCenter read before " + marker);
+	}
+
+	/** Each fragment occurs in {@code src}, in this order. */
+	private static void inOrder(String src, String where, String... fragments) {
+		int from = 0;
+		for (String f : fragments) {
+			int at = src.indexOf(f, from);
+			T.check(at >= 0, where + ": expected, in order: " + f);
+			from = at + f.length();
+		}
+	}
+
+	private static String read(String path) {
+		try {
+			return new String(java.nio.file.Files.readAllBytes(
+					java.nio.file.Paths.get(path)),
+					java.nio.charset.StandardCharsets.UTF_8);
+		} catch (java.io.IOException e) {
+			throw new AssertionError("read " + path + ": " + e);
+		}
+	}
+
+	/**
+	 * The body of the first method whose declaration starts with
+	 * {@code signature}, comments removed and whitespace collapsed (as in
+	 * EsxcliCycleCacheTest).
+	 */
+	private static String body(String src, String signature) {
+		int at = src.indexOf(signature);
+		T.check(at >= 0, "found " + signature);
+		int open = src.indexOf('{', at);
+		int depth = 0;
+		int i = open;
+		for (; i < src.length(); i++) {
+			char ch = src.charAt(i);
+			if (ch == '{') depth++;
+			else if (ch == '}' && --depth == 0) break;
+		}
+		String b = src.substring(open + 1, i);
+		b = b.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
+		return b.replaceAll("\\s+", " ").trim();
 	}
 
 	/** Every path within budget; every (id, key) pair exactly once. */

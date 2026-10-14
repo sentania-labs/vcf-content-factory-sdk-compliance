@@ -21,3 +21,4 @@ for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
 done
 python3 tests/test_generate_compliance_alerts.py
 python3 tests/test_dashboard_alert_lists.py
+python3 tests/test_dashboard_widget_types.py

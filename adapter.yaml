@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 87
+build_number: 89
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -53,3 +53,4 @@ bundled_content:
     - dashboards/compliance-esxi-hosts.yaml
     - dashboards/compliance-vms.yaml
     - dashboards/compliance-vcenter-networking.yaml
+    - dashboards/compliance-world-summary.yaml

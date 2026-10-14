@@ -298,6 +298,11 @@ public final class VSphereClient {
 	 * RetrieveProperties, not one extra round trip per VM. If the bulk read
 	 * returns nothing the pre-58 walk (listView + per-VM name) is used and
 	 * {@link VmInfo#hostRead} is false, so the caller reads the host per VM.
+	 * Build 88: {@code config.guestId} comes back in the same call, so a
+	 * vSphere Pod VM (guest id crx*) is recognised at no extra cost. On the
+	 * fallback walk the guest id is not read (null), so a Pod is handled as
+	 * a VM there, and, having no VirtualMachine resource in VCF Ops, is
+	 * reported as unmatched rather than skipped.
 	 */
 	public List<VmInfo> getVms() throws Exception {
 		ensureConnected();
@@ -307,7 +312,19 @@ public final class VSphereClient {
 		if (view != null) {
 			try {
 				rows = retrieveViewRows(view, "VirtualMachine",
-						"name", "runtime.host");
+						"name", "runtime.host", "config.guestId");
+				if (rows == null) {
+					// Build 88: a fault on the call with the added path must
+					// not push every VM onto the per-VM fallback walk; retry
+					// the pre-88 paths once (guest id then unknown, so Pods
+					// are reported as unmatched instead of skipped).
+					logWarn("vSphere SOAP: bulk VM read with config.guestId "
+							+ "failed" + (lastFault != null ? " (" + lastFault
+							+ ")" : "") + "; retrying without the guest id "
+							+ "(vSphere Pod VMs not recognised this cycle)");
+					rows = retrieveViewRows(view, "VirtualMachine",
+							"name", "runtime.host");
+				}
 			} finally {
 				destroyViewQuietly(view);
 			}
@@ -317,7 +334,8 @@ public final class VSphereClient {
 				String name = row.values.get("name");
 				if (name == null) name = nameOrMoid(row.ref);
 				result.add(new VmInfo(row.ref, name, row.ref.value,
-						row.values.get("runtime.host"), true));
+						row.values.get("runtime.host"), true,
+						row.values.get("config.guestId")));
 			}
 		} else {
 			for (MoRef ref : listView("VirtualMachine")) {
@@ -1782,18 +1800,22 @@ public final class VSphereClient {
 		// and the caller must read runtime.host itself.
 		public final String hostMoid;
 		public final boolean hostRead;
+		// Build 88: config.guestId from the bulk enumeration; null when not
+		// read (fallback walk) or unset on the VM.
+		public final String guestId;
 
 		public VmInfo(MoRef moRef, String name, String moid) {
-			this(moRef, name, moid, null, false);
+			this(moRef, name, moid, null, false, null);
 		}
 
 		public VmInfo(MoRef moRef, String name, String moid, String hostMoid,
-				boolean hostRead) {
+				boolean hostRead, String guestId) {
 			this.moRef = moRef;
 			this.name = name;
 			this.moid = moid;
 			this.hostMoid = hostMoid;
 			this.hostRead = hostRead;
+			this.guestId = guestId;
 		}
 	}
 
