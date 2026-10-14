@@ -13,8 +13,8 @@ plausible but different number with no error. This test pins:
   Environment Overview and the Compliance World Summary read
   Rollup|Environment|pass_rate, labelled Controls Passing;
 - the per-vCenter view has a "<Kind> Controls Passing (%)" column bound
-  to Rollup|<Kind>|pass_rate for every kind, a Controls Unreadable (All)
-  column,
+  to Rollup|<Kind>|pass_rate for every kind (the vCenter kind labelled
+  "vCenter Appliance", review N9), a Controls Unreadable (All) column,
   and a totals row that sums counts, never a percentage;
 - the per-vCenter view reconciles with the Environment tile (review W2):
   All Controls Passing, Passed and Evaluated columns, with Passed and
@@ -31,6 +31,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 KINDS = ["Host", "VM", "Cluster", "vDS", "Portgroup", "vCenter"]
+# Column label per kind; the vCenter kind is the appliance only (N9).
+LABEL = {"vCenter": "vCenter Appliance"}
 ENV_DASHBOARDS = ["compliance-environment-overview.yaml",
                   "compliance-world-summary.yaml"]
 
@@ -98,7 +100,7 @@ class PassRateBindingTest(unittest.TestCase):
         attrs = [a for a, _ in cols]
         for kind in KINDS:
             want = ("VCF-CF Compliance|Rollup|%s|pass_rate" % kind,
-                    "%s Controls Passing (%%)" % kind)
+                    "%s Controls Passing (%%)" % LABEL.get(kind, kind))
             self.assertIn(want, cols, kind)
         self.assertIn(("VCF-CF Compliance|Rollup|All|controls_unreadable",
                        "Controls Unreadable"), cols)
@@ -112,6 +114,8 @@ class PassRateBindingTest(unittest.TestCase):
         self.assertIn(
             attrs.index("VCF-CF Compliance|Rollup|All|controls_unreadable"),
             summed, "Controls Unreadable is in the totals row")
+        self.assertNotIn("vCenter Controls Passing (%)",
+                         [n for _, n in cols], "ambiguous label (N9)")
 
     def test_vcenter_view_reconciles_with_tile(self):
         text = (REPO / "views" / "compliance-by-vcenter.yaml").read_text()

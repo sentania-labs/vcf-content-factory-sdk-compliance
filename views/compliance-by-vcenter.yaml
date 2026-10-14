@@ -5,7 +5,9 @@ description: >
   Portgroup) from the VCF-CF Compliance adapter, stitched onto VMWARE
   VMwareAdapter Instance. All Controls Passing, Passed and Evaluated are the
   vCenter's totals across every kind: summed down the totals row, Passed
-  over Evaluated is the Environment Controls Passing tile. Per kind: Controls Passing (controls passed over
+  over Evaluated is the Environment Controls Passing tile. vCenter Appliance
+  Controls Passing is the vCenter appliance kind only (its VAMI and vCenter
+  settings controls). Per kind: Controls Passing (controls passed over
   controls evaluated; unreadable controls are in neither count, and with
   nothing evaluated there is no percentage, never 100), objects scored,
   non-compliant, and Not in VCF Ops (listed by vCenter, no VCF Operations
@@ -34,7 +36,7 @@ columns:
   - attribute: VCF-CF Compliance|Rollup|All|controls_evaluated
     display_name: "All Controls Evaluated"
   - attribute: VCF-CF Compliance|Rollup|vCenter|pass_rate
-    display_name: "vCenter Controls Passing (%)"
+    display_name: "vCenter Appliance Controls Passing (%)"
     red_bound: 80
     orange_bound: 90
     yellow_bound: 95
