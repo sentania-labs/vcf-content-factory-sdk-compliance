@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -101,6 +100,30 @@ public final class VSphereClient {
 	// Build 95: the property named by the last InvalidProperty fault.
 	private volatile String lastInvalidProperty;
 	private volatile boolean lastNotAuthenticated;
+	// Build 95 (issue #24): the last call's response was over the cap.
+	private volatile boolean lastTooLarge;
+
+	/**
+	 * Build 95 (issue #24): the most bytes of one SOAP response read into
+	 * memory. The largest legitimate responses are bulk pages (200 VMs with
+	 * their extraConfig and device lists, or 10 hosts with their whole
+	 * advanced-option lists), a few MB to a few tens of MB; 64 MB leaves
+	 * headroom while keeping one response from exhausting the collector
+	 * JVM every adapter shares. A response over it fails the call (its
+	 * controls are UNREADABLE with reason response-too-large), never a
+	 * partial read.
+	 */
+	static final long MAX_SOAP_RESPONSE_BYTES = 64L * 1024 * 1024;
+
+	/** Build 95: fault bodies read at most this much (they are small). */
+	static final int MAX_FAULT_BODY_BYTES = 1024 * 1024;
+
+	private volatile long maxResponseBytes = MAX_SOAP_RESPONSE_BYTES;
+
+	/** Test seam (build 95): a smaller response cap. */
+	void setMaxResponseBytes(long max) {
+		this.maxResponseBytes = max;
+	}
 
 	// SOAP session state.
 	private volatile String sessionCookie;     // vmware_soap_session=...
@@ -727,7 +750,7 @@ public final class VSphereClient {
 			if (value == null) {
 				String why = readFailure;
 				if (why == null) {
-					why = lastFault != null ? "soap-fault: " + lastFault
+					why = lastFault != null ? faultReason(recipe.trim())
 							: "value-absent: " + recipe.trim();
 				}
 				synchronized (lastReasons) {
@@ -1277,15 +1300,15 @@ public final class VSphereClient {
 
 		@Override
 		public String missingReason(String path) {
-			return lastFault != null ? "soap-fault: " + lastFault + " ("
-					+ path + ")" : "missing-element: " + path + " not returned";
+			return lastFault != null ? faultReason(path)
+					: "missing-element: " + path + " not returned";
 		}
 
 		@Override
 		public String noPrefixReason(String[] segments, int maxLen) {
 			String path = String.join(".", segments);
 			if (lastFault != null) {
-				return "soap-fault: " + lastFault + " (" + path + ")";
+				return faultReason(path);
 			}
 			int[] lens = prefixLengths(ref.type, segments.length, maxLen);
 			if (lens.length == 0) {
@@ -1299,6 +1322,16 @@ public final class VSphereClient {
 			}
 			return "missing-element: no prefix of " + path + " resolved";
 		}
+	}
+
+	/**
+	 * Build 95: the unreadable reason for the last failed call: category
+	 * response-too-large when the response was over the cap, else
+	 * soap-fault.
+	 */
+	private String faultReason(String what) {
+		return (lastTooLarge ? "response-too-large: " : "soap-fault: ")
+				+ lastFault + " (" + what + ")";
 	}
 
 	static String join(String[] segments, int len) {
@@ -2006,17 +2039,15 @@ public final class VSphereClient {
 	 * Build 95: the property path an InvalidProperty fault names, or null.
 	 * SDK-free, tested directly.
 	 */
-	static String invalidPropertyName(byte[] body) {
-		if (body == null || body.length == 0) return null;
-		java.util.regex.Matcher m = INVALID_PROPERTY_NAME.matcher(
-				new String(body, StandardCharsets.UTF_8));
+	static String invalidPropertyName(String body) {
+		if (body == null || body.isEmpty()) return null;
+		java.util.regex.Matcher m = INVALID_PROPERTY_NAME.matcher(body);
 		return m.find() ? m.group(1).trim() : null;
 	}
 
 	/** Build 95: whether a fault body is vim25 NotAuthenticated. */
-	static boolean isNotAuthenticated(byte[] body) {
-		return body != null && new String(body, StandardCharsets.UTF_8)
-				.contains("NotAuthenticated");
+	static boolean isNotAuthenticated(String body) {
+		return body != null && body.contains("NotAuthenticated");
 	}
 
 	/**
@@ -2043,6 +2074,7 @@ public final class VSphereClient {
 		if (m != null) m.soapCall();
 		lastNotAuthenticated = false;
 		lastInvalidProperty = null;
+		lastTooLarge = false;
 
 		URL url = new URL(vcenterUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -2052,7 +2084,9 @@ public final class VSphereClient {
 			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
 		int code;
-		byte[] respBytes;
+		String faultBody = null;
+		Document doc = null;
+		CappedInputStream body = null;
 		try {
 			conn.setRequestMethod("POST");
 			conn.setDoOutput(true);
@@ -2075,23 +2109,138 @@ public final class VSphereClient {
 			// response carries it). Take name=value up to the first ';'.
 			captureCookie(conn);
 
-			InputStream is = (code >= 200 && code < 300)
-					? conn.getInputStream() : conn.getErrorStream();
-			respBytes = drain(is);
+			if (code >= 200 && code < 300) {
+				// Build 95 (issue #24): parsed straight from the capped
+				// stream, one copy (the DOM), not bytes, then a String,
+				// then bytes again.
+				InputStream is = conn.getInputStream();
+				if (is != null) {
+					body = new CappedInputStream(is, maxResponseBytes);
+					try {
+						doc = parseXml(body);
+					} finally {
+						// Closing after the parse returns the connection
+						// for reuse (the JDK drains what is left).
+						if (!body.exceeded()) {
+							try { body.close(); } catch (Exception ignored) {}
+						}
+					}
+				}
+			} else {
+				faultBody = readCapped(conn.getErrorStream(),
+						MAX_FAULT_BODY_BYTES);
+			}
 		} catch (java.io.IOException e) {
 			conn.disconnect();   // never reuse a connection that failed
+			if (body != null && body.exceeded()) {
+				return tooLarge(soapAction);
+			}
 			throw e;
+		}
+		if (body != null && body.exceeded()) {
+			conn.disconnect();   // the rest of the response was not read
+			return tooLarge(soapAction);
 		}
 		if (code < 200 || code >= 300) {
 			// Build 74: remember why (diagnostics only; the fault string is
 			// vCenter's message, never contains credentials).
-			lastFault = "HTTP " + code + faultString(respBytes);
-			lastNotAuthenticated = isNotAuthenticated(respBytes);
-			lastInvalidProperty = invalidPropertyName(respBytes);
+			lastFault = "HTTP " + code + faultString(faultBody);
+			lastNotAuthenticated = isNotAuthenticated(faultBody);
+			lastInvalidProperty = invalidPropertyName(faultBody);
 			return null;   // SOAP fault (500) / auth failure -> null upstream
 		}
-		if (respBytes == null || respBytes.length == 0) return null;
-		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
+		return doc;   // null when the body was empty or not XML
+	}
+
+	/** Build 95 (issue #24): a response over the cap fails the call. */
+	private Document tooLarge(String soapAction) {
+		lastTooLarge = true;
+		lastFault = soapAction + " response over " + maxResponseBytes
+				+ " bytes, not read";
+		logWarn("vSphere SOAP: " + lastFault + " (MAX_SOAP_RESPONSE_BYTES); "
+				+ "the call failed and what it was reading is UNREADABLE");
+		return null;
+	}
+
+	/**
+	 * Build 95 (issue #24): an InputStream that stops after {@code max}
+	 * bytes by throwing {@link ResponseTooLarge}, remembering that it did.
+	 * SDK-free; also used by the esxcli client.
+	 */
+	static final class CappedInputStream extends java.io.FilterInputStream {
+		private final long max;
+		private long read;
+		private boolean exceeded;
+
+		CappedInputStream(InputStream in, long max) {
+			super(in);
+			this.max = max;
+		}
+
+		boolean exceeded() {
+			return exceeded;
+		}
+
+		private void count(long n) throws ResponseTooLarge {
+			if (n <= 0) return;
+			read += n;
+			if (read > max) {
+				exceeded = true;
+				throw new ResponseTooLarge(max);
+			}
+		}
+
+		@Override
+		public int read() throws java.io.IOException {
+			if (exceeded) throw new ResponseTooLarge(max);
+			int b = super.read();
+			if (b >= 0) count(1);
+			return b;
+		}
+
+		@Override
+		public int read(byte[] b, int off, int len) throws java.io.IOException {
+			if (exceeded) throw new ResponseTooLarge(max);
+			int n = super.read(b, off, len);
+			count(n);
+			return n;
+		}
+
+		@Override
+		public long skip(long n) throws java.io.IOException {
+			long k = super.skip(n);
+			count(k);
+			return k;
+		}
+	}
+
+	/** Build 95: thrown by {@link CappedInputStream} past its cap. */
+	static final class ResponseTooLarge extends java.io.IOException {
+		private static final long serialVersionUID = 1L;
+
+		ResponseTooLarge(long max) {
+			super("response over " + max + " bytes");
+		}
+	}
+
+	/** Build 95: at most {@code max} bytes of a (fault) body, decoded. */
+	static String readCapped(InputStream is, int max) {
+		if (is == null) return null;
+		try {
+			ByteArrayOutputStream bos = new ByteArrayOutputStream();
+			byte[] buf = new byte[8192];
+			int n;
+			while (bos.size() < max
+					&& (n = is.read(buf, 0, Math.min(buf.length,
+							max - bos.size()))) >= 0) {
+				bos.write(buf, 0, n);
+			}
+			return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+		} catch (java.io.IOException e) {
+			return null;
+		} finally {
+			try { is.close(); } catch (Exception ignored) {}
+		}
 	}
 
 	private static final java.util.regex.Pattern FAULTSTRING =
@@ -2100,10 +2249,9 @@ public final class VSphereClient {
 					java.util.regex.Pattern.DOTALL);
 
 	/** " <faultstring>" from a SOAP fault body, or "". */
-	static String faultString(byte[] body) {
-		if (body == null || body.length == 0) return "";
-		java.util.regex.Matcher m = FAULTSTRING.matcher(
-				new String(body, StandardCharsets.UTF_8));
+	static String faultString(String body) {
+		if (body == null || body.isEmpty()) return "";
+		java.util.regex.Matcher m = FAULTSTRING.matcher(body);
 		if (!m.find()) return "";
 		String f = m.group(1).trim();
 		if (f.length() > 200) f = f.substring(0, 200) + "...";
@@ -2143,40 +2291,31 @@ public final class VSphereClient {
 		}
 	}
 
-	private static byte[] drain(InputStream is) throws Exception {
-		if (is == null) return null;
+	/**
+	 * Build 95 (issue #24): parse straight from a stream (a
+	 * {@link CappedInputStream} on the response), so the response is held
+	 * once, as the DOM. Null when it is empty, not XML, or over the cap.
+	 */
+	static Document parseXml(InputStream in) {
 		try {
-			ByteArrayOutputStream bos = new ByteArrayOutputStream();
-			byte[] buf = new byte[8192];
-			int n;
-			while ((n = is.read(buf)) >= 0) {
-				bos.write(buf, 0, n);
-			}
-			return bos.toByteArray();
-		} finally {
-			try { is.close(); } catch (Exception ignored) {}
-		}
-	}
-
-	private static Document parseXml(String xml) {
-		try {
-			DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-			// Non-namespace-aware: read by LOCAL name throughout; harden
-			// against external entities (the collision was JAX-WS service
-			// discovery, NOT JAXP — DOM is safe here).
-			dbf.setNamespaceAware(false);
-			trySetFeature(dbf,
-					"http://apache.org/xml/features/disallow-doctype-decl", true);
-			trySetFeature(dbf,
-					"http://xml.org/sax/features/external-general-entities", false);
-			trySetFeature(dbf,
-					"http://xml.org/sax/features/external-parameter-entities", false);
-			DocumentBuilder db = dbf.newDocumentBuilder();
-			return db.parse(new java.io.ByteArrayInputStream(
-					xml.getBytes(StandardCharsets.UTF_8)));
+			return newBuilder().parse(in);
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	private static DocumentBuilder newBuilder() throws Exception {
+		DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+		// Non-namespace-aware: read by LOCAL name throughout; harden
+		// against external entities.
+		dbf.setNamespaceAware(false);
+		trySetFeature(dbf,
+				"http://apache.org/xml/features/disallow-doctype-decl", true);
+		trySetFeature(dbf,
+				"http://xml.org/sax/features/external-general-entities", false);
+		trySetFeature(dbf,
+				"http://xml.org/sax/features/external-parameter-entities", false);
+		return dbf.newDocumentBuilder();
 	}
 
 	private static void trySetFeature(DocumentBuilderFactory dbf, String f,

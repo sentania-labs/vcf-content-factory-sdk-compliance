@@ -1,6 +1,5 @@
 package com.vcfcf.adapters.compliance;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -634,7 +633,8 @@ final class EsxcliSoapClient {
 			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
 		int code;
-		byte[] respBytes;
+		Document doc = null;
+		VSphereClient.CappedInputStream body = null;
 		try {
 			conn.setRequestMethod("POST");
 			conn.setDoOutput(true);
@@ -652,40 +652,45 @@ final class EsxcliSoapClient {
 			}
 
 			code = conn.getResponseCode();
-			InputStream is = (code >= 200 && code < 300)
-					? conn.getInputStream() : conn.getErrorStream();
-			respBytes = drain(is);
+			if (code >= 200 && code < 300) {
+				// Build 95 (issue #24): parsed from the capped stream,
+				// held once (the DOM).
+				InputStream is = conn.getInputStream();
+				if (is != null) {
+					body = new VSphereClient.CappedInputStream(is,
+							VSphereClient.MAX_SOAP_RESPONSE_BYTES);
+					try {
+						doc = VSphereClient.parseXml(body);
+					} finally {
+						if (!body.exceeded()) {
+							try { body.close(); } catch (Exception ignored) {}
+						}
+					}
+				}
+			} else {
+				// The fault body is not used; read (bounded) and drop it so
+				// the connection can be reused.
+				VSphereClient.readCapped(conn.getErrorStream(),
+						VSphereClient.MAX_FAULT_BODY_BYTES);
+			}
 		} catch (java.io.IOException e) {
 			// Build 95 (issue #17): connections are reused after a good
 			// call (no disconnect); a failed one is dropped, never reused.
 			conn.disconnect();
+			if (body != null && body.exceeded()) return null;
 			throw e;
+		}
+		if (body != null && body.exceeded()) {
+			// Build 95 (issue #24): over the cap: the call failed (the
+			// command's controls are UNREADABLE), never a partial read.
+			conn.disconnect();
+			return null;
 		}
 		if (code < 200 || code >= 300) {
 			// SOAP fault (500) or auth failure — command-failed upstream.
 			return null;
 		}
-		if (respBytes == null || respBytes.length == 0) return null;
-		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
-	}
-
-	private static byte[] drain(InputStream is) throws Exception {
-		if (is == null) return null;
-		try {
-			ByteArrayOutputStream bos = new ByteArrayOutputStream();
-			byte[] buf = new byte[8192];
-			int n;
-			while ((n = is.read(buf)) >= 0) {
-				bos.write(buf, 0, n);
-			}
-			return bos.toByteArray();
-		} finally {
-			// Close even if the read throws mid-stream, so the underlying
-			// connection's input is released rather than left dangling.
-			try {
-				is.close();
-			} catch (Exception ignored) {}
-		}
+		return doc;
 	}
 
 	private static Document parseXml(String xml) {

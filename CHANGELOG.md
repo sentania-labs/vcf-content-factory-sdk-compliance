@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- fix(adapter): build 95, issue #24: SOAP responses are read through a cap (`MAX_SOAP_RESPONSE_BYTES`, 64 MB, the largest legitimate response being a bulk page of a few MB to a few tens of MB) and parsed straight from the stream into the DOM, one copy instead of bytes, a String and bytes again. A response over the cap fails the call: its controls are UNREADABLE with reason `response-too-large`, one WARN names the call, and the connection is dropped; a listing over the cap holds its kind back like any failed listing. Fault bodies are read up to 1 MB and decoded once. Both the vim25 and the esxcli clients. Test: Build95TriageTest.
+
 - fix(adapter): build 95, issue #16 (first slice): Stop Collecting takes effect within one object. The framework checks its stop flag only between resources and this adapter collects everything under one (ComplianceWorld), so a stop waited for the whole vCenter walk. Every per-object loop (hosts, VMs, switches, portgroups, clusters, the bulk shadow pages, the per-control cleanup batches) now checks the stop request or a thread interrupt before each object (`StopCheck`); the cycle is abandoned, nothing more is read or pushed, and one WARN says where ("ComplianceAdapter cycle abandoned after N ms"). No cycle time budget yet (needs its own decision). Test: Build95TriageTest.
 
 - fix(adapter): build 95, issue #18: a failed host listing no longer fails the whole cycle. It is handled like every other kind: one WARN, the Host kind held back (Rollup|Host, All and Benchmark keep their values), Rollup|incomplete = 1 (raises "Compliance data not collected (vCenter)"), and VMs, vCenter, switches, portgroups and clusters are still collected (VMs read their host's version on demand). Test: Build95TriageTest.

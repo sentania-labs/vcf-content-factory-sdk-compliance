@@ -15,6 +15,10 @@ import java.util.Map;
  *   <li>#16 (first slice): every per-object loop checks the stop flag
  *       before each object, so Stop Collecting abandons the cycle within
  *       one object, and the abandoned cycle is logged.</li>
+ *   <li>#24: a SOAP response is read through a cap and parsed straight
+ *       from the stream; a response over the cap fails the call
+ *       (UNREADABLE, reason response-too-large), and the next call works
+ *       on a fresh connection.</li>
  * </ul>
  * Run from the repo root.
  */
@@ -27,6 +31,7 @@ public final class Build95TriageTest {
 	public static void main(String[] args) throws Exception {
 		hostListingFailure();
 		stopBetweenObjects();
+		responseCap();
 		System.out.println("Build95TriageTest: all assertions passed");
 	}
 
@@ -148,5 +153,58 @@ public final class Build95TriageTest {
 						.contains("new StopCheck(() -> isAbortRequested() "
 						+ "|| Thread.currentThread().isInterrupted())"),
 				"the flag is the framework stop request or an interrupt");
+	}
+
+	/** #24. */
+	static void responseCap() throws Exception {
+		T.eq(64L * 1024 * 1024, VSphereClient.MAX_SOAP_RESPONSE_BYTES,
+				"default cap 64 MB");
+		byte[] hundred = new byte[100];
+		VSphereClient.CappedInputStream ok = new VSphereClient.CappedInputStream(
+				new java.io.ByteArrayInputStream(hundred), 100);
+		T.eq(100, ok.read(new byte[200], 0, 200), "exactly the cap reads");
+		T.check(!ok.exceeded(), "not exceeded at the cap");
+		VSphereClient.CappedInputStream over =
+				new VSphereClient.CappedInputStream(
+						new java.io.ByteArrayInputStream(hundred), 50);
+		boolean threw = false;
+		try {
+			over.read(new byte[200], 0, 200);
+		} catch (VSphereClient.ResponseTooLarge e) {
+			threw = true;
+		}
+		T.check(threw && over.exceeded(), "over the cap throws and remembers");
+		T.eq("abc", VSphereClient.readCapped(new java.io.ByteArrayInputStream(
+				"abcdef".getBytes("UTF-8")), 3), "fault body bounded");
+		org.w3c.dom.Document d = VSphereClient.parseXml(
+				new java.io.ByteArrayInputStream("<a><b>1</b></a>"
+						.getBytes("UTF-8")));
+		T.eq("1", d.getDocumentElement().getTextContent(), "stream parse");
+
+		StringBuilder big = new StringBuilder("<val>");
+		for (int i = 0; i < 2000; i++) big.append("0123456789");
+		big.append("</val>");
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> Build95CollectionTest.perObject(r,
+					FakeVCenter.map("host-1|config.lockdownMode", big.toString(),
+							"host-1|runtime.connectionState",
+							"<val>connected</val>"), null);
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			c.setMaxResponseBytes(8 * 1024);
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem",
+					"host-1");
+			Map<String, Object> v = c.readVimProperties(h, java.util.Arrays
+					.asList(Build95CollectionTest.vim("esx.lockdown",
+							"HostSystem", "lockdown", "lockdownNormal",
+							"scalar:config.lockdownMode")));
+			T.check(v.get("lockdown") == VSphereClient.UNREADABLE,
+					"oversized response: UNREADABLE, never a value");
+			String why = c.lastReadReasons().get("lockdown");
+			T.eq("response-too-large", UnreadableReasons.category(why),
+					"reason category: " + why);
+			T.eq("connected", c.getHostConnectionState(h),
+					"the next call works on a fresh connection");
+		}
 	}
 }
