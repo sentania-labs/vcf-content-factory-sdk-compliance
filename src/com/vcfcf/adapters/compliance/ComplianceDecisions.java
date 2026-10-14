@@ -522,6 +522,32 @@ public final class ComplianceDecisions {
 		return stitcherPresent && !resourceListFailed;
 	}
 
+	/** Build 95 review N5: an inventory listing that may fail. */
+	public interface Lister<T> {
+		java.util.List<T> list() throws Exception;
+	}
+
+	/**
+	 * Build 95 (issue #18), made SDK-free by review N5: list one kind's
+	 * inventory; when the listing fails, report it ({@code onFailure}),
+	 * hold the kind back ({@link ComplianceRollup#markIncomplete}: its
+	 * rollup keys, All and Benchmark keep their values and
+	 * Rollup|incomplete = 1) and return null, so the caller skips the kind
+	 * and the cycle goes on with the others. Never an empty list on a
+	 * failure: an empty inventory would read as "nothing to score".
+	 */
+	public static <T> java.util.List<T> listOrHoldBack(Lister<T> lister,
+			ComplianceRollup rollup, BenchmarkSelector.Kind kind,
+			java.util.function.Consumer<Exception> onFailure) {
+		try {
+			return lister.list();
+		} catch (Exception e) {
+			onFailure.accept(e);
+			rollup.markIncomplete(kind);
+			return null;
+		}
+	}
+
 	/**
 	 * Build 95 review N4: the line a cycle logs when it ends, or null when
 	 * nothing more is to be logged. An abandoned cycle (Stop Collecting)

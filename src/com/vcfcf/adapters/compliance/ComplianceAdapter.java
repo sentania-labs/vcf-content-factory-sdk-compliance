@@ -484,8 +484,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * every per-object loop, so Stop Collecting abandons the cycle within
 	 * one object instead of waiting for the whole vCenter walk.
 	 */
-	private final StopCheck stop = new StopCheck(() -> isAbortRequested()
-			|| Thread.currentThread().isInterrupted());
+	private final StopCheck stop = StopCheck.orInterrupted(
+			this::isAbortRequested);
 
 	// Build 95 (issue #17): this cycle's measurement (phases and calls).
 	private volatile CycleMetrics cycleMetrics;
@@ -1449,21 +1449,26 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			BenchmarkSelector selector, ComplianceRollup rollup,
 			CycleStats cs, java.util.Set<String> seen) throws Exception {
 		java.util.Map<String, String> hostVersions = new java.util.HashMap<>();
-		java.util.List<VSphereClient.HostInfo> hosts;
-		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
-			hosts = vsphere.getHosts();
-		} catch (Exception e) {
-			// Build 95 (issue #18): a failed host listing holds the Host kind
-			// back like every other kind (Rollup|Host, All and Benchmark keys
-			// keep their values, Rollup|incomplete = 1 raises "Compliance data
-			// not collected (vCenter)") and the cycle goes on with the other
-			// kinds. It used to escape and fail the whole cycle with no
-			// incomplete signal. VMs then read their host's version on
-			// demand (vmHostVersion).
-			logWarn("Failed to enumerate hosts: " + e.getMessage()
-					+ "; Host compliance not collected this cycle, Rollup|Host "
-					+ "keys held back, other kinds still collected");
-			rollup.markIncomplete(BenchmarkSelector.Kind.HOST);
+		// Build 95 (issue #18): a failed host listing holds the Host kind
+		// back like every other kind (Rollup|Host, All and Benchmark keys
+		// keep their values, Rollup|incomplete = 1 raises "Compliance data
+		// not collected (vCenter)") and the cycle goes on with the other
+		// kinds. It used to escape and fail the whole cycle with no
+		// incomplete signal. VMs then read their host's version on demand
+		// (vmHostVersion). Review N5: the decision is the SDK-free
+		// ComplianceDecisions.listOrHoldBack, so it is tested directly.
+		java.util.List<VSphereClient.HostInfo> hosts =
+				ComplianceDecisions.listOrHoldBack(() -> {
+					try (CycleMetrics.Scope ph =
+							phase(CycleMetrics.Phase.INVENTORY)) {
+						return vsphere.getHosts();
+					}
+				}, rollup, BenchmarkSelector.Kind.HOST,
+				e -> logWarn("Failed to enumerate hosts: " + e.getMessage()
+						+ "; Host compliance not collected this cycle, "
+						+ "Rollup|Host keys held back, other kinds still "
+						+ "collected"));
+		if (hosts == null) {
 			return hostVersions;
 		}
 		if (hosts.isEmpty()) {

@@ -25,6 +25,16 @@ public final class StopCheck {
 	}
 
 	/**
+	 * Build 95 review N5: the adapter's check: a stop is requested when the
+	 * framework asks ({@code abortRequested}) or the collect thread was
+	 * interrupted. The interrupt flag is only read, never cleared.
+	 */
+	public static StopCheck orInterrupted(BooleanSupplier abortRequested) {
+		return new StopCheck(() -> abortRequested.getAsBoolean()
+				|| Thread.currentThread().isInterrupted());
+	}
+
+	/**
 	 * Throw when a stop was requested; {@code where} names the loop and
 	 * object, for the abandoned-cycle log line.
 	 */

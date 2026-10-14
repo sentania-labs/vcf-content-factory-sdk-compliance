@@ -3,10 +3,12 @@ package com.vcfcf.adapters.compliance;
 import java.util.Map;
 
 /**
- * Build 95, open-issue triage items. The adapter orchestration needs the
- * SDK, so its wiring is pinned from source (same approach as
- * ComplianceDecisionsTest), and the behaviour it relies on is tested on the
- * SDK-free classes.
+ * Build 95, open-issue triage items. The behaviour is run on the SDK-free
+ * classes (review N5 moved the host-listing hold-back and the stop flag
+ * into them, and the client tests run against a local fake vCenter); only
+ * the adapter's wiring, which needs the SDK, is still pinned from source
+ * (the per-object loops' stop checks, the cycle order, configure's
+ * build-swap-release order, short "uses the helper" pins).
  *
  * <ul>
  *   <li>#18: a failed host listing holds the Host kind back (with All and
@@ -46,16 +48,35 @@ public final class Build95TriageTest {
 
 	/** #18. */
 	static void hostListingFailure() {
+		// Review N5: the hold-back decision is SDK-free, so it is run, not
+		// matched in the source. A failed listing: reported once, the kind
+		// held back, null (never an empty inventory).
+		ComplianceRollup held = new ComplianceRollup();
+		java.util.List<Exception> reported = new java.util.ArrayList<>();
+		java.util.List<String> none = ComplianceDecisions.listOrHoldBack(
+				() -> { throw new VimOptions.ReadFault("listing failed"); },
+				held, BenchmarkSelector.Kind.HOST, reported::add);
+		T.check(none == null, "a failed listing returns null, not empty");
+		T.eq(1, reported.size(), "reported once");
+		T.near(1, held.toStats().get(ComplianceRollup.INCOMPLETE_KEY),
+				"kind held back: incomplete = 1");
+		ComplianceRollup fine = new ComplianceRollup();
+		java.util.List<String> listed = ComplianceDecisions.listOrHoldBack(
+				() -> java.util.Arrays.asList("host-1"), fine,
+				BenchmarkSelector.Kind.HOST, e -> T.check(false, "no report"));
+		T.eq(java.util.Arrays.asList("host-1"), listed, "listing returned");
+		T.check(!fine.toStats().containsKey(ComplianceRollup.INCOMPLETE_KEY)
+				|| fine.toStats().get(ComplianceRollup.INCOMPLETE_KEY) == 0,
+				"nothing held back on success");
+		// Wiring (the adapter needs the SDK): collectHosts uses it for the
+		// Host kind and returns when it says the listing failed.
 		String ca = OverridesTest.readSrc(CA);
-		String hosts = OverridesTest.body(ca,
-				"private java.util.Map<String, String> collectHosts(");
-		OverridesTest.inOrder(hosts, "collectHosts",
-				"try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase."
-						+ "INVENTORY)) { hosts = vsphere.getHosts(); }",
-				"catch (Exception e) {",
-				"logWarn(\"Failed to enumerate hosts: \"",
-				"rollup.markIncomplete(BenchmarkSelector.Kind.HOST);",
-				"return hostVersions; }");
+		OverridesTest.inOrder(OverridesTest.body(ca,
+				"private java.util.Map<String, String> collectHosts("),
+				"collectHosts", "ComplianceDecisions.listOrHoldBack(",
+				"return vsphere.getHosts();",
+				"rollup, BenchmarkSelector.Kind.HOST,",
+				"if (hosts == null) { return hostVersions; }");
 		// The cycle still runs every other kind after collectHosts returns.
 		OverridesTest.inOrder(OverridesTest.body(ca,
 				"private void collectWorldCycle("), "collectWorldCycle",
@@ -180,12 +201,36 @@ public final class Build95TriageTest {
 						+ "abandonedAt != null ? metrics.summary() : null);");
 		T.eq(0, OverridesTest.count(cw, "logWarn(\"ComplianceAdapter cycle"),
 				"no other cycle-end WARN");
-		T.check(ca.contains("new StopCheck(() -> isAbortRequested() "
-				+ "|| Thread.currentThread().isInterrupted())")
+		// Review N5: the adapter's flag (framework stop request OR an
+		// interrupt of the collect thread) is StopCheck.orInterrupted, run
+		// here rather than matched in the source.
+		boolean[] abort = {false};
+		StopCheck adapterStop = StopCheck.orInterrupted(() -> abort[0]);
+		adapterStop.check("nothing requested");   // no throw
+		abort[0] = true;
+		boolean threw = false;
+		try {
+			adapterStop.check("host esx09");
+		} catch (InterruptedException e) {
+			threw = true;
+		}
+		T.check(threw, "the framework stop request stops the cycle");
+		abort[0] = false;
+		Thread.currentThread().interrupt();
+		threw = false;
+		try {
+			adapterStop.check("host esx10");
+		} catch (InterruptedException e) {
+			threw = true;
+		}
+		T.check(Thread.interrupted(), "the interrupt flag is left set "
+				+ "(cleared here by the test)");
+		T.check(threw, "an interrupt of the collect thread stops the cycle");
+		T.check(OverridesTest.stripComments(ca).replaceAll("\\s+", " ")
+				.contains("StopCheck.orInterrupted( this::isAbortRequested)")
 				|| OverridesTest.stripComments(ca).replaceAll("\\s+", " ")
-						.contains("new StopCheck(() -> isAbortRequested() "
-						+ "|| Thread.currentThread().isInterrupted())"),
-				"the flag is the framework stop request or an interrupt");
+				.contains("StopCheck.orInterrupted(this::isAbortRequested)"),
+				"the adapter's stop is the framework request or an interrupt");
 	}
 
 	/** #24. */
