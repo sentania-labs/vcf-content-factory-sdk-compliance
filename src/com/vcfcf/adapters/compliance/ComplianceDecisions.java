@@ -523,6 +523,32 @@ public final class ComplianceDecisions {
 	}
 
 	/**
+	 * Build 95 review N4: the line a cycle logs when it ends, or null when
+	 * nothing more is to be logged. An abandoned cycle (Stop Collecting)
+	 * logs one WARN: where it stopped, what that leaves behind, and the
+	 * cycle's timing summary (the per-phase time and call counts that
+	 * sizing a cycle budget needs, issue #16), and no second "failed"
+	 * line. A completed cycle logs its time at INFO; any other failure
+	 * one WARN (the exception itself is logged by onCollect).
+	 * {@code metricsSummary} may be null.
+	 */
+	public static String cycleEndLine(boolean completed, String abandonedAt,
+			long ms, String metricsSummary) {
+		if (abandonedAt != null) {
+			return "ComplianceAdapter cycle abandoned after " + ms + " ms: "
+					+ abandonedAt + ". Nothing more was read or pushed this "
+					+ "cycle (the per-vCenter rollup included); the values "
+					+ "already pushed stay, the rest keep their last values."
+					+ (metricsSummary != null ? " " + metricsSummary : "");
+		}
+		if (completed) {
+			return "ComplianceAdapter cycle took " + ms + " ms";
+		}
+		return "ComplianceAdapter cycle failed after " + ms + " ms (the "
+				+ "exception is logged by onCollect)";
+	}
+
+	/**
 	 * Build 87: the per-host score line is INFO when the host has any
 	 * unreadable control (so a partly unreadable host is named at INFO),
 	 * DEBUG when every control was read.

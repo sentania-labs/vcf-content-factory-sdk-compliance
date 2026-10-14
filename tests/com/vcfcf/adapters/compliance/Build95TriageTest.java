@@ -151,11 +151,35 @@ public final class Build95TriageTest {
 		OverridesTest.inOrder(OverridesTest.body(ca, "private void runShadow("),
 				"runShadow", "catch (InterruptedException e) { throw e; }",
 				"catch (Exception e) {");
-		OverridesTest.inOrder(OverridesTest.body(ca,
-				"private void collectWorld("), "collectWorld",
+		// Review N4: an abandoned cycle logs ONE WARN carrying where it
+		// stopped and the timing summary; no second "failed" line.
+		String abandoned = ComplianceDecisions.cycleEndLine(false,
+				"stopped before host esx03", 1234,
+				"phases: host reads 1000 ms");
+		T.check(abandoned.startsWith("ComplianceAdapter cycle abandoned after "
+				+ "1234 ms: stopped before host esx03."), abandoned);
+		T.check(abandoned.endsWith(" phases: host reads 1000 ms"),
+				"timing summary on the abandoned line: " + abandoned);
+		T.check(!abandoned.contains("failed"), "not also a failure line");
+		T.eq("ComplianceAdapter cycle took 9 ms",
+				ComplianceDecisions.cycleEndLine(true, null, 9, null), "done");
+		T.check(ComplianceDecisions.cycleEndLine(false, null, 9, null)
+				.startsWith("ComplianceAdapter cycle failed after 9 ms"),
+				"other failures unchanged");
+		CycleMetrics cm = new CycleMetrics();
+		T.check(ComplianceDecisions.cycleEndLine(false, "x", 1, cm.summary())
+				.endsWith(cm.summary()), "carries CycleMetrics.summary()");
+		// Wiring (the adapter needs the SDK): one end line from the
+		// finally, with the summary when abandoned.
+		String cw = OverridesTest.body(ca, "private void collectWorld(");
+		OverridesTest.inOrder(cw, "collectWorld",
 				"catch (InterruptedException e) {",
-				"logWarn(\"ComplianceAdapter cycle abandoned after \"",
-				"throw e; }");
+				"abandonedAt = String.valueOf(e.getMessage()); throw e; }",
+				"finally {",
+				"ComplianceDecisions.cycleEndLine(completed, abandonedAt, ms, "
+						+ "abandonedAt != null ? metrics.summary() : null);");
+		T.eq(0, OverridesTest.count(cw, "logWarn(\"ComplianceAdapter cycle"),
+				"no other cycle-end WARN");
 		T.check(ca.contains("new StopCheck(() -> isAbortRequested() "
 				+ "|| Thread.currentThread().isInterrupted())")
 				|| OverridesTest.stripComments(ca).replaceAll("\\s+", " ")

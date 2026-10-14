@@ -544,6 +544,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			throws Exception {
 		long cycleStartNs = System.nanoTime();
 		boolean completed = false;
+		String abandonedAt = null;
 		// Build 95 (issue #17): per-phase time and call counts for the
 		// summary line; measurement only.
 		CycleMetrics metrics = new CycleMetrics();
@@ -555,23 +556,22 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			completed = true;
 		} catch (InterruptedException e) {
 			// Build 95 (issue #16): one line saying the cycle was abandoned,
-			// where, and what that leaves behind.
-			logWarn("ComplianceAdapter cycle abandoned after "
-					+ (System.nanoTime() - cycleStartNs) / 1_000_000L + " ms: "
-					+ e.getMessage() + ". Nothing more was read or pushed this "
-					+ "cycle (the per-vCenter rollup included); the values "
-					+ "already pushed stay, the rest keep their last values.");
+			// where, and what that leaves behind; review N4: with the
+			// timing summary, and no second "failed" line.
+			abandonedAt = String.valueOf(e.getMessage());
 			throw e;
 		} finally {
 			if (vsphere != null) vsphere.setMetrics(null);
 			if (stitcher != null) stitcher.setMetrics(null);
 			cycleMetrics = null;
 			long ms = (System.nanoTime() - cycleStartNs) / 1_000_000L;
+			String line = ComplianceDecisions.cycleEndLine(completed,
+					abandonedAt, ms,
+					abandonedAt != null ? metrics.summary() : null);
 			if (completed) {
-				logInfo("ComplianceAdapter cycle took " + ms + " ms");
+				logInfo(line);
 			} else {
-				logWarn("ComplianceAdapter cycle failed after " + ms + " ms "
-						+ "(the exception is logged by onCollect)");
+				logWarn(line);
 			}
 		}
 	}
