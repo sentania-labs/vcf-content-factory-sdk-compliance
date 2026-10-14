@@ -323,8 +323,12 @@ Non-Compliant Objects) read the
 Compliance World's `Rollup|Environment|*` keys (above). The per-vCenter
 table shows Controls Passing (%) per kind (`Rollup|<K>|pass_rate`,
 including the vCenter kind) and a Controls Unreadable column
-(`Rollup|All|controls_unreadable`); its totals row sums the count
-columns, not the percentages. No widget needs
+(`Rollup|All|controls_unreadable`), and per kind a "Not in VCF Ops"
+column (`Rollup|<K>|unmatched`, issue #39); its totals row sums the count
+columns, not the percentages. Objects by SCG Version lists the newest
+guide first and spans the page (issue #32). The ESX Hosts heatmap colours
+on a fixed 0 to 100 scale: red below 80, amber 80 to 95, green from 95
+(issue #33). No widget needs
 policy enablement. The Objects Scored tile sits beside Non-Compliant
 Objects so that a 0 non-compliant reading is always shown with its
 denominator: 0 non-compliant with 0 scored means nothing was evaluated,

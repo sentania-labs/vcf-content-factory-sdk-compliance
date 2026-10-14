@@ -60,12 +60,18 @@ widgets:
           adapter_kind: VMWARE
           resource_kind: ClusterComputeResource
           text: "Cluster"
+        # Build 95 (issue #33): a fixed 0 to 100 scale with solid bands
+        # (red below 80, amber 80 to 95, green 95 and up, the Host
+        # Compliance Score Degraded thresholds). Without max_value the
+        # widget scaled to the highest score present, so a 65% host
+        # showed green.
         color:
           min_value: 0
+          max_value: 100
           thresholds:
             values: [0, 80, 95]
             colors: ["#DE3F30", "#ECC33E", "#74B43B"]
-        solid_coloring: false
+        solid_coloring: true
         focus_on_groups: false
 
   # ── W4: Failing Controls on Selected Host, driven by W2 ─────────────

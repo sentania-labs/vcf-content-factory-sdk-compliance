@@ -32,7 +32,7 @@ widgets:
   - id: env_compliance_scoreboard
     type: Scoreboard
     title: "Environment Compliance"
-    coords: {x: 1, y: 1, w: 8, h: 4}
+    coords: {x: 1, y: 1, w: 8, h: 5}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -92,21 +92,15 @@ widgets:
   - id: about_text
     type: TextDisplay
     title: "About This Dashboard"
-    coords: {x: 9, y: 1, w: 4, h: 4}
+    # Build 95 (issue #34): shorter text and one more row of height, so
+    # the last line no longer runs under the widget's EDIT link.
+    coords: {x: 9, y: 1, w: 4, h: 5}
     text: >
-      <p><b>Controls Passing</b> is controls passed over controls
-      evaluated, across every object, so each control counts once and a
-      port group weighs no more than its controls. Controls the adapter
-      could not read are in neither count; the table shows them as
-      Controls Unreadable.</p>
-      <p><b>Non-compliant</b> means an object has at least one failing
-      or unreadable control. Unreadable counts as non-compliant, never
-      as passing.</p>
-      <p><b>Without benchmark</b> means the object's version has no
-      matching Security Configuration Guide in this pak; it is counted,
-      never scored.</p>
-      <p>Drill into a single object type: Compliance ESX Hosts,
-      Compliance VMs, Compliance vCenter &amp; Networking.</p>
+      <p><b>Controls Passing</b>: controls passed over controls evaluated.
+      Unreadable controls are counted apart, never as passes.</p>
+      <p><b>Non-compliant</b>: a failing or unreadable control.
+      <b>Without benchmark</b>: no SCG for the version.</p>
+      <p>Per object: ESX Hosts, VMs, vCenter &amp; Networking.</p>
 
   # ── W3/W4: per-vCenter rollups (self-provider, pinned vSphere World,
   #     children VMwareAdapter Instance) ───────────────────────────────
@@ -114,7 +108,7 @@ widgets:
   - id: vcenter_object_type_view
     type: View
     title: "Compliance by vCenter and Object Type"
-    coords: {x: 1, y: 5, w: 12, h: 8}
+    coords: {x: 1, y: 6, w: 12, h: 8}
     self_provider: true
     # Owner decision: keep the default (true) explicit so W6 populates
     # with the first vCenter's alerts on load instead of sitting blank.
@@ -127,7 +121,8 @@ widgets:
   - id: scg_version_view
     type: View
     title: "Objects by SCG Version"
-    coords: {x: 1, y: 13, w: 6, h: 7}
+    # Build 95 (issue #32): full width, so every SCG column shows.
+    coords: {x: 1, y: 14, w: 12, h: 5}
     self_provider: true
     pin:
       adapter_kind: VMWARE
@@ -140,7 +135,7 @@ widgets:
   - id: env_score_trend
     type: MetricChart
     title: "Environment Score Trend"
-    coords: {x: 7, y: 13, w: 6, h: 7}
+    coords: {x: 1, y: 19, w: 12, h: 7}
     self_provider: true
     pin:
       adapter_kind: vcfcf_compliance
@@ -167,7 +162,7 @@ widgets:
   - id: open_compliance_alerts
     type: AlertList
     title: "Open Compliance Alerts"
-    coords: {x: 1, y: 20, w: 12, h: 7}
+    coords: {x: 1, y: 26, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
     # depth 4: input is a VMwareAdapter Instance (vCenter); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).

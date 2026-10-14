@@ -98,11 +98,11 @@ widgets:
     select_first_row: true
     view: "[VCF Content Factory] Compliance by vCenter and Object Type"
 
-  # Row 3: trend | SCG version spread.
+  # Row 3: SCG version spread (full width), then the trend (build 95).
   - id: env_score_trend
     type: MetricChart
     title: "Environment Score Trend"
-    coords: {x: 1, y: 13, w: 6, h: 7}
+    coords: {x: 1, y: 18, w: 12, h: 7}
     self_provider: false
     metrics:
       - adapter_kind: vcfcf_compliance
@@ -119,7 +119,8 @@ widgets:
   - id: scg_version_view
     type: View
     title: "Objects by SCG Version"
-    coords: {x: 7, y: 13, w: 6, h: 7}
+    # Build 95 (issue #32): full width, so every SCG column shows.
+    coords: {x: 1, y: 13, w: 12, h: 5}
     self_provider: false
     view: "[VCF Content Factory] Compliance Objects by SCG Version"
 
@@ -127,7 +128,7 @@ widgets:
   - id: open_compliance_alerts
     type: AlertList
     title: "Open Compliance Alerts"
-    coords: {x: 1, y: 20, w: 12, h: 7}
+    coords: {x: 1, y: 25, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
     # depth 4: input is the selected vCenter row of the view above (select_first_row, so never the ComplianceWorld itself); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
