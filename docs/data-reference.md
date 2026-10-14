@@ -321,7 +321,10 @@ The Environment Overview's four tiles (Controls Passing, Non-Compliant,
 Without Benchmark, Objects Scored) and its trend (Controls Passing and
 Non-Compliant Objects) read the
 Compliance World's `Rollup|Environment|*` keys (above). The per-vCenter
-table shows Controls Passing (%) per kind (`Rollup|<K>|pass_rate`,
+table shows the vCenter's All Controls Passing (%), Passed and Evaluated
+(`Rollup|All|pass_rate`, `controls_passed`, `controls_evaluated`; summed
+Passed over summed Evaluated in the totals row is the Controls Passing
+tile), Controls Passing (%) per kind (`Rollup|<K>|pass_rate`,
 including the vCenter kind) and a Controls Unreadable column
 (`Rollup|All|controls_unreadable`), and per kind a "Not in VCF Ops"
 column (`Rollup|<K>|unmatched`, issue #39); its totals row sums the count

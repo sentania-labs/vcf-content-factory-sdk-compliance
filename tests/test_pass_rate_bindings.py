@@ -14,7 +14,12 @@ plausible but different number with no error. This test pins:
   Rollup|Environment|pass_rate, labelled Controls Passing;
 - the per-vCenter view has a "<Kind> Controls Passing (%)" column bound
   to Rollup|<Kind>|pass_rate for every kind, a Controls Unreadable (All)
-  column, and a totals row that sums counts, never a percentage.
+  column,
+  and a totals row that sums counts, never a percentage;
+- the per-vCenter view reconciles with the Environment tile (review W2):
+  All Controls Passing, Passed and Evaluated columns, with Passed and
+  Evaluated summed in the totals row, so summed Passed over summed
+  Evaluated is the tile's Rollup|Environment|pass_rate.
 
 Standard library only, line-based (no PyYAML), like the other guards.
 Run from the repo root:  python3 tests/test_pass_rate_bindings.py
@@ -107,6 +112,29 @@ class PassRateBindingTest(unittest.TestCase):
         self.assertIn(
             attrs.index("VCF-CF Compliance|Rollup|All|controls_unreadable"),
             summed, "Controls Unreadable is in the totals row")
+
+    def test_vcenter_view_reconciles_with_tile(self):
+        text = (REPO / "views" / "compliance-by-vcenter.yaml").read_text()
+        cols = view_columns(text)
+        attrs = [a for a, _ in cols]
+        summed = [int(x) for x in re.search(
+            r"^  columns:\s*\[([^\]]*)\]", text, re.M).group(1).split(",")]
+        for key, name, in_totals in [
+                ("pass_rate", "All Controls Passing (%)", False),
+                ("controls_passed", "All Controls Passed", True),
+                ("controls_evaluated", "All Controls Evaluated", True)]:
+            attr = "VCF-CF Compliance|Rollup|All|" + key
+            with self.subTest(key=key):
+                self.assertIn((attr, name), cols)
+                self.assertEqual(attrs.index(attr) in summed, in_totals)
+        # The tile divides exactly these two sums (describe.xml).
+        describe = (REPO / "describe.xml").read_text()
+        self.assertIn(
+            "sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, "
+            "metric=VCF-CF Compliance|Rollup|All|controls_passed}) / "
+            "sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, "
+            "metric=VCF-CF Compliance|Rollup|All|controls_evaluated})",
+            describe)
 
 
 if __name__ == "__main__":
