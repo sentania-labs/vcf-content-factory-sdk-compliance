@@ -111,6 +111,31 @@ public final class VSphereClient {
 	// becomes the session only once Login has succeeded.
 	private volatile boolean connecting;
 	private volatile String pendingCookie;
+	// Build 95 review W4: set by disconnect(). A closed client never logs
+	// in again, so a cycle still running on it after an instance edit (or
+	// discard) fails its remaining reads cleanly (UNREADABLE) instead of
+	// opening a session nobody logs out.
+	private volatile boolean closed;
+
+	/**
+	 * Build 95 review W4: the Logout sent by {@link #disconnect} waits at
+	 * most this long to connect and this long to read, so configure is not
+	 * held for the 30 s + 120 s of a normal call by an unreachable old
+	 * vCenter. A Logout that times out leaves an idle session for vCenter
+	 * to expire.
+	 */
+	static final int LOGOUT_TIMEOUT_MS = 5000;
+
+	private volatile int logoutTimeoutMs = LOGOUT_TIMEOUT_MS;
+
+	/** Test seam (review W4): a shorter Logout wait. */
+	void setLogoutTimeoutMs(int ms) {
+		this.logoutTimeoutMs = ms;
+	}
+
+	/** Normal SOAP call timeouts. */
+	private static final int CONNECT_TIMEOUT_MS = 30000;
+	private static final int READ_TIMEOUT_MS = 120000;
 
 	/**
 	 * Build 95 (issue #24): the most bytes of one SOAP response read into
@@ -226,6 +251,9 @@ public final class VSphereClient {
 	 * cycle, and no read logs in again before then.
 	 */
 	public void connect() throws Exception {
+		if (closed) {
+			throw new VimOptions.ReadFault(CLOSED);
+		}
 		connecting = true;
 		pendingCookie = null;
 		try {
@@ -309,17 +337,50 @@ public final class VSphereClient {
 		// per cycle by beginCycle().
 		this.esxcli = new EsxcliSoapClient(vcenterUrl, cookie, sslFactory);
 		this.esxcli.setMetrics(metrics);
+
+		if (closed) {
+			// Review W4: closed while this login was in flight; log the
+			// new session straight out rather than leave it behind.
+			logoutAndClear(logoutTimeoutMs, logoutTimeoutMs);
+			throw new VimOptions.ReadFault(CLOSED);
+		}
 	}
 
+	/** Build 95 review W4: why a closed client's call failed. */
+	static final String CLOSED = "vCenter client closed (the instance was "
+			+ "edited or removed); not logging in again";
+
+	/**
+	 * Close the client for good: mark it closed (no call logs in again,
+	 * review W4), then log the session out within
+	 * {@link #LOGOUT_TIMEOUT_MS} and forget it. Never throws.
+	 */
 	public void disconnect() {
-		if (sessionManager != null && sessionCookie != null) {
+		closed = true;
+		logoutAndClear(logoutTimeoutMs, logoutTimeoutMs);
+	}
+
+	/** Build 95 review W4: whether {@link #disconnect} was called. */
+	public boolean isClosed() {
+		return closed;
+	}
+
+	/**
+	 * Log the session out (waits bounded by the two timeouts) and clear
+	 * the session state. The keepalive path uses it before logging
+	 * in again; {@link #disconnect} before closing.
+	 */
+	private void logoutAndClear(int connectTimeoutMs, int readTimeoutMs) {
+		MoRef sm = sessionManager;
+		if (sm != null && sessionCookie != null) {
 			try {
 				String body =
 						"<Logout xmlns=\"urn:vim25\">"
 						+ "<_this type=\"SessionManager\">"
-						+ xmlEscape(sessionManager.value) + "</_this>"
+						+ xmlEscape(sm.value) + "</_this>"
 						+ "</Logout>";
-				post(body, "urn:vim25/Logout", true);
+				postOnce(body, "urn:vim25/Logout", true, connectTimeoutMs,
+						readTimeoutMs);
 			} catch (Exception ignored) {}
 		}
 		sessionCookie = null;
@@ -387,11 +448,11 @@ public final class VSphereClient {
 			if (resp == null
 					|| firstByLocalName(resp.getDocumentElement(),
 							"returnval") == null) {
-				disconnect();
+				logoutAndClear(CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
 				connect();
 			}
 		} catch (Exception e) {
-			disconnect();
+			logoutAndClear(CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
 			connect();
 		}
 	}
@@ -401,6 +462,9 @@ public final class VSphereClient {
 	 * read starts here.
 	 */
 	private void ensureSession() throws Exception {
+		if (closed) {
+			throw new VimOptions.ReadFault(CLOSED);   // review W4
+		}
 		if (sessionCookie == null || propertyCollector == null) {
 			String failed = loginFailure;
 			if (failed != null) {
@@ -2074,6 +2138,10 @@ public final class VSphereClient {
 			// this call once; a failed login leaves the call failed (null,
 			// so the read is UNREADABLE), never a default. Review W3: after
 			// one failed login this cycle, no call tries again.
+			if (closed) {
+				lastFault = CLOSED;   // review W4: fail, do not re-login
+				return null;
+			}
 			String failed = loginFailure;
 			if (failed != null) {
 				lastFault = "session not authenticated; not logging in again "
@@ -2136,6 +2204,13 @@ public final class VSphereClient {
 	 */
 	private Document postOnce(String soapBody, String soapAction,
 			boolean authenticated) throws Exception {
+		return postOnce(soapBody, soapAction, authenticated,
+				CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
+	}
+
+	private Document postOnce(String soapBody, String soapAction,
+			boolean authenticated, int connectTimeoutMs, int readTimeoutMs)
+			throws Exception {
 		String envelope =
 				"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
 				+ "<soapenv:Envelope "
@@ -2165,8 +2240,8 @@ public final class VSphereClient {
 		try {
 			conn.setRequestMethod("POST");
 			conn.setDoOutput(true);
-			conn.setConnectTimeout(30000);
-			conn.setReadTimeout(120000);
+			conn.setConnectTimeout(connectTimeoutMs);
+			conn.setReadTimeout(readTimeoutMs);
 			conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
 			conn.setRequestProperty("SOAPAction", soapAction);
 			if (authenticated && sessionCookie != null

@@ -19,9 +19,11 @@ import java.util.Map;
  *       from the stream; a response over the cap fails the call
  *       (UNREADABLE, reason response-too-large), and the next call works
  *       on a fresh connection.</li>
- *   <li>#23 / #28: configure releases the previous vCenter session and
- *       Suite API client before making new ones; the dead REST client
- *       field is gone.</li>
+ *   <li>#23 / #28: configure builds the new vCenter and Suite API clients,
+ *       swaps them in, then releases the previous ones (review W4); a
+ *       released client is closed: it never logs in again, so a cycle
+ *       still on it fails its calls, and its Logout wait is bounded; the
+ *       dead REST client field is gone.</li>
  *   <li>#25: REST and VAMI Basic auth encode the credential as UTF-8,
  *       whatever the platform charset.</li>
  * </ul>
@@ -215,28 +217,41 @@ public final class Build95TriageTest {
 		}
 	}
 
-	/** #23 (leak part) and #28 (dead vcApi). */
+	/** #23 (leak part, review W4) and #28 (dead vcApi). */
 	static void releaseOnReconfigure() throws Exception {
 		String ca = OverridesTest.readSrc(CA);
 		String code = OverridesTest.stripComments(ca);
 		T.check(!code.contains("vcApi"), "no vcApi field or use (#28)");
-		OverridesTest.inOrder(OverridesTest.body(ca,
-				"protected void configureAdapter("), "configureAdapter",
-				"releaseClients();",
-				"this.vsphere = new VSphereClient(",
-				"this.suiteStitcher = SuiteApiStitcher.create(");
-		T.eq(1, OverridesTest.count(OverridesTest.body(ca,
-				"protected void configureAdapter("), "releaseClients();"),
+		// Configure needs the SDK, so its order is pinned from source:
+		// build, swap, then release (no null window, review W4).
+		String configure = OverridesTest.body(ca,
+				"protected void configureAdapter(");
+		OverridesTest.inOrder(configure, "configureAdapter",
+				"VSphereClient oldVsphere = this.vsphere;",
+				"SuiteApiStitcher oldSuite = this.suiteStitcher;",
+				"VSphereClient newVsphere = new VSphereClient(",
+				"newSuite = SuiteApiStitcher.create(",
+				"this.vsphere = newVsphere;",
+				"this.suiteStitcher = newSuite;",
+				"this.stitcher = newStitcher;",
+				"releaseClients(oldVsphere, oldSuite);");
+		T.eq(1, OverridesTest.count(configure, "releaseClients("),
 				"released once per configure");
+		String flat = code.replaceAll("\\s+", " ");
+		for (String nul : new String[] {"vsphere = null;",
+				"this.vsphere = null;", "stitcher = null;"}) {
+			T.check(!flat.contains(" " + nul), "no client field is nulled: "
+					+ nul);
+		}
 		OverridesTest.inOrder(OverridesTest.body(ca,
-				"private void releaseClients()"), "releaseClients",
-				"vsphere = null;", "suiteStitcher = null;", "stitcher = null;",
+				"private void releaseClients("), "releaseClients",
 				"oldVsphere.disconnect();", "oldSuite.discard();");
 		T.check(OverridesTest.body(ca, "public void onDiscard()")
-				.startsWith("releaseClients();"), "discard releases too");
+				.startsWith("releaseClients(vsphere, suiteStitcher);"),
+				"discard releases too");
 
-		// disconnect() logs the session out on vCenter, and a released
-		// client logs in again only if used again.
+		// disconnect() logs the session out on vCenter and closes the
+		// client: no later call logs in again.
 		try (FakeVCenter f = new FakeVCenter()) {
 			f.handler = r -> Build95CollectionTest.perObject(r,
 					FakeVCenter.map("host-1|runtime.connectionState",
@@ -246,10 +261,75 @@ public final class Build95TriageTest {
 			T.eq(1, f.validCookies.size(), "one live session");
 			c.disconnect();
 			T.eq(1, f.count("Logout"), "session logged out");
+			T.eq(0, f.validCookies.size(), "no live session left");
 			T.eq(1, f.count("Login"), "no re-login to log out");
 			FakeVCenter.Req lo = f.of("Logout").get(0);
 			T.check(lo.cookie != null && lo.cookie.contains("s1"),
 					"the session's own cookie was logged out");
+			T.check(c.isClosed(), "closed");
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem",
+					"host-1");
+			int calls = f.requests.size();
+			boolean threw = false;
+			try {
+				c.getHostConnectionState(h);
+			} catch (VimOptions.ReadFault e) {
+				threw = e.getMessage().equals(VSphereClient.CLOSED);
+			}
+			T.check(threw, "a read on a closed client fails");
+			threw = false;
+			try {
+				c.ensureConnected();
+			} catch (VimOptions.ReadFault e) {
+				threw = true;
+			}
+			T.check(threw, "a closed client does not connect again");
+			T.eq(calls, f.requests.size(), "nothing sent after close");
+			c.disconnect();   // idempotent
+			T.eq(1, f.count("Logout"), "a second release sends nothing");
+		}
+
+		// A cycle still running on the old client when configure releases
+		// it: the call in flight comes back NotAuthenticated (its session
+		// was just logged out) and fails; no new session is opened.
+		try (FakeVCenter f = new FakeVCenter()) {
+			VSphereClient[] holder = new VSphereClient[1];
+			f.handler = r -> {
+				Thread t = new Thread(() -> holder[0].disconnect());
+				t.start();   // configure's release, on another thread
+				try {
+					t.join(10000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				return FakeVCenter.fault("NotAuthenticated",
+						"The session is not authenticated.");
+			};
+			VSphereClient c = f.client();
+			holder[0] = c;
+			c.ensureConnected();
+			c.beginCycle();
+			T.eq(null, c.getHostConnectionState(new VSphereClient.MoRef(
+					"HostSystem", "host-1")), "the in-flight read fails");
+			T.eq(1, f.count("Login"), "no re-login on the released client");
+			T.eq(1, f.count("Logout"), "the old session was logged out");
+			T.eq(0, f.validCookies.size(), "no session left behind");
+		}
+
+		// The Logout wait is bounded: an unreachable or stuck old vCenter
+		// holds configure for at most the bound, not 30 s + 120 s.
+		T.eq(5000, VSphereClient.LOGOUT_TIMEOUT_MS, "Logout bound 5 s");
+		try (FakeVCenter f = new FakeVCenter()) {
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			c.setLogoutTimeoutMs(300);
+			f.logoutDelayMs = 5000;
+			long t0 = System.nanoTime();
+			c.disconnect();
+			long ms = (System.nanoTime() - t0) / 1_000_000L;
+			T.check(ms < 2500, "disconnect returned after " + ms + " ms with "
+					+ "a 300 ms bound and a 5 s Logout");
+			T.check(c.isClosed(), "closed even though Logout timed out");
 		}
 	}
 

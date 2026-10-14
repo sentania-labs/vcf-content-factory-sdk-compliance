@@ -82,12 +82,23 @@ final class FakeVCenter implements AutoCloseable {
 	volatile Function<Req, Resp> handler = r -> fault("NotImplemented", "");
 	/** Review W3: Login answers InvalidLogin while true. */
 	volatile boolean loginFails;
+	/** Review W4: Logout waits this long before answering. */
+	volatile long logoutDelayMs;
 	private final HttpServer server;
 	private int sessions;
 
 	FakeVCenter() throws Exception {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/sdk", this::serve);
+		// Review W4: requests are served concurrently, so a handler can
+		// make another client call (a disconnect from "another thread")
+		// while it is answering one.
+		server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(
+				r -> {
+					Thread t = new Thread(r, "fake-vcenter");
+					t.setDaemon(true);
+					return t;
+				}));
 		server.start();
 	}
 
@@ -126,6 +137,8 @@ final class FakeVCenter implements AutoCloseable {
 	@Override
 	public void close() {
 		server.stop(0);
+		((java.util.concurrent.ExecutorService) server.getExecutor())
+				.shutdownNow();
 	}
 
 	private void serve(HttpExchange ex) throws java.io.IOException {
@@ -171,7 +184,18 @@ final class FakeVCenter implements AutoCloseable {
 			resp = ok(op, "<returnval>2026-10-14T00:00:00Z</returnval>");
 		} else if (op.equals("CreateContainerView")) {
 			resp = ok(op, "<returnval type=\"ContainerView\">session[1]view</returnval>");
-		} else if (op.equals("DestroyView") || op.equals("Logout")
+		} else if (op.equals("Logout")) {
+			// vCenter ends the session: its cookie is no longer valid.
+			if (logoutDelayMs > 0) {
+				try {
+					Thread.sleep(logoutDelayMs);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			validCookies.remove(cookie);
+			resp = ok(op, "");
+		} else if (op.equals("DestroyView")
 				|| op.equals("CancelRetrievePropertiesEx")) {
 			resp = ok(op, "");
 		} else {

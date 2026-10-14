@@ -167,14 +167,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 
 		// Build 95 (issue #23): an instance edit re-runs configure on the
-		// same adapter object; log the previous vCenter session out and
-		// close the previous Suite API client before replacing them, so an
-		// edit no longer leaves a live session and HTTP pools behind in the
-		// collector JVM. (Issue #28: the REST client built here was never
-		// used by collection; it is gone. Test Connection builds its own.)
-		releaseClients();
-
-		this.vsphere = new VSphereClient(
+		// same adapter object; the previous vCenter session is logged out
+		// and the previous Suite API client closed, so an edit no longer
+		// leaves a live session and HTTP pools behind in the collector JVM.
+		// Review W4: the new clients are built first, swapped in, and only
+		// then are the old ones released, so a cycle still running never
+		// sees a null client; its calls already on the old client fail
+		// (the closed client does not log in again). (Issue #28: the REST
+		// client built here was never used by collection; it is gone. Test
+		// Connection builds its own.)
+		VSphereClient oldVsphere = this.vsphere;
+		SuiteApiStitcher oldSuite = this.suiteStitcher;
+		VSphereClient newVsphere = new VSphereClient(
 				config.vcenterHost, config.username, config.password,
 				sslSocketFactoryFor(config.vcenterHost),
 				clientLog(componentLogger(VSphereClient.class)));
@@ -196,19 +200,25 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// (e.g. a remote collector), create() throws; stitching is then
 		// disabled for the cycle and the collect path logs the gap rather
 		// than aborting.
+		SuiteApiStitcher newSuite = null;
+		ComplianceStitcher newStitcher = null;
 		try {
-			this.suiteStitcher = SuiteApiStitcher.create(
+			newSuite = SuiteApiStitcher.create(
 					this, componentLogger(SuiteApiStitcher.class));
-			this.stitcher = new ComplianceStitcher(
-					this.suiteStitcher,
+			newStitcher = new ComplianceStitcher(newSuite,
 					componentLogger(ComplianceStitcher.class));
 		} catch (RuntimeException e) {
-			this.suiteStitcher = null;
-			this.stitcher = null;
-			logWarn("Ambient Suite API stitcher unavailable — compliance data "
+			newSuite = null;
+			newStitcher = null;
+			logWarn("Ambient Suite API stitcher unavailable: compliance data "
 					+ "will not be pushed onto VMWARE resources this instance: "
 					+ e.getMessage());
 		}
+		// Review W4: swap, then release the previous clients.
+		this.vsphere = newVsphere;
+		this.suiteStitcher = newSuite;
+		this.stitcher = newStitcher;
+		releaseClients(oldVsphere, oldSuite);
 
 		logInfo("ComplianceAdapter configured: vcenter=" + config.vcenterHost
 				+ " profile=" + BenchmarkSelector.AUTO
@@ -2469,22 +2479,24 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	@Override
 	public void onDiscard() {
-		releaseClients();
+		// Review W4: the fields keep the (now closed) clients, so a cycle
+		// still running fails its remaining reads instead of an NPE or a
+		// fresh login.
+		releaseClients(vsphere, suiteStitcher);
 		super.onDiscard();
 	}
 
 	/**
 	 * Build 95 (issue #23): log the vCenter session out and close the Suite
-	 * API client, then forget both. Used by configure (before new ones are
-	 * made) and by discard. Never throws: a failed logout leaves only an
-	 * idle session for vCenter to expire.
+	 * API client. Used by configure (after the new clients are swapped in,
+	 * review W4) and by discard. {@code disconnect()} marks the vCenter
+	 * client closed first, so a cycle still using it fails its calls
+	 * instead of logging in again, and bounds the Logout wait
+	 * ({@code VSphereClient.LOGOUT_TIMEOUT_MS}). Never throws: a failed
+	 * logout leaves only an idle session for vCenter to expire.
 	 */
-	private void releaseClients() {
-		VSphereClient oldVsphere = vsphere;
-		SuiteApiStitcher oldSuite = suiteStitcher;
-		vsphere = null;
-		suiteStitcher = null;
-		stitcher = null;
+	private void releaseClients(VSphereClient oldVsphere,
+			SuiteApiStitcher oldSuite) {
 		if (oldVsphere != null) {
 			try {
 				oldVsphere.disconnect();
