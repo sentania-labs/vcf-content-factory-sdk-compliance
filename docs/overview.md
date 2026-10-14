@@ -127,6 +127,14 @@ The pack's dashboards use no Section (header) widgets while VCF Operations
 widget type and rejects the whole dashboard, which is why build 88's
 Summary tab did not appear on 9.0.x until build 89 removed its header row.
 
+The alert panels (Open Compliance Alerts, Fleet Compliance Alerts and the
+"Failing Controls on Selected ..." panels) filter on the alert type only,
+so they list every pack alert of the Compliance type on the selected
+object and its children: the per-control alerts, the "Compliance data not
+collected" alerts and the Host Compliance Score Degraded alert alike. The
+widget has no filter that separates them, and pinning all 143 alert
+definitions per widget was ruled out.
+
 The Environment Overview's four score tiles (Average Score, Non-Compliant
 Objects, Objects Without Benchmark, Objects Scored) and its score trend
 read the engine-computed `Rollup|Environment|*` metrics on the pack's own

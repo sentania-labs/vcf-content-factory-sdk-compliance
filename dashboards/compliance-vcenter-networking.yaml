@@ -73,7 +73,7 @@ widgets:
     mode: all
     # depth 4: input may be a vCenter instance (4 levels to VirtualMachine via Datacenter > Cluster > HostSystem), Cluster (2), vDS (2) or Distributed Port Group (1); 4 covers all.
     depth: 4
-    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
 interactions:
   - from: scope_picker

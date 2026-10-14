@@ -78,7 +78,7 @@ widgets:
     mode: all
     # depth 1: input is a HostSystem; its only compliance-bearing child level is VirtualMachine, 1 level.
     depth: 1
-    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
   # ── W5: Score Trend, driven by W2 ────────────────────────────────────
 
