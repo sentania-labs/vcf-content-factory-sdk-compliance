@@ -1,19 +1,18 @@
 id: 65abb586-5499-480f-9452-9cb036dd2f10
 name: "[VCF Content Factory] Compliance VM Detail"
 description: >
-  Per-VM compliance scores, control counts and applied SCG benchmark
-  from the VCF-CF Compliance adapter (stitched onto VMWARE
-  VirtualMachine; a VM's SCG follows its host's ESX version). Feeds
-  VMs W2 (VM Compliance). Score columns list every row, unfiltered:
-  VCF Ops keeps a metric's last value, so a VM that moved to a version
-  with no SCG can show a retained score, identified by the No SCG flag
-  column beside it (owner accepted, 2026-09-23). Unreadable controls
-  count as failing in the score (adapter build 63); the Unreadable
-  column shows how many, and a "Compliance data not collected" alert
-  explains why. The totals row is sums only (issue #168). A score
-  beside Controls Evaluated = 0 is retained from an earlier cycle, not
-  current. Sort by Compliance Score ascending in the dashboard widget
-  to surface non-compliant VMs first.
+  Per-VM compliance scores, control counts and applied SCG benchmark from
+  the VCF-CF Compliance adapter (stitched onto VMWARE VirtualMachine; a
+  VM's SCG follows its host's ESX version). Feeds VMs W2 (VM Compliance).
+  Score columns list every row, unfiltered: VCF Ops keeps a metric's last
+  value, so a VM that moved to a version with no SCG can show a retained
+  score, identified by the No SCG flag column beside it (owner accepted,
+  2026-09-23). Unreadable controls are outside the score (build 95: passed
+  over evaluated, from what was read); Unreadable shows how many, and
+  "Compliance data not collected" fires after two cycles. The totals row
+  is sums only (issue #168). A score beside Controls Evaluated = 0 is
+  retained from an earlier cycle, not current. Sort by Compliance Score
+  ascending to surface non-compliant VMs first.
 subject:
   adapter_kind: VMWARE
   resource_kind: VirtualMachine

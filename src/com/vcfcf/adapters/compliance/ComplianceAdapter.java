@@ -44,11 +44,13 @@ import java.util.List;
  * <p><b>Correctness invariants preserved from v1 (golden comparison gate).</b>
  * Same property/stat keys, same value semantics, same MOID stitching identity
  * rules, and the cardinal "unreadable is NOT compliant" rule: a value the
- * adapter failed to read never passes. Since build 63 (owner decision) it
- * counts against the score like a failure (ControlEvaluator.score), is
- * counted separately in unreadable_count, and raises the per-kind
- * "Compliance data not collected" alert; the zero-divisor placeholder of an
- * object with nothing attempted is never pushed or averaged.
+ * adapter failed to read never passes. Since build 95 (Scott 2026-10-14)
+ * it is not pushed at all (its last value stays), is outside the score
+ * (passed over evaluated, ControlEvaluator.score), is counted in
+ * unreadable_count and flagged per object (has_unreadable, the reason, the
+ * control ids), and the flag raises the per-kind "Compliance data not
+ * collected" alert after two cycles; the zero-divisor placeholder of an
+ * object with nothing read is never pushed or averaged.
  */
 public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
@@ -757,10 +759,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		if (cs.unreadable > 0) {
 			logWarn(cs.unreadable + " control instance(s) could not be read "
-					+ "this cycle (declared-but-unreadable). They count as "
-					+ "failing in each object's score, each affected object "
-					+ "is non-compliant, and its \"Compliance data not "
-					+ "collected\" alert fires.");
+					+ "this cycle (declared-but-unreadable). They were not "
+					+ "pushed (their last values stay), they are outside "
+					+ "each object's score and the pass rates, each affected "
+					+ "object has has_unreadable = 1 with its reason, and its "
+					+ "\"Compliance data not collected\" alert fires after "
+					+ "two cycles.");
 		}
 
 		pushWorldProperty(out, "Summary|last_scan_timestamp",
@@ -1178,10 +1182,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * Version unreadable and no previous benchmark (review B2; build 65 W1):
-	 * nothing collected. Score 0 (build 63 rule), non-compliant,
-	 * collection_failed = 1 (raises "Compliance data not collected"),
-	 * counted as scored 0 in the rollup's unknown bucket, never
-	 * no_benchmark, no alert cleanup, benchmark memory untouched.
+	 * nothing collected. Build 95: only has_unreadable = 1 (raises
+	 * "Compliance data not collected" after two cycles), collection_failed
+	 * = 1 and the reason are pushed (no score, no counters); counted in the
+	 * rollup's unknown bucket only, never no_benchmark, no alert cleanup,
+	 * benchmark memory untouched.
 	 */
 	private void recordVersionUnreadable(BenchmarkSelector.Kind kind,
 			String name, ComplianceDecisions.Decision d, String resourceId,
@@ -1549,8 +1554,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			// down at read time (disconnected / notResponding) cannot be read
 			// honestly; scoring the subset that still resolves from vCenter's
 			// cache yields a flattering partial score (the build-46 esx04
-			// regression). Mark EVERY control UNREADABLE instead (build 63:
-			// which scores the host 0, nothing was collected).
+			// regression). Mark EVERY control UNREADABLE instead (build 95:
+			// nothing is pushed per control and no score; the host is
+			// flagged has_unreadable with the reason "host not responding"
+			// or "host disconnected").
 			String connState;
 			try {
 				connState = vsphere.getHostConnectionState(hostInfo.moRef);
@@ -1636,11 +1643,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						+ "(esxcli-host-unreachable) for the rest of this cycle. "
 						+ "If every host shows this, check vCenter first.");
 			}
-			if (wholeHostUnreadable && cr.attempted() > 0) {
-				// Build 63: nothing collected -> score 0 (owner decision),
-				// counted in the host average like any other score.
+			if (ComplianceDecisions.nothingReadable(cr)) {
+				// Build 95: nothing read -> no score pushed and not in the
+				// host counts; flagged (has_unreadable = 1) with its reason.
 				logInfo("Host " + hostName + ": UNREADABLE (" + cr.unreadableCount
-						+ " controls), score 0");
+						+ " controls), no score this cycle: "
+						+ objectUnreadable.reasonText(cr.unreadableCount));
 			} else if (cr.attempted() > 0) {
 				// Build 86: DEBUG for a fully read host (one line per host
 				// per cycle is 12x the volume at 5 minutes); the per-cycle
@@ -1659,13 +1667,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					logDebug(line);
 				}
 			}
-			if (cr.attempted() > 0) {
+			if (cr.totalCount > 0) {
 				cs.hostsScored++;
-				if (ComplianceRollup.isNonCompliant(cr.failCount,
-						cr.unreadableCount)) {
+				if (ComplianceRollup.isNonCompliant(cr.failCount)) {
 					cs.hostsNonCompliant++;
 				}
-				if (wholeHostUnreadable) cs.hostsWhollyUnreadable++;
+			} else if (ComplianceDecisions.nothingReadable(cr)) {
+				cs.hostsWhollyUnreadable++;
 			}
 
 			ComplianceDecisions.SkipPush skip =
@@ -2458,7 +2466,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				new java.util.ArrayList<>(a.controlResults);
 		merged.addAll(b.controlResults);
 		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
-				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				total, unreadable, ControlEvaluator.score(pass, fail),
 				merged);
 	}
 
@@ -2514,9 +2522,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * {@link ComplianceDecisions#complianceStats} /
 	 * {@link ComplianceDecisions#complianceProps}: Compliant 1 / 0 for
 	 * every control read (build 95: an unreadable control is not pushed),
-	 * score whenever a control was attempted (build 63: unreadable counts
-	 * as failing),
-	 * counters always, non_compliant = fail or unreadable, no_benchmark = 0.
+	 * score = passed over evaluated whenever a control was read (build 95:
+	 * unreadable is in neither count), counters, non_compliant = a failing
+	 * control, has_unreadable and the reason, no_benchmark = 0; with
+	 * nothing read, the unreadable signals only.
 	 */
 	private void pushComplianceViaClient(String resourceId,
 			ControlEvaluator.ComplianceResult cr, String profileName,

@@ -3,19 +3,18 @@ name: "[VCF Content Factory] Compliance Clusters"
 description: >
   Per-cluster compliance score, applied SCG benchmark and control counts
   from the VCF-CF Compliance adapter (stitched onto VMWARE
-  ClusterComputeResource; covers vSAN controls). Clusters carry few
-  scored controls, so a cluster's score is coarse (0, 50 or 100);
-  Failing is shown beside it so that is visible. Feeds vCenter &
-  Networking W3 (Clusters). Score columns list every row, unfiltered:
-  VCF Ops keeps a metric's last value, so a cluster that moved to a
-  version with no SCG can show a retained score, identified by the No
-  SCG flag column beside it (owner accepted, 2026-09-23). Unreadable
-  controls count as failing in the score (adapter build 63); the
-  Unreadable column shows how many, and a "Compliance data not
-  collected" alert explains why. The totals row is sums only (issue
-  #168). A score beside Controls Evaluated = 0 is retained from an
-  earlier cycle, not current. Sort by Compliance Score ascending in the
-  dashboard widget to surface the worst cluster first.
+  ClusterComputeResource; covers vSAN controls). Clusters carry few scored
+  controls, so a cluster's score is coarse (0, 50 or 100); Failing is
+  shown beside it so that is visible. Feeds vCenter & Networking W3
+  (Clusters). Score columns list every row, unfiltered: VCF Ops keeps a
+  metric's last value, so a cluster that moved to a version with no SCG
+  can show a retained score, identified by the No SCG flag column beside
+  it (owner accepted, 2026-09-23). Unreadable controls are outside the
+  score (build 95: passed over evaluated, from what was read); Unreadable
+  shows how many, and "Compliance data not collected" fires after two
+  cycles. The totals row is sums only (issue #168). A score beside
+  Controls Evaluated = 0 is retained from an earlier cycle, not current.
+  Sort by Compliance Score ascending to surface the worst cluster first.
 subject:
   adapter_kind: VMWARE
   resource_kind: ClusterComputeResource

@@ -18,7 +18,7 @@ import java.util.Map;
  * <pre>
  * VCF-CF Compliance|Rollup|&lt;K&gt;|scored          objects with a score this cycle
  *                                                (at least one control attempted)
- * VCF-CF Compliance|Rollup|&lt;K&gt;|non_compliant   objects with fail_count &gt; 0 or unreadable_count &gt; 0
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|non_compliant   objects with fail_count &gt; 0 (build 95: what was read)
  * VCF-CF Compliance|Rollup|&lt;K&gt;|no_benchmark    objects whose version has no SCG
  * VCF-CF Compliance|Rollup|&lt;K&gt;|score_sum       sum of those scores
  * VCF-CF Compliance|Rollup|&lt;K&gt;|avg_score       score_sum / scored (omitted when scored == 0)
@@ -224,9 +224,14 @@ public final class ComplianceRollup {
 		return b.toString();
 	}
 
-	/** Non-compliant rule shared with the per-object push. */
-	public static boolean isNonCompliant(int failCount, int unreadableCount) {
-		return failCount > 0 || unreadableCount > 0;
+	/**
+	 * Non-compliant rule shared with the per-object push. Build 95
+	 * (decision point 7): a failing control that was read. An unreadable
+	 * control no longer makes an object non-compliant (builds 63 to 94
+	 * did); the object's has_unreadable flag carries it.
+	 */
+	public static boolean isNonCompliant(int failCount) {
+		return failCount > 0;
 	}
 
 	/** An object whose version has no SCG (Auto mode only). */
@@ -260,7 +265,7 @@ public final class ComplianceRollup {
 		if (totalCount <= 0) {
 			return;   // nothing read: no score, no counts (build 95)
 		}
-		if (isNonCompliant(failCount, unreadableCount)) {
+		if (isNonCompliant(failCount)) {
 			t.nonCompliant++;
 		}
 		t.scored++;

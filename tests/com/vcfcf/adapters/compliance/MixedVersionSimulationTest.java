@@ -464,7 +464,7 @@ public final class MixedVersionSimulationTest {
 		m.addAll(b.controlResults);
 		int unreadable = a.unreadableCount + b.unreadableCount;
 		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
-				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				total, unreadable, ControlEvaluator.score(pass, fail),
 				m);
 	}
 }

@@ -181,12 +181,12 @@ public final class ComplianceDecisions {
 	}
 
 	/**
-	 * Stats for an evaluated object. Score (build 63, owner decision):
-	 * unreadable controls count as failing
-	 * ({@link ControlEvaluator#score}); pushed whenever at least one control
-	 * was read. Only with nothing attempted is score omitted (never a
-	 * stand-in). pass_count / fail_count / unreadable_count are pushed and
-	 * stay separate.
+	 * Stats for an evaluated object. Score (build 95, decision point 7):
+	 * passed over evaluated, over what was read; an unreadable control is
+	 * in neither count ({@link ControlEvaluator#score}). Pushed whenever at
+	 * least one control was read, never as a stand-in. non_compliant is a
+	 * failing control that was read. pass_count / fail_count /
+	 * unreadable_count are pushed and stay separate.
 	 *
 	 * <p>Build 95 (Scott 2026-10-14): {@link #HAS_UNREADABLE} is pushed every
 	 * cycle (1 with any unreadable control). An object with nothing
@@ -215,7 +215,7 @@ public final class ComplianceDecisions {
 			stats.put(K + ctrl.scgId + "|Compliant",
 					ctrl.compliant ? 1.0 : 0.0);
 		}
-		if (cr.attempted() > 0) {
+		if (cr.totalCount > 0) {
 			stats.put(K + "score", cr.score);
 		}
 		stats.put(K + "pass_count", (double) cr.passCount);
@@ -223,7 +223,7 @@ public final class ComplianceDecisions {
 		stats.put(K + "total_count", (double) cr.totalCount);
 		stats.put(K + "unreadable_count", (double) cr.unreadableCount);
 		stats.put(K + "non_compliant", ComplianceRollup.isNonCompliant(
-				cr.failCount, cr.unreadableCount) ? 1.0 : 0.0);
+				cr.failCount) ? 1.0 : 0.0);
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "collection_failed", collectionFailed(cr) ? 1.0 : 0.0);
 		stats.put(HAS_UNREADABLE, cr.unreadableCount > 0 ? 1.0 : 0.0);

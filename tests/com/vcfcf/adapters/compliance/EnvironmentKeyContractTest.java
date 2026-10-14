@@ -93,7 +93,7 @@ public final class EnvironmentKeyContractTest {
 		// ---- (b) referenced metric keys are produced by toStats
 		ComplianceRollup r = new ComplianceRollup();
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 10, 1, 0,
-				ControlEvaluator.score(9, 1, 0));
+				ControlEvaluator.score(9, 1));
 		r.recordNoBenchmark(BenchmarkSelector.Kind.VM);
 		Map<String, Double> stats = r.toStats();
 

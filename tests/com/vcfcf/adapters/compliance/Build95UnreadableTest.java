@@ -24,6 +24,7 @@ public final class Build95UnreadableTest {
 		adapterWiring();
 		objectKind();
 		shadowMode();
+		scoreOverWhatWasRead();
 		System.out.println("Build95UnreadableTest: all assertions passed");
 	}
 
@@ -35,7 +36,7 @@ public final class Build95UnreadableTest {
 		r.add(new ControlEvaluator.ControlResult("esx.c", "(unreadable)", "1",
 				false, "dc", true));
 		return new ControlEvaluator.ComplianceResult("h", 1, 1, 2, 1,
-				ControlEvaluator.score(1, 1, 1), r);
+				ControlEvaluator.score(1, 1), r);
 	}
 
 	/**
@@ -433,5 +434,42 @@ public final class Build95UnreadableTest {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Point 7: the per-object score is passed over evaluated, over what
+	 * was read; an unreadable control no longer counts as failing (in the
+	 * score or in non_compliant), so the object's score and its kind's
+	 * pass rate follow the same rule.
+	 */
+	static void scoreOverWhatWasRead() {
+		T.near(50, ControlEvaluator.score(1, 1), "1 of 2 read");
+		ControlEvaluator.ComplianceResult cr = mixed();   // 1 pass, 1 fail, 1 unread
+		Map<String, Double> st = ComplianceDecisions.complianceStats(cr);
+		T.near(50, st.get(K + "score"), "unreadable not failing: 1 of 2, not 1 of 3");
+		T.near(1, st.get(K + "non_compliant"), "the read failure makes it nc");
+
+		List<ControlEvaluator.ControlResult> r = new ArrayList<>();
+		r.add(new ControlEvaluator.ControlResult("esx.a", "1", "1", true, "d"));
+		r.add(new ControlEvaluator.ControlResult("esx.c", "(unreadable)", "1",
+				false, "d", true));
+		ControlEvaluator.ComplianceResult passAndUnread =
+				new ControlEvaluator.ComplianceResult("h", 1, 0, 1, 1,
+						ControlEvaluator.score(1, 0), r);
+		Map<String, Double> pu = ComplianceDecisions.complianceStats(passAndUnread);
+		T.near(100, pu.get(K + "score"), "every read control passes: 100");
+		T.near(0, pu.get(K + "non_compliant"), "unreadable is not non-compliance");
+		T.near(1, pu.get(ComplianceDecisions.HAS_UNREADABLE), "but it is flagged");
+
+		// Object score and kind pass rate agree for one object.
+		ComplianceRollup roll = new ComplianceRollup();
+		roll.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1",
+				cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
+		Map<String, Double> rs = roll.toStats();
+		T.near(st.get(K + "score"),
+				rs.get(ComplianceRollup.PREFIX + "Host|pass_rate"),
+				"object score = kind pass rate for a single object");
+		T.near(1, rs.get(ComplianceRollup.PREFIX + "Host|non_compliant"),
+				"rollup non_compliant follows the object");
 	}
 }

@@ -60,8 +60,8 @@ public final class ControlEvaluator {
 			.compile("(?i)^vmx-(\\d+)$");
 
 	/**
-	 * (Build 63: unreadable controls now count against the score, see
-	 * {@link #score}; they still never pass and are still not "fail".)
+	 * (Build 95: unreadable controls are in neither count of the score, see
+	 * {@link #score}; they never pass and are not "fail".)
 	 *
 	 * <p>Sentinel value the {@code VSphereClient} recipe reader places in
 	 * the property-value map when a control declared a {@code read_recipe}
@@ -69,8 +69,8 @@ public final class ControlEvaluator {
 	 * unknown style). Mirrors {@code VSphereClient.UNREADABLE}; compared
 	 * by reference. An unreadable control is NEVER compliant. It is not a
 	 * pass or an evaluated fail (not in pass / fail / total), is counted in
-	 * {@code unreadableCount}, and since build 63 counts as failing in the
-	 * score ({@link #score}).
+	 * {@code unreadableCount}, and since build 95 is outside the score
+	 * ({@link #score}; builds 63 to 94 counted it as failing).
 	 *
 	 * <p>Held as an {@code Object} the caller passes in (so this class
 	 * has no compile dependency on VSphereClient) — see
@@ -252,7 +252,7 @@ public final class ControlEvaluator {
 		}
 
 		int total = pass + fail;
-		double score = score(pass, fail, 0);
+		double score = score(pass, fail);
 
 		// advanced_setting controls have no unreadable outcome: an absent
 		// key is a pass when the expected value allows absence and a fail
@@ -273,8 +273,9 @@ public final class ControlEvaluator {
 	 * <p>This is the third leg of the cardinal "unreadable is NOT compliant"
 	 * rule: an unreadable channel must surface every declared control as
 	 * UNREADABLE: counted in {@code unreadableCount}, not in pass/fail/total,
-	 * and (build 63) counted as failing in the score, never silently
-	 * dropped. Attempted = pass + fail + unreadable.
+	 * and flagged on the object (build 95: has_unreadable and the reason;
+	 * outside the score), never silently dropped. Attempted = pass + fail
+	 * + unreadable.
 	 *
 	 * <p>The control set and per-control filtering exactly mirror
 	 * {@link #evaluateControls} (same {@code advanced_setting} parameterKind
@@ -308,11 +309,12 @@ public final class ControlEvaluator {
 					true
 			));
 		}
-		// Build 63 (owner decision): every attempted control is unreadable,
-		// so nothing was collected and the score is 0 (see score());
-		// unreadableCount carries the count, the collection alert fires.
+		// Every attempted control is unreadable: nothing was read, so there
+		// is no score (build 95: score() is the zero-divisor placeholder,
+		// never pushed or rolled up); unreadableCount carries the count and
+		// the object's has_unreadable flag raises the collection alert.
 		return new ComplianceResult(resourceName, 0, 0, 0, unreadable,
-				score(0, 0, unreadable), results);
+				score(0, 0), results);
 	}
 
 	/**
@@ -469,7 +471,7 @@ public final class ControlEvaluator {
 	 * {@code unreadableSentinel} means the control declared a recipe but
 	 * the read produced nothing. Such controls are counted in
 	 * {@code unreadableCount}, are NEVER compliant, and are not in pass,
-	 * fail or total; since build 63 they count as failing in the score
+	 * fail or total; since build 95 they are outside the score
 	 * ({@link #score}). They are recorded as a {@link ControlResult} with
 	 * {@code unreadable=true} and {@code actual="(unreadable)"}; build 95
 	 * does not push them (no per-control value, no violation alert).
@@ -527,7 +529,7 @@ public final class ControlEvaluator {
 
 			// Declared-but-unreadable: recipe present but the read found
 			// nothing. Never compliant, not in pass/fail/total, counted in
-			// unreadableCount (and as failing in the score, build 63).
+			// unreadableCount (outside the score since build 95).
 			if (unreadableSentinel != null && actualObj == unreadableSentinel) {
 				unreadable++;
 				results.add(new ControlResult(
@@ -564,7 +566,7 @@ public final class ControlEvaluator {
 		}
 
 		int total = pass + fail;
-		double score = score(pass, fail, unreadable);
+		double score = score(pass, fail);
 
 		return new ComplianceResult(resourceName, pass, fail, total,
 				unreadable, score, results);
@@ -789,22 +791,23 @@ public final class ControlEvaluator {
 	}
 
 	/**
-	 * The compliance score (build 63, owner decision 2026-09-23: "If
-	 * unreadable = not collected/etc, let's count it as failing").
+	 * The compliance score of one object, over what was read (build 95,
+	 * decision 2026-10-14, point 7):
 	 *
-	 * <pre>score = pass / (pass + fail + unreadable) * 100</pre>
+	 * <pre>score = pass / (pass + fail) * 100</pre>
 	 *
-	 * An unreadable control counts against the score like a failure, but
-	 * {@code fail_count} stays the count of evaluated failures and
-	 * {@code unreadable_count} stays separate, so the UI can show both. An
-	 * object whose every attempted control is unreadable scores 0 (nothing
-	 * was collected). Only when NOTHING was attempted
-	 * ({@link ComplianceResult#attempted()} == 0) is the value the
-	 * zero-divisor placeholder 100.0, which is never pushed or rolled up.
+	 * An unreadable control is in neither count: it no longer counts as
+	 * failing (the build 63 rule, pass / (pass + fail + unreadable), is
+	 * retired), it is never a pass, and it is reported apart
+	 * ({@code unreadable_count}, {@code has_unreadable} and the reason), the
+	 * same rule as the rollup pass rate. With nothing read
+	 * ({@code pass + fail == 0}) the value is the zero-divisor placeholder
+	 * 100.0, which is never pushed or rolled up (callers check
+	 * {@code totalCount > 0}).
 	 */
-	public static double score(int pass, int fail, int unreadable) {
-		int attempted = pass + fail + unreadable;
-		return attempted > 0 ? ((double) pass / attempted) * 100.0 : 100.0;
+	public static double score(int pass, int fail) {
+		int evaluated = pass + fail;
+		return evaluated > 0 ? ((double) pass / evaluated) * 100.0 : 100.0;
 	}
 
 	public static final class ComplianceResult {
@@ -812,9 +815,9 @@ public final class ControlEvaluator {
 		public final int passCount;
 		public final int failCount;
 		public final int totalCount;
-		// Declared-but-unreadable controls — recipe present but the read
-		// produced nothing. Not in pass/fail/totalCount; counted as failing
-		// in the score since build 63 (VCF-CF Compliance|unreadable_count).
+		// Declared-but-unreadable controls: recipe present but the read
+		// produced nothing. Not in pass/fail/totalCount and outside the
+		// score since build 95 (VCF-CF Compliance|unreadable_count).
 		public final int unreadableCount;
 		public final double score;
 		public final List<ControlResult> controlResults;
@@ -832,8 +835,9 @@ public final class ControlEvaluator {
 		}
 
 		/**
-		 * Controls attempted: evaluated (pass + fail) plus unreadable. The
-		 * score is pushed and rolled up only when this is &gt; 0 (build 63).
+		 * Controls attempted: evaluated (pass + fail) plus unreadable. Build
+		 * 95: the score is pushed and rolled up only when something was
+		 * read ({@code totalCount > 0}), not merely attempted.
 		 */
 		public int attempted() {
 			return totalCount + unreadableCount;

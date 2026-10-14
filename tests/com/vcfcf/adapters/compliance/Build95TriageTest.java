@@ -91,9 +91,9 @@ public final class Build95TriageTest {
 		ComplianceRollup r = new ComplianceRollup();
 		r.markIncomplete(BenchmarkSelector.Kind.HOST);
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
-				ControlEvaluator.score(15, 4, 0));
+				ControlEvaluator.score(15, 4));
 		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 10, 5, 0,
-				ControlEvaluator.score(5, 5, 0));
+				ControlEvaluator.score(5, 5));
 		Map<String, Double> s = r.toStats();
 		T.near(1, s.get(ComplianceRollup.INCOMPLETE_KEY), "incomplete = 1");
 		for (String k : new String[] {"scored", "non_compliant",

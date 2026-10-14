@@ -69,7 +69,7 @@ public final class ComplianceDecisionsTest {
 
 		ControlEvaluator.ComplianceResult allUnread =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 3,
-						ControlEvaluator.score(0, 0, 3),
+						ControlEvaluator.score(0, 0),
 						Arrays.asList(new ControlEvaluator.ControlResult(
 								"esx.x", "(unreadable)", "5", false, "d", true)));
 		Map<String, Double> cs = ComplianceDecisions.complianceStats(allUnread);
@@ -87,12 +87,13 @@ public final class ComplianceDecisionsTest {
 		T.check(!cs.containsKey(K + "esx.x|Compliant"),
 				"unreadable control not pushed");
 
-		// Partial unreadable lowers the score; fail and unreadable stay apart.
+		// Build 95 (point 7): partly unreadable scores over what was read;
+		// fail and unreadable stay apart.
 		ControlEvaluator.ComplianceResult partial =
 				new ControlEvaluator.ComplianceResult("h", 7, 1, 8, 2,
-						ControlEvaluator.score(7, 1, 2), new java.util.ArrayList<>());
+						ControlEvaluator.score(7, 1), new java.util.ArrayList<>());
 		Map<String, Double> ps = ComplianceDecisions.complianceStats(partial);
-		T.near(70, ps.get(K + "score"), "7 pass of 10 attempted");
+		T.near(87.5, ps.get(K + "score"), "7 pass of 8 read (was 70)");
 		T.near(1, ps.get(K + "fail_count"), "fail_count = evaluated failures");
 		T.near(2, ps.get(K + "unreadable_count"), "unreadable kept separate");
 		T.near(1, ps.get(K + "non_compliant"), "non-compliant");
@@ -101,7 +102,7 @@ public final class ComplianceDecisionsTest {
 		// Nothing attempted: still no score (never a placeholder).
 		ControlEvaluator.ComplianceResult none =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 0,
-						ControlEvaluator.score(0, 0, 0), new java.util.ArrayList<>());
+						ControlEvaluator.score(0, 0), new java.util.ArrayList<>());
 		T.check(!ComplianceDecisions.complianceStats(none).containsKey(
 				K + "score"), "nothing attempted: no score");
 

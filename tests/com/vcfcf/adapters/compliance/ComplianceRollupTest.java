@@ -8,56 +8,61 @@ public final class ComplianceRollupTest {
 	private static final String P = ComplianceRollup.PREFIX;
 
 	public static void main(String[] args) {
-		// Build 63 score rule: unreadable counts as failing.
-		T.near(90, ControlEvaluator.score(9, 1, 0), "9/10");
-		T.near(80, ControlEvaluator.score(8, 0, 2),
-				"partial unreadable lowers the score (8 of 10 attempted)");
-		T.near(0, ControlEvaluator.score(0, 0, 40), "all unreadable scores 0");
-		T.near(80, ControlEvaluator.score(4, 0, 1), "4 of 5");
+		// Build 95 score rule (decision point 7, replaces build 63's):
+		// passed over evaluated, over what was read; unreadable controls
+		// are in neither count, so they no longer lower the score.
+		T.near(90, ControlEvaluator.score(9, 1), "9/10");
+		T.near(100, ControlEvaluator.score(8, 0),
+				"8 read, 8 pass: 100 whatever was unreadable (was 80)");
+		T.near(100, ControlEvaluator.score(0, 0),
+				"nothing read: the zero-divisor placeholder, never pushed");
+		T.near(80, ControlEvaluator.score(4, 1), "4 of 5 read");
 
 		ComplianceRollup r = new ComplianceRollup();
 		// Hosts: 90 (fails), 100 (clean), all-unreadable (0), partially
 		// unreadable (80), and one no-benchmark (ESX 10.0).
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 10, 1, 0,
-				ControlEvaluator.score(9, 1, 0));
+				ControlEvaluator.score(9, 1));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 0, 0,
-				ControlEvaluator.score(10, 0, 0));
+				ControlEvaluator.score(10, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
-				ControlEvaluator.score(0, 0, 40));
+				ControlEvaluator.score(0, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_7.0", 8, 0, 2,
-				ControlEvaluator.score(8, 0, 2));
+				ControlEvaluator.score(8, 0));
 		r.recordNoBenchmark(BenchmarkSelector.Kind.HOST);
 		// VMs: one clean, one with an unreadable control.
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 0,
-				ControlEvaluator.score(4, 0, 0));
+				ControlEvaluator.score(4, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_8.0", 4, 0, 1,
-				ControlEvaluator.score(4, 0, 1));
+				ControlEvaluator.score(4, 0));
 		// vCenter scored 50; a non-vSAN cluster (nothing attempted).
 		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 2, 1, 0,
-				ControlEvaluator.score(1, 1, 0));
+				ControlEvaluator.score(1, 1));
 		r.recordEvaluated(BenchmarkSelector.Kind.CLUSTER, "SCG_9.1", 0, 0, 0,
-				ControlEvaluator.score(0, 0, 0));
+				ControlEvaluator.score(0, 0));
 		// Portgroup with no benchmark; vDS nothing at all.
 		r.recordNoBenchmark(BenchmarkSelector.Kind.PORTGROUP);
 
 		Map<String, Double> s = r.toStats();
 
 		// Build 95: counts come from what was read; the all-unreadable
-		// host is not scored and not non-compliant (has_unreadable on the
-		// object carries it).
+		// host is not scored and not non-compliant, and the partly
+		// unreadable host scores 100 over its 8 read controls and is not
+		// non-compliant (has_unreadable on the objects carries both).
 		T.near(3, s.get(P + "Host|scored"),
 				"all-unreadable host is not scored (build 95)");
-		T.near(270, s.get(P + "Host|score_sum"), "host sum 90+100+80");
-		T.near(90, s.get(P + "Host|avg_score"), "host avg");
-		T.near(2, s.get(P + "Host|non_compliant"),
-				"host non-compliant: fail + partial (all-unreadable not)");
+		T.near(290, s.get(P + "Host|score_sum"), "host sum 90+100+100");
+		T.near(290.0 / 3, s.get(P + "Host|avg_score"), "host avg");
+		T.near(1, s.get(P + "Host|non_compliant"),
+				"host non-compliant: the failing host only");
 		T.near(1, s.get(P + "Host|no_benchmark"), "host no benchmark");
 		T.check(!s.containsKey(P + "Host|scored_stale"),
 				"scored_stale retired in build 63");
 
 		T.near(2, s.get(P + "VM|scored"), "vm scored");
-		T.near(1, s.get(P + "VM|non_compliant"), "vm unreadable counts");
-		T.near(90, s.get(P + "VM|avg_score"), "vm avg (100 + 80) / 2");
+		T.near(0, s.get(P + "VM|non_compliant"),
+				"an unreadable control no longer makes a VM non-compliant");
+		T.near(100, s.get(P + "VM|avg_score"), "vm avg (100 + 100) / 2");
 
 		T.near(1, s.get(P + "vCenter|scored"), "vc scored");
 		T.near(50, s.get(P + "vCenter|avg_score"), "vc avg");
@@ -72,9 +77,9 @@ public final class ComplianceRollupTest {
 		T.near(1, s.get(P + "Portgroup|no_benchmark"), "pg no benchmark");
 
 		T.near(6, s.get(P + "All|scored"), "all scored 3+2+1");
-		T.near(500, s.get(P + "All|score_sum"), "all sum 270+180+50");
-		T.near(500.0 / 6, s.get(P + "All|avg_score"), "all weighted avg");
-		T.near(4, s.get(P + "All|non_compliant"), "all non-compliant 2+1+1");
+		T.near(540, s.get(P + "All|score_sum"), "all sum 290+200+50");
+		T.near(90, s.get(P + "All|avg_score"), "all weighted avg 540/6");
+		T.near(2, s.get(P + "All|non_compliant"), "all non-compliant 1+0+1");
 		T.near(2, s.get(P + "All|no_benchmark"), "all no benchmark");
 
 		T.near(1, s.get(P + "Benchmark|SCG_7.0|objects"), "7.0 objects");
@@ -111,9 +116,10 @@ public final class ComplianceRollupTest {
 		T.near(0, us.get(P + "Host|score_sum"), "no score summed");
 		T.check(!us.containsKey(P + "Host|avg_score"), "no avg, never 0");
 
-		T.check(ComplianceRollup.isNonCompliant(0, 1), "unreadable -> nc");
-		T.check(ComplianceRollup.isNonCompliant(1, 0), "fail -> nc");
-		T.check(!ComplianceRollup.isNonCompliant(0, 0), "clean -> compliant");
+		// Build 95: a failing control that was read; unreadable is not
+		// non-compliance (builds 63 to 94 said it was).
+		T.check(ComplianceRollup.isNonCompliant(1), "fail -> nc");
+		T.check(!ComplianceRollup.isNonCompliant(0), "no failure -> compliant");
 
 		build88Unmatched();
 		build88Pods();
@@ -154,7 +160,7 @@ public final class ComplianceRollupTest {
 		for (BenchmarkSelector.Kind k : BenchmarkSelector.Kind.values()) {
 			ComplianceRollup r = new ComplianceRollup();
 			r.recordEvaluated(k, "SCG_9.1", 10, 2, 0,
-					ControlEvaluator.score(8, 2, 0));
+					ControlEvaluator.score(8, 2));
 			r.recordUnmatched(k, "a-" + k.rollupName, "moid-1");
 			r.recordUnmatched(k, "b-" + k.rollupName, "moid-2");
 			Map<String, Double> s = r.toStats();
@@ -264,7 +270,7 @@ public final class ComplianceRollupTest {
 	 * devel); the Pod effect on wld01 is exact.
 	 */
 	private static void build88DevelWorkedExample() {
-		double pod = ControlEvaluator.score(15, 4, 0);
+		double pod = ControlEvaluator.score(15, 4);
 		T.near(1500.0 / 19, pod, "a Pod scored 78.947 under build 87");
 
 		// wld01, build 88: 25 real VMs (synthetic: 20 non-compliant), 18 Pods
@@ -330,7 +336,7 @@ public final class ComplianceRollupTest {
 	static void build92RetiredCustom() {
 		ComplianceRollup r = new ComplianceRollup();
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 10, 0, 0,
-				ControlEvaluator.score(10, 0, 0));
+				ControlEvaluator.score(10, 0));
 		Map<String, Double> s = r.toStats();
 		T.check(!s.containsKey(ComplianceRollup.RETIRED_CUSTOM_KEY),
 				"no Custom bucket normally");
@@ -358,24 +364,24 @@ public final class ComplianceRollupTest {
 		ComplianceRollup r = new ComplianceRollup();
 		// Hosts: 9 of 10, 8 of 8 with 2 unreadable, all 40 unreadable.
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 1, 0,
-				ControlEvaluator.score(9, 1, 0));
+				ControlEvaluator.score(9, 1));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 8, 0, 2,
-				ControlEvaluator.score(8, 0, 2));
+				ControlEvaluator.score(8, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
-				ControlEvaluator.score(0, 0, 40));
+				ControlEvaluator.score(0, 0));
 		// VMs: 15 of 19, twice.
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
-				ControlEvaluator.score(15, 4, 0));
+				ControlEvaluator.score(15, 4));
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
-				ControlEvaluator.score(15, 4, 0));
+				ControlEvaluator.score(15, 4));
 		// vCenter: 15 of 20, 1 unreadable.
 		r.recordEvaluated(BenchmarkSelector.Kind.VCENTER, "SCG_9.1", 20, 5, 1,
-				ControlEvaluator.score(15, 5, 1));
+				ControlEvaluator.score(15, 5));
 		// Non-vSAN cluster: nothing attempted. Port group: 12 of 12.
 		r.recordEvaluated(BenchmarkSelector.Kind.CLUSTER, "SCG_9.1", 0, 0, 0,
-				ControlEvaluator.score(0, 0, 0));
+				ControlEvaluator.score(0, 0));
 		r.recordEvaluated(BenchmarkSelector.Kind.PORTGROUP, "SCG_9.1", 12, 0,
-				0, ControlEvaluator.score(12, 0, 0));
+				0, ControlEvaluator.score(12, 0));
 		// A no-benchmark host and a version-unreadable VM add no controls.
 		r.recordNoBenchmark(BenchmarkSelector.Kind.HOST);
 		r.recordVersionUnreadable(BenchmarkSelector.Kind.VM);
@@ -431,9 +437,9 @@ public final class ComplianceRollupTest {
 	static void build95HeldBack() {
 		ComplianceRollup r = new ComplianceRollup();
 		r.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 10, 1, 0,
-				ControlEvaluator.score(9, 1, 0));
+				ControlEvaluator.score(9, 1));
 		r.recordEvaluated(BenchmarkSelector.Kind.VM, "SCG_9.1", 19, 4, 0,
-				ControlEvaluator.score(15, 4, 0));
+				ControlEvaluator.score(15, 4));
 		r.markIncomplete(BenchmarkSelector.Kind.VM);
 		Map<String, Double> s = r.toStats();
 		for (String k : new String[] {"controls_evaluated", "controls_passed",
@@ -466,7 +472,7 @@ public final class ComplianceRollupTest {
 
 		ComplianceRollup u = new ComplianceRollup();
 		u.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.1", 0, 0, 40,
-				ControlEvaluator.score(0, 0, 40));
+				ControlEvaluator.score(0, 0));
 		u.recordVersionUnreadable(BenchmarkSelector.Kind.VM);
 		Map<String, Double> us = u.toStats();
 		T.near(0, us.get(P + "Host|controls_evaluated"), "unreadable: 0 eval");
@@ -516,7 +522,7 @@ public final class ComplianceRollupTest {
 				for (int i = 0; i < n; i++) {
 					int p = (int) (passed / n + (i < passed % n ? 1 : 0));
 					vc[v].recordEvaluated(kinds[k], "SCG_9.1", c, c - p, 0,
-							ControlEvaluator.score(p, c - p, 0));
+							ControlEvaluator.score(p, c - p));
 				}
 				kindPassed[k] += passed;
 				kindEval[k] += (long) c * n;
