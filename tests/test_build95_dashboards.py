@@ -12,8 +12,9 @@
 - #34: the About text on the Environment Overview is short and its box
   one row taller, so it no longer runs under the EDIT link.
 - Scott's decision 2026-10-14 (point 4): an "Objects with Unreadable
-  Controls" list (object, kind, count, reason; the list view filtered on
-  has_unreadable = 1 over the six kinds) sits next to the Controls
+  Controls" list (object, kind, count, reason and, review W10, control
+  ids; the list view filtered on has_unreadable = 1 over the six kinds)
+  sits next to the Controls
   Passing tile on the Environment Overview and the World Summary.
 - Review B2: Not Fully Read (has_unreadable) sits directly beside the
   score in the six per-kind views (summed in the totals row) and in the
@@ -123,7 +124,8 @@ class Build95DashboardTest(unittest.TestCase):
         self.assertEqual(columns(text), [
             "VCF-CF Compliance|object_kind",
             "VCF-CF Compliance|unreadable_count",
-            "VCF-CF Compliance|unreadable_reason"])
+            "VCF-CF Compliance|unreadable_reason",
+            "VCF-CF Compliance|unreadable_controls"])
         self.assertIn("views/compliance-unreadable-objects.yaml",
                       read("adapter.yaml"))
         for name in ["compliance-environment-overview.yaml",

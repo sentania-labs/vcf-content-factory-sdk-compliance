@@ -426,7 +426,10 @@ Passing tile on the Environment Overview and the World Summary: the view
 "[VCF Content Factory] Compliance Objects with Unreadable Controls" lists
 every ESX host, VM, vCenter, cluster, distributed switch and distributed
 portgroup whose `has_unreadable` is 1, with its kind (`object_kind`),
-`unreadable_count` and `unreadable_reason`. It is the signal for missing
+`unreadable_count`, `unreadable_reason` and `unreadable_controls`. For
+an object whose product version could not be read, `unreadable_count`
+is not pushed, so the count shown is from an earlier cycle; its
+`unreadable_controls` reads `(not known: ...)` and is current. It is the signal for missing
 data: the percentages count only what was read, so an object or a whole
 kind that could not be read keeps its last value on the tiles and in the
 table, and appears here. An empty list means every object was fully read

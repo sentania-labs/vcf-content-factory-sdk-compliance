@@ -182,10 +182,12 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   Hosts dashboard's host details, show it. A partial read outage still
   moves the score, over what was read, either way (hiding a passing control
   lowers it), so it can raise or cancel Host Compliance Score Degraded;
-  only a whole-object outage leaves the score untouched. The **Objects with Unreadable Controls** list next to
-  the Controls Passing tile, on the Environment Overview and the Compliance
-  World Summary, names every flagged object with its kind, count and
-  reason, and the object's "Compliance data not collected" alert fires
+  only a whole-object outage leaves the score untouched. The **Objects
+  with Unreadable Controls** list next to the Controls Passing tile, on the
+  Environment Overview and the Compliance World Summary, names every
+  flagged object with its kind, count, reason and control ids (the count
+  is from an earlier cycle when even the version could not be read), and
+  the object's "Compliance data not collected" alert fires
   after two cycles in a row and clears after one clean cycle. So when a
   whole kind could not be read, its Controls Passing cell keeps its last
   value (never 100 for nothing): the list and the alert are the signal.

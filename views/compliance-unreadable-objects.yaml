@@ -11,7 +11,9 @@ description: >
   score and the pass rates count only what was read. This list is where
   that missing data shows. Its "Compliance data not collected" alert
   fires after two cycles. An object whose product version could not be
-  read has no count (its controls are not known). Feeds the Environment
+  read gets no count, so its Unreadable Controls number is from an
+  earlier cycle, not current; its Control IDs column reads "(not known:
+  ...)". Feeds the Environment
   Overview and the Compliance World Summary, beside the Controls Passing
   tile.
 subjects:
@@ -45,6 +47,12 @@ columns:
     display_name: "Unreadable Controls"
   - attribute: VCF-CF Compliance|unreadable_reason
     display_name: "Reason"
+    is_property: true
+    is_string_attribute: true
+  # Current on every flagged row, including a version-unreadable object
+  # whose count above is from an earlier cycle (review W10).
+  - attribute: VCF-CF Compliance|unreadable_controls
+    display_name: "Control IDs"
     is_property: true
     is_string_attribute: true
 
