@@ -130,7 +130,7 @@ widgets:
     mode: all
     # depth 4: input is the selected vCenter row of the view above (select_first_row, so never the ComplianceWorld itself); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
     depth: 4
-    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
 interactions:
   - from: vcenter_object_type_view

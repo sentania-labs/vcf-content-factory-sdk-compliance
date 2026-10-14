@@ -186,7 +186,7 @@ widgets:
     mode: all
     # depth 5: fleet_alerts is pinned to vSphere World; World > vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 5 levels (vDS and port group chains are shorter).
     depth: 5
-    alert_types: ["15_21"]  # Application / Compliance, every pak alert is type 15 subType 21
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
     criticality: [2, 3, 4]
 
 interactions: []
