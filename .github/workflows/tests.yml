@@ -24,6 +24,6 @@ concurrency:
 
 jobs:
   tests:
-    uses: sentania-labs/vcf-content-factory-sdk-template/.github/workflows/pak-tests.yml@ci/reusable-pak-tests
+    uses: sentania-labs/vcf-content-factory-sdk-template/.github/workflows/pak-tests.yml@main
     with:
       pre-check: python3 scripts/generate_compliance_alerts.py --check
