@@ -13,7 +13,10 @@ import java.util.Map;
  * <ul>
  *   <li>#18: a failed host listing holds the Host kind back (with All and
  *       Benchmark), sets Rollup|incomplete = 1 and lets the other kinds be
- *       collected, instead of failing the cycle with no signal.</li>
+ *       collected, instead of failing the cycle with no signal. The
+ *       benchmark memory of a held-back kind is not trimmed (external
+ *       review P2), so a version unreadable the cycle after still reuses
+ *       the object's last benchmark.</li>
  *   <li>#16 (first slice): every per-object loop checks the stop flag
  *       before each object, so Stop Collecting abandons the cycle within
  *       one object, and the abandoned cycle is logged.</li>
@@ -39,11 +42,84 @@ public final class Build95TriageTest {
 
 	public static void main(String[] args) throws Exception {
 		hostListingFailure();
+		heldBackKindKeepsMemory();
 		stopBetweenObjects();
 		responseCap();
 		releaseOnReconfigure();
 		basicAuthUtf8();
 		System.out.println("Build95TriageTest: all assertions passed");
+	}
+
+	/**
+	 * #18, external review P2: a cycle whose host listing fails adds no
+	 * Host keys to seen; trimming the memory to seen then forgot every
+	 * host's benchmark, so a host whose version was unreadable the cycle
+	 * after was reported version-unreadable instead of reusing its last
+	 * benchmark. Every kind a cycle can hold back is run (Host, VM, vDS,
+	 * portgroup, cluster); a kind that was listed is still trimmed.
+	 */
+	static void heldBackKindKeepsMemory() {
+		Map<String, BenchmarkProfile> all = new BenchmarkLoader().loadAll(".");
+		BenchmarkSelector auto = BenchmarkSelector.auto(all);
+		BenchmarkSelector.Kind[] held = {BenchmarkSelector.Kind.HOST,
+				BenchmarkSelector.Kind.VM, BenchmarkSelector.Kind.VDS,
+				BenchmarkSelector.Kind.PORTGROUP,
+				BenchmarkSelector.Kind.CLUSTER};
+		for (BenchmarkSelector.Kind kind : held) {
+			LastBenchmarkMemory mem = new LastBenchmarkMemory();
+			String key = LastBenchmarkMemory.key(kind, "obj-1");
+			String vcKey = LastBenchmarkMemory.key(
+					BenchmarkSelector.Kind.VCENTER, "vcenter");
+			String goneVc = LastBenchmarkMemory.key(
+					BenchmarkSelector.Kind.VCENTER, "gone");
+
+			// Cycle 1: the object's version reads, it is scored and its
+			// benchmark remembered (afterPush).
+			ComplianceDecisions.Decision d1 = ComplianceDecisions.decide(auto,
+					kind, "9.0.0", mem.previous(key), all);
+			T.eq(ComplianceDecisions.Outcome.SCORE, d1.outcome,
+					kind + " scored in cycle 1");
+			mem.record(key, d1.profileName);
+			mem.record(vcKey, d1.profileName);
+			mem.record(goneVc, d1.profileName);
+
+			// Cycle 2: the kind's listing fails (held back, no keys of
+			// the kind in seen); the vCenter kind is listed as usual.
+			ComplianceRollup r2 = new ComplianceRollup();
+			java.util.List<String> none = ComplianceDecisions.listOrHoldBack(
+					() -> { throw new VimOptions.ReadFault("listing failed"); },
+					r2, kind, e -> { });
+			T.check(none == null, kind + " held back in cycle 2");
+			java.util.Set<String> seen = new java.util.HashSet<>();
+			seen.add(vcKey);
+			mem.retain(seen, r2.incompleteKinds());
+			T.eq(d1.profileName, mem.previous(key),
+					kind + " benchmark kept through the held-back cycle");
+			T.eq(null, mem.previous(goneVc),
+					"a listed kind is still trimmed to its inventory");
+
+			// Cycle 3: listed again, version unreadable: the remembered
+			// benchmark is reused, not version-unreadable.
+			ComplianceDecisions.Decision d3 = ComplianceDecisions.decide(auto,
+					kind, null, mem.previous(key), all);
+			T.eq(ComplianceDecisions.Outcome.SCORE, d3.outcome,
+					kind + " with an unreadable version is scored in cycle 3");
+			T.check(d3.reusedPrevious, kind + " reuses its last benchmark");
+			T.eq(d1.profileName, d3.profileName, kind + " same benchmark");
+
+			// The same kind listed (not held back) without the object:
+			// the object left inventory and its entry is trimmed.
+			mem.retain(new java.util.HashSet<>(),
+					new ComplianceRollup().incompleteKinds());
+			T.eq(null, mem.previous(key), kind + " trimmed once listed");
+		}
+		// Wiring (the adapter needs the SDK): the cycle trims with the
+		// rollup's held-back kinds, after every kind's collector ran.
+		String ca = OverridesTest.readSrc(CA);
+		OverridesTest.inOrder(OverridesTest.body(ca,
+				"private void collectWorldCycle("), "collectWorldCycle",
+				"collectClusters(",
+				"cycle.memory.retain(seen, rollup.incompleteKinds());");
 	}
 
 	/** #18. */

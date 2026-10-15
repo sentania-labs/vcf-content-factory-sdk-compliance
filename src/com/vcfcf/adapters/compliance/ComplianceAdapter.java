@@ -733,8 +733,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			collectClusters(selector, vcVersion, rollup, cs, seen);
 		}
 
-		// Forget applied-profile history for objects no longer in inventory.
-		cycle.memory.retain(seen);
+		// Forget applied-profile history for objects no longer in inventory,
+		// only for kinds listed this cycle: a held-back kind (listing or VCF
+		// Ops resource list failed) added no keys to seen, and trimming it
+		// would drop every remembered benchmark of that kind.
+		cycle.memory.retain(seen, rollup.incompleteKinds());
 		if (cs.skipPushedKeys > 0) {
 			// Build 92: the skipped controls are pushed every cycle, so the
 			// symptom on each key sees its cancel cycles.
