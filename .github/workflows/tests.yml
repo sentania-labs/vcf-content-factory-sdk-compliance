@@ -1,29 +1,12 @@
 # Adapter reproducibility gates on every push and pull request (compliance
-# build 59, review N4 on build 58). The same two steps also gate the tag
-# build in build-pak-on-tag.yml; running them here catches a stale
-# generated alert block or a failing unit test a round before release.
-#
-# GitHub-hosted runner, never the self-hosted pool (build 60, review B1 on
-# build 59): this repo is public and the job runs pull-request code, so it
-# must not share a runner with the release job (which holds
-# SDK_RUNTIME_SSH_KEY and contents: write). It needs neither the lab nor a
-# Docker daemon. Actions stay pinned to full commit SHAs.
-#
-# No secrets and no Broadcom SDK jar, ever: every suite in
-# ci/run_java_tests.sh (BenchmarkLoaderTest, ProfileSetTest,
-# BenchmarkSelectorTest, ControlEvaluatorTest, ComplianceRollupTest,
-# ComplianceDecisionsTest, MixedVersionSimulationTest) and the generator's
-# unittest suite compile and run on a plain JDK + python3, so the full set
-# runs here, and the same set gates the tag build. The one download is
-# BcHandshakeTest's (build 94): the public BouncyCastle TLS jars from
-# Maven Central, no credentials, SHA-256 pinned in the script, test only.
-#
-# JDK matrix: 17 (the long-standing CI JDK) and 25 (the newest LTS). JDK
-# behavior drifts between releases in ways the adapter reads: zone-name
-# rendering (CDT on 17, GMT-05:00 on 25) and the HttpsURLConnection
-# hostname-rejection wording both escaped to Codex review on 17 alone
-# (PRs #45 and #46). Both legs must pass; fail-fast is off so one leg's
-# failure does not hide the other's.
+# builds 59, 60, 94): the generated-alert currency check, then
+# ci/run_java_tests.sh on JDK 17 and 25. Both also gate the tag build in
+# build-pak-on-tag.yml. The job now lives in the SDK template's reusable
+# workflow, which carries the full rationale (GitHub-hosted only, no
+# secrets, no SDK jar, why two JDKs):
+# sentania-labs/vcf-content-factory-sdk-template/.github/workflows/pak-tests.yml
+# This repo adds only the pre-check. Job ids are `tests` on both sides, so
+# the legs report as `tests / tests (17)` and `tests / tests (25)`.
 name: tests
 
 on:
@@ -41,24 +24,6 @@ concurrency:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        java: ['17', '25']
-
-    steps:
-      - name: Checkout adapter source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java }}
-
-      - name: Check generated alert definitions are current
-        run: python3 scripts/generate_compliance_alerts.py --check
-
-      - name: Run adapter unit tests
-        run: bash ci/run_java_tests.sh
+    uses: sentania-labs/vcf-content-factory-sdk-template/.github/workflows/pak-tests.yml@main
+    with:
+      pre-check: python3 scripts/generate_compliance_alerts.py --check
