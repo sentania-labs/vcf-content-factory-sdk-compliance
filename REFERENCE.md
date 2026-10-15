@@ -74,6 +74,9 @@ Compliance World".
 | `Rollup\|Environment\|non_compliant` | Non-Compliant Objects | metric | none | yes |
 | `Rollup\|Environment\|no_benchmark` | Objects Without Benchmark | metric | none | yes |
 | `Rollup\|Environment\|avg_score` | Average Score | metric | % | yes |
+| `Rollup\|Environment\|controls_evaluated` | Controls Evaluated | metric | none | yes |
+| `Rollup\|Environment\|controls_passed` | Controls Passed | metric | none | yes |
+| `Rollup\|Environment\|pass_rate` | Controls Passing | metric | % | yes |
 
 ---
 

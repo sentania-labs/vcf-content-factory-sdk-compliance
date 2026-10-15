@@ -70,7 +70,10 @@ Summary tab shows the environment tiles, the per-vCenter table, the score
 trend, the SCG version spread and the open compliance alerts on one page.
 These screenshots come from a lab with three vCenters.
 
-**Environment Overview** is the landing page: the average score, how many
+**Environment Overview** is the landing page: the share of controls
+passing across the environment (controls passed over controls evaluated,
+from what was read, build 95), beside it the objects the adapter could not
+fully read and why, how many
 objects are non-compliant, how many have no guide for their version, how
 many were scored (so a 0 non-compliant reading is never shown without its
 denominator), and how each vCenter is doing broken down by object type. Further down it
@@ -151,6 +154,45 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   re-imported by the same upgrade. Existing alerts are renamed in place
   (alert ids and start times are kept) and existing symptom and alert
   definitions take the new wait and cancel cycles. See [installing.md](docs/installing.md#upgrading).
+- **The percentages are controls passing, not an average of objects.**
+  (Build 95.) Every percentage on the dashboards is controls passed over
+  controls evaluated, so each control on each object counts once (a host
+  has several times the controls of a port group); before, each object counted once whatever its
+  size, which let many port groups and VMs lift the environment number
+  above every low-count kind. Each vCenter object carries, per kind and
+  for All, `VCF-CF Compliance|Rollup|<kind>|controls_evaluated`,
+  `controls_passed` and `pass_rate`; the Compliance World carries the
+  environment sums and `Rollup|Environment|pass_rate`. An object's own
+  score follows the same rule: passed over evaluated, from what was read.
+  The old averages (`avg_score`) are still collected but no longer shown.
+- **Missing data is skipped and flagged, never scored.** (Build 95, Scott
+  2026-10-14.) A setting the adapter could not read this cycle is not
+  pushed: its last value and any alert on it stay as they were, it is
+  outside the object's score and every percentage, and it is never a pass
+  or a failure. Instead the object is flagged:
+  `VCF-CF Compliance|has_unreadable` = 1 (0 when everything was read,
+  pushed every cycle), with `unreadable_count`, `unreadable_reason` (the
+  cause in plain words, such as "host not responding" or "permission
+  refused", plus the detail the adapter logged) and `unreadable_controls`
+  (the control ids, the first 20 then "+N more"). An object with nothing
+  readable this cycle (a host vCenter reports not responding, for example)
+  pushes only those signals, so its last score and Controls Evaluated stay
+  on screen, not current: the **Not Read** column (`has_unreadable`)
+  beside the score in the six per-kind views, and the same row in the ESX
+  Hosts dashboard's host details, show it. A partial read outage still
+  moves the score, over what was read, either way (hiding a passing control
+  lowers it), so it can raise or cancel Host Compliance Score Degraded;
+  only a whole-object outage leaves the score untouched. The **Objects
+  with Unreadable Controls** list next to the Controls Passing tile, on the
+  Environment Overview and the Compliance World Summary, names every
+  flagged object with its kind, count, reason and control ids (the count
+  is from an earlier cycle when even the version could not be read), and
+  the object's "Compliance data not collected" alert fires
+  after two cycles in a row and clears after one clean cycle. So when a
+  whole kind could not be read, its Controls Passing cell keeps its last
+  value (never 100 for nothing): the list and the alert are the signal.
+  This replaces the build 63 rule, under which an unreadable setting
+  counted as failing and pushed -1.
 - **The counts cover only objects VCF Operations knows about.** (Build
   88.) A host, VM, cluster, switch or portgroup that vCenter lists but that
   has no matching object in VCF Operations is not scored and not counted

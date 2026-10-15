@@ -1,6 +1,5 @@
 package com.vcfcf.adapters.compliance;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -169,6 +168,14 @@ final class EsxcliSoapClient {
 
 	private final Transport transport;
 
+	// Build 95 (issue #17): this cycle's measurement, null for none.
+	private volatile CycleMetrics metrics;
+
+	/** Build 95: count this client's SOAP calls into {@code m}. */
+	void setMetrics(CycleMetrics m) {
+		this.metrics = m;
+	}
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
 		this.sdkUrl = sdkUrl;
@@ -223,6 +230,28 @@ final class EsxcliSoapClient {
 		executerByHost.clear();
 		unreachableHosts.clear();
 		unreachableReported.clear();
+	}
+
+	/**
+	 * Build 95 review N3: a mid-cycle re-login replaces this client (it
+	 * carries the session cookie); the new one takes over the cycle's
+	 * unreachable-host marks (build 86) and which of them were already
+	 * reported (build 87), so a host that timed out this cycle is not
+	 * tried again, costing another timeout, until the next cycle. The
+	 * result and executer caches are not carried. Null-safe.
+	 */
+	void carryUnreachableFrom(EsxcliSoapClient prev) {
+		if (prev == null || prev == this) return;
+		Map<String, String> marks;
+		Set<String> reported;
+		synchronized (prev) {
+			marks = new HashMap<>(prev.unreachableHosts);
+			reported = new HashSet<>(prev.unreachableReported);
+		}
+		synchronized (this) {
+			unreachableHosts.putAll(marks);
+			unreachableReported.addAll(reported);
+		}
 	}
 
 	/**
@@ -617,57 +646,71 @@ final class EsxcliSoapClient {
 				+ "<soapenv:Body>" + soapBody + "</soapenv:Body>"
 				+ "</soapenv:Envelope>";
 
+		CycleMetrics m = metrics;
+		if (m != null) m.soapCall();
 		URL url = new URL(sdkUrl);
 		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 		if (conn instanceof HttpsURLConnection) {
 			// Same chain and name checks as the vCenter session (build 93).
 			VCenterCertificates.secure((HttpsURLConnection) conn, sslFactory);
 		}
-		conn.setRequestMethod("POST");
-		conn.setDoOutput(true);
-		conn.setConnectTimeout(30000);
-		conn.setReadTimeout(120000);
-		conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
-		conn.setRequestProperty("SOAPAction", soapAction);
-		if (sessionCookie != null && !sessionCookie.isEmpty()) {
-			conn.setRequestProperty("Cookie", sessionCookie);
-		}
+		int code;
+		Document doc = null;
+		VSphereClient.CappedInputStream body = null;
+		try {
+			conn.setRequestMethod("POST");
+			conn.setDoOutput(true);
+			conn.setConnectTimeout(30000);
+			conn.setReadTimeout(120000);
+			conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
+			conn.setRequestProperty("SOAPAction", soapAction);
+			if (sessionCookie != null && !sessionCookie.isEmpty()) {
+				conn.setRequestProperty("Cookie", sessionCookie);
+			}
 
-		byte[] payload = envelope.getBytes(StandardCharsets.UTF_8);
-		try (OutputStream os = conn.getOutputStream()) {
-			os.write(payload);
-		}
+			byte[] payload = envelope.getBytes(StandardCharsets.UTF_8);
+			try (OutputStream os = conn.getOutputStream()) {
+				os.write(payload);
+			}
 
-		int code = conn.getResponseCode();
-		InputStream is = (code >= 200 && code < 300)
-				? conn.getInputStream() : conn.getErrorStream();
-		byte[] respBytes = drain(is);
-		conn.disconnect();
+			code = conn.getResponseCode();
+			if (code >= 200 && code < 300) {
+				// Build 95 (issue #24): parsed from the capped stream,
+				// held once (the DOM).
+				InputStream is = conn.getInputStream();
+				if (is != null) {
+					body = new VSphereClient.CappedInputStream(is,
+							VSphereClient.MAX_SOAP_RESPONSE_BYTES);
+					// Review N2: an I/O failure mid-body is a transport
+					// failure (the catch below drops the connection), not
+					// an unparsable answer.
+					doc = VSphereClient.parseXmlOrThrow(body);
+					try { body.close(); } catch (Exception ignored) {}
+				}
+			} else {
+				// The fault body is not used; read (bounded) and drop it so
+				// the connection can be reused.
+				VSphereClient.readCapped(conn.getErrorStream(),
+						VSphereClient.MAX_FAULT_BODY_BYTES);
+			}
+		} catch (java.io.IOException e) {
+			// Build 95 (issue #17): connections are reused after a good
+			// call (no disconnect); a failed one is dropped, never reused.
+			conn.disconnect();
+			if (body != null && body.exceeded()) return null;
+			throw e;
+		}
+		if (body != null && body.exceeded()) {
+			// Build 95 (issue #24): over the cap: the call failed (the
+			// command's controls are UNREADABLE), never a partial read.
+			conn.disconnect();
+			return null;
+		}
 		if (code < 200 || code >= 300) {
 			// SOAP fault (500) or auth failure — command-failed upstream.
 			return null;
 		}
-		if (respBytes == null || respBytes.length == 0) return null;
-		return parseXml(new String(respBytes, StandardCharsets.UTF_8));
-	}
-
-	private static byte[] drain(InputStream is) throws Exception {
-		if (is == null) return null;
-		try {
-			ByteArrayOutputStream bos = new ByteArrayOutputStream();
-			byte[] buf = new byte[8192];
-			int n;
-			while ((n = is.read(buf)) >= 0) {
-				bos.write(buf, 0, n);
-			}
-			return bos.toByteArray();
-		} finally {
-			// Close even if the read throws mid-stream, so the underlying
-			// connection's input is released rather than left dangling.
-			try {
-				is.close();
-			} catch (Exception ignored) {}
-		}
+		return doc;
 	}
 
 	private static Document parseXml(String xml) {

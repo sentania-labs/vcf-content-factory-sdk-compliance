@@ -20,7 +20,7 @@ import java.util.Set;
  * to every key of every object, as VCF Ops does.
  *
  * <p>Cycle 1: vCenter 9.1.1; hosts on ESX 6.7, 7.0, 8.0 U3, 9.0, 9.1
- * (disconnected: every control unreadable, scores 0) and unmapped 10.0; VMs on the 6.7,
+ * (disconnected: every control unreadable; build 95: flagged, not scored) and unmapped 10.0; VMs on the 6.7,
  * 8.0 U3 and 10.0 hosts; a vDS reporting its own 9.0.0 (ignored) and a
  * portgroup. Cycle 2: the 8.0 host was upgraded to 9.0 while one of its
  * 8.0-only controls still reads 0 (an open alert); the 7.0 host's version
@@ -88,8 +88,14 @@ public final class MixedVersionSimulationTest {
 		T.check(!h100.containsKey(K + "score"), "10.0 host no score");
 		T.near(1, ops.get("VM|vm-b").get(K + "no_benchmark"),
 				"VM on 10.0 host no_benchmark");
-		T.near(1, ops.get("HOST|host-91").get(K + "non_compliant"),
-				"disconnected host non-compliant");
+		// Build 95: nothing readable pushes only the unreadable signals:
+		// has_unreadable = 1, no non_compliant, no score.
+		T.near(1, ops.get("HOST|host-91").get(ComplianceDecisions.HAS_UNREADABLE),
+				"disconnected host: has_unreadable = 1");
+		T.check(!ops.get("HOST|host-91").containsKey(K + "non_compliant"),
+				"disconnected host: no non_compliant pushed");
+		T.near(0, ops.get("HOST|host-90").get(ComplianceDecisions.HAS_UNREADABLE),
+				"read host: has_unreadable = 0");
 
 
 		T.near(2, r1.toStats().get(P + "Benchmark|SCG_6.7|objects"), "6.7");
@@ -102,12 +108,14 @@ public final class MixedVersionSimulationTest {
 		T.near(0, r1.toStats().get(P + "Benchmark|unknown|objects"), "unknown");
 		T.near(1, r1.toStats().get(P + "Host|no_benchmark"), "host nb");
 		T.near(1, r1.toStats().get(P + "VM|no_benchmark"), "vm nb");
-		T.near(2, r1.toStats().get(P + "Host|non_compliant"),
-				"8.0 host (fail) + 9.1 host (unreadable)");
-		T.near(5, r1.toStats().get(P + "Host|scored"),
-				"4 read hosts + the disconnected host at 0");
-		T.near(0, ops.get("HOST|host-91").get(K + "score"),
-				"disconnected host scores 0 (nothing collected)");
+		// Build 95: the rollup counts what was read; the disconnected host
+		// (nothing read) is neither scored nor non-compliant.
+		T.near(1, r1.toStats().get(P + "Host|non_compliant"),
+				"8.0 host (fail) only");
+		T.near(4, r1.toStats().get(P + "Host|scored"),
+				"4 read hosts, the disconnected host not scored");
+		T.check(!ops.get("HOST|host-91").containsKey(K + "score"),
+				"disconnected host: no score pushed (build 95)");
 		T.near(1, ops.get("HOST|host-91").get(K + "collection_failed"),
 				"disconnected host: collection_failed = 1");
 		T.near(0, ops.get("HOST|host-90").get(K + "collection_failed"),
@@ -164,11 +172,14 @@ public final class MixedVersionSimulationTest {
 		T.eq("VMware_SCG_7.0", profileName("HOST|host-70"), "7.0 reused");
 		// B2: unreadable with no history is non-compliant, not no-benchmark.
 		Map<String, Double> hn = ops.get("HOST|host-new");
-		T.near(1, hn.get(K + "non_compliant"), "new unreadable host nc");
-		T.near(0, hn.get(K + "no_benchmark"), "not no_benchmark");
+		// Build 95: nothing readable, only the flag (and the reason).
+		T.near(1, hn.get(ComplianceDecisions.HAS_UNREADABLE),
+				"new unreadable host flagged");
+		T.check(!hn.containsKey(K + "non_compliant"), "no nc pushed");
+		T.check(!hn.containsKey(K + "no_benchmark"), "no no_benchmark pushed");
 		T.check(!hn.containsKey(K + "unreadable_count"),
 				"unreadable_count not pushed when the version is unreadable");
-		T.near(0, hn.get(K + "score"), "version unreadable scores 0");
+		T.check(!hn.containsKey(K + "score"), "version unreadable: no score");
 		T.near(1, hn.get(K + "collection_failed"), "collection_failed = 1");
 		T.check(memory.previous("HOST|host-new") == null,
 				"unreadable object not remembered");
@@ -177,8 +188,8 @@ public final class MixedVersionSimulationTest {
 		Map<String, Double> s2 = r2.toStats();
 		T.near(1, s2.get(P + "Benchmark|unknown|objects"), "unknown bucket");
 		T.near(1, s2.get(P + "Host|no_benchmark"), "only the 10.0 host");
-		T.near(3, s2.get(P + "Host|non_compliant"),
-				"9.1 unreadable + new unreadable + 9.0 upgraded (fails)");
+		T.near(1, s2.get(P + "Host|non_compliant"),
+				"9.0 upgraded (fails); nothing-read hosts not counted");
 
 		// ---------------- cycle 3: bulk read fails -> nothing changes
 		String another = null;
@@ -215,11 +226,17 @@ public final class MixedVersionSimulationTest {
 		memory.clear();
 		cleaned.clear();
 		hosts.put("host-90", null);
+		Map<String, Double> h90before = new HashMap<>(ops.get("HOST|host-90"));
 		ComplianceRollup r4 = cycle(vc, hosts, vmHost, "host-91");
 		Map<String, Double> h90 = ops.get("HOST|host-90");
-		T.near(0, h90.get(K + "score"), "after restart: score 0");
+		// Build 95: the last read values stay; the flag says not current.
+		T.near(h90before.get(K + "score"), h90.get(K + "score"),
+				"after restart: last score kept");
 		T.near(1, h90.get(K + "collection_failed"), "after restart: failed");
-		T.near(1, h90.get(K + "non_compliant"), "after restart: nc");
+		T.near(1, h90.get(ComplianceDecisions.HAS_UNREADABLE),
+				"after restart: has_unreadable = 1");
+		T.near(h90before.get(K + "non_compliant"), h90.get(K + "non_compliant"),
+				"after restart: last non_compliant kept");
 		T.near(0, h90.get(K + "no_benchmark"), "after restart: not nb");
 		Map<String, Double> s4 = r4.toStats();
 		T.near(3, s4.get(P + "Benchmark|unknown|objects"),
@@ -447,7 +464,7 @@ public final class MixedVersionSimulationTest {
 		m.addAll(b.controlResults);
 		int unreadable = a.unreadableCount + b.unreadableCount;
 		return new ControlEvaluator.ComplianceResult(a.hostname, pass, fail,
-				total, unreadable, ControlEvaluator.score(pass, fail, unreadable),
+				total, unreadable, ControlEvaluator.score(pass, fail),
 				m);
 	}
 }

@@ -95,6 +95,7 @@ public final class EsxcliCycleCacheTest {
 		hostNegativeEntry();
 		cycleStartWiring();
 		unreachableReasonAndReport();
+		marksCarriedAcrossRelogin();
 		System.out.println("EsxcliCycleCacheTest: all assertions passed");
 	}
 
@@ -278,8 +279,10 @@ public final class EsxcliCycleCacheTest {
 
 		// VSphereClient.beginCycle is exactly that call (SDK class: source).
 		String vs = read("src/com/vcfcf/adapters/compliance/VSphereClient.java");
-		T.eq("EsxcliSoapClient.beginCycleOn(esxcli);",
-				body(vs, "public void beginCycle()"),
+		// Build 95 review W3: it also clears the cycle's failed-login latch
+		// (Build95CollectionTest covers that behaviour).
+		T.check(body(vs, "public void beginCycle()")
+				.endsWith("EsxcliSoapClient.beginCycleOn(esxcli);"),
 				"VSphereClient.beginCycle delegates to beginCycleOn");
 
 		// The adapter's cycle body starts with ensureConnected, beginCycle.
@@ -299,13 +302,45 @@ public final class EsxcliCycleCacheTest {
 		// Build 93: that helper is ensureConnected plus the certificate
 		// message.
 		T.check(body(ca, "private void ensureVCenterConnected()")
-				.startsWith("try { vsphere.ensureConnected();"),
+				.startsWith("try { cycle.vsphere.ensureConnected();"),
 				"the helper connects first");
-		T.eq("vsphere.beginCycle()", stmts[0].trim(),
+		T.eq("cycle.vsphere.beginCycle()", stmts[0].trim(),
 				"first statement after the connect (before any read)");
 		T.check(body(ca, "private void collectWorld(")
 				.contains("collectWorldCycle(worldRc, out);"),
 				"collectWorld runs the cycle body");
+	}
+
+	/**
+	 * Build 95 review N3: a re-login replaces the client; the new one keeps
+	 * the cycle's unreachable marks and what was already reported, and the
+	 * next cycle drops them as before.
+	 */
+	private static void marksCarriedAcrossRelogin() {
+		Fake t = new Fake();
+		t.lookupThrows.put(HOST,
+				new java.net.SocketTimeoutException("Read timed out"));
+		EsxcliSoapClient before = new EsxcliSoapClient(t);
+		before.beginCycle();
+		T.eq(EsxcliSoapClient.COMMAND_FAILED,
+				before.readField(HOST, CMD, "LogDir"), "host times out");
+		T.check(before.takeUnreachableToReport(HOST) != null,
+				"reported once before the re-login");
+		int lookups = t.lookups.get();
+
+		EsxcliSoapClient after = new EsxcliSoapClient(t);
+		after.carryUnreachableFrom(before);
+		T.eq(before.unreachableReason(HOST), after.unreachableReason(HOST),
+				"the mark survives the re-login");
+		T.eq(EsxcliSoapClient.COMMAND_FAILED,
+				after.readField(HOST, CMD2, "Mode"),
+				"its other commands still fail at once");
+		T.eq(lookups, t.lookups.get(), "no new call to the timed-out host");
+		T.eq(null, after.takeUnreachableToReport(HOST),
+				"not reported a second time this cycle");
+		after.carryUnreachableFrom(null);   // null-safe
+		after.beginCycle();
+		T.eq(null, after.unreachableReason(HOST), "next cycle drops it");
 	}
 
 	private static void unreachableReasonAndReport() throws Exception {

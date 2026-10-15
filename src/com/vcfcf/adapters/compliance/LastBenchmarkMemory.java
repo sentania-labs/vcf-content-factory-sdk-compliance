@@ -12,9 +12,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * cycle (see {@link ComplianceDecisions#decide}). It holds no cleanup state
  * (per-control cleanup reads live values from VCF Ops every cycle, see
  * {@link ComplianceDecisions#staleZeroControls}), so nothing periodic wipes
- * it. It is emptied only by a collector restart (in-memory) or an instance
- * edit ({@link #clear()} from configure, since an edit can change the
- * benchmark mode), and trimmed to objects still in inventory.
+ * it. It lives in one configuration's {@link Configured} holder, so it
+ * starts empty after a collector restart (in-memory) or an instance edit
+ * (a new holder, since an edit can change the vCenter or the benchmark
+ * mode; build 95 review W12), and is trimmed to objects still in
+ * inventory. Only kinds whose inventory was listed are trimmed: a kind held
+ * back this cycle (its listing, or its VCF Ops resource list, failed) keeps
+ * its entries, so its objects can still fall back next cycle (build 95,
+ * external review P2).
  *
  * <p>No SDK dependencies.
  */
@@ -38,12 +43,28 @@ public final class LastBenchmarkMemory {
 		return applied.put(key, profileName);
 	}
 
-	/** Forget objects no longer in inventory (bounds memory). */
-	public void retain(Set<String> seenKeys) {
-		applied.keySet().retainAll(seenKeys);
+	/**
+	 * Forget objects no longer in inventory (bounds memory). An entry is
+	 * kept when its key is in {@code seenKeys}, or when its kind is in
+	 * {@code heldBackKinds}: a held-back kind was not (fully) listed this
+	 * cycle, so an absent key there says nothing about the object.
+	 */
+	public void retain(Set<String> seenKeys,
+			Set<BenchmarkSelector.Kind> heldBackKinds) {
+		applied.keySet().removeIf(k -> !seenKeys.contains(k)
+				&& !heldBack(k, heldBackKinds));
 	}
 
-	/** Instance edit: the benchmark mode may have changed. */
+	private static boolean heldBack(String key,
+			Set<BenchmarkSelector.Kind> heldBackKinds) {
+		if (heldBackKinds == null) return false;
+		for (BenchmarkSelector.Kind kind : heldBackKinds) {
+			if (key.startsWith(kind.name() + "|")) return true;
+		}
+		return false;
+	}
+
+	/** Empty the memory (the tests; the adapter uses a new holder). */
 	public void clear() {
 		applied.clear();
 	}

@@ -18,31 +18,34 @@ import java.util.Map;
  * <pre>
  * VCF-CF Compliance|Rollup|&lt;K&gt;|scored          objects with a score this cycle
  *                                                (at least one control attempted)
- * VCF-CF Compliance|Rollup|&lt;K&gt;|non_compliant   objects with fail_count &gt; 0 or unreadable_count &gt; 0
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|non_compliant   objects with fail_count &gt; 0 (build 95: what was read)
  * VCF-CF Compliance|Rollup|&lt;K&gt;|no_benchmark    objects whose version has no SCG
  * VCF-CF Compliance|Rollup|&lt;K&gt;|score_sum       sum of those scores
  * VCF-CF Compliance|Rollup|&lt;K&gt;|avg_score       score_sum / scored (omitted when scored == 0)
  * VCF-CF Compliance|Rollup|&lt;K&gt;|unmatched       per kind, not All (build 88): objects with
  *                                                no matching VCF Ops resource, not counted
  *                                                anywhere else
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|controls_evaluated   build 95: controls passed plus failed,
+ *                                                summed over the kind's scored objects
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|controls_passed      build 95: controls passed
+ * VCF-CF Compliance|Rollup|&lt;K&gt;|pass_rate            build 95: controls_passed /
+ *                                                controls_evaluated * 100, omitted when
+ *                                                controls_evaluated == 0
  * VCF-CF Compliance|Rollup|VM|skipped_pods        vSphere Pod VMs (guest id crx*), out of scope
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
  * </pre>
  * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
  * unknown (always pushed, 0 when unused). {@code unknown} counts objects whose governing version could
  * not be read and that had no previous benchmark to fall back on (build 58);
- * they are non-compliant (unreadable), never no_benchmark.
+ * since build 95 that bucket is all they are counted in (nothing was read),
+ * never no_benchmark.
  *
- * <p>Score rule (build 63, owner decision): an object's score counts
- * unreadable controls as failing ({@link ControlEvaluator#score}), so an
- * object with every attempted control unreadable scores 0 and IS counted
- * in scored / score_sum. Only an object with nothing attempted (nothing
+ * <p>Score rule: an object is scored when at least one control was read
+ * (build 95); an object with nothing read (every attempted control
+ * unreadable, e.g. a host vCenter reports not responding, or nothing
  * evaluable, e.g. a non-vSAN cluster) contributes no score. The build-49
- * last-known-score carry-forward for unreadable hosts and the
- * {@code Rollup|Host|scored_stale} key are retired: an unreadable host now
- * contributes its real score, 0. A version-unreadable object with no
- * previous benchmark also scores 0 (build 65). No-benchmark objects are
- * counted, never scored.
+ * last-known-score carry-forward and the {@code Rollup|Host|scored_stale}
+ * key stay retired. No-benchmark objects are counted, never scored.
  *
  * <p>Scope rule (build 88, Scott 2026-10-12 "Option 1."): the rollup
  * counts only objects the adapter can push to, i.e. objects with a
@@ -52,6 +55,26 @@ import java.util.Map;
  * visible as {@code Rollup|<K>|unmatched} (0 when none) and in
  * {@link #unmatchedLogLine}. vSphere Pod VMs are out of scope and are
  * recorded with {@link #recordSkippedPod} only ({@code Rollup|VM|skipped_pods}).
+ *
+ * <p>Pass rate rule (build 95, Scott 2026-10-14 "compliance percentage is
+ * basically: Total passing controls/total controls evaluated"): the
+ * percentage shown for a kind, a vCenter and the environment is controls
+ * passed over controls evaluated, so a port group no longer weighs as much
+ * as a vCenter. Evaluated is passed plus failed; unreadable controls are in
+ * neither count (never a pass, never in the denominator). Manual review
+ * and override-skipped controls never reach the counts. With nothing
+ * evaluated, pass_rate is omitted, never 100. The object-mean keys
+ * (score_sum, avg_score) are unchanged.
+ *
+ * <p>Unreadable rule (build 95, Scott 2026-10-14, "if we have missing data
+ * we just don't log it - but flag the stale metric"): the rollup counts
+ * only what was read this cycle. There is no unreadable rollup key (the
+ * {@code controls_unreadable} key of the first build 95 draft is gone);
+ * each object carries {@code has_unreadable} and its reason instead, listed
+ * on the dashboards. An object with nothing readable (every attempted
+ * control unreadable, or its version unreadable with no benchmark to fall
+ * back on) is counted only in its Benchmark bucket: not scored, not
+ * non-compliant, no controls, no score in score_sum.
  *
  * <p>No SDK dependencies: unit-testable with a plain JDK.
  */
@@ -100,6 +123,8 @@ public final class ComplianceRollup {
 		int noBenchmark;
 		double scoreSum;
 		int unmatched;   // build 88: per kind only, never summed into All
+		long controlsEvaluated;   // build 95: passed + failed
+		long controlsPassed;      // build 95
 	}
 
 	private final Map<BenchmarkSelector.Kind, Tally> byKind =
@@ -199,9 +224,14 @@ public final class ComplianceRollup {
 		return b.toString();
 	}
 
-	/** Non-compliant rule shared with the per-object push. */
-	public static boolean isNonCompliant(int failCount, int unreadableCount) {
-		return failCount > 0 || unreadableCount > 0;
+	/**
+	 * Non-compliant rule shared with the per-object push. Build 95
+	 * (decision point 7): a failing control that was read. An unreadable
+	 * control no longer makes an object non-compliant (builds 63 to 94
+	 * did); the object's has_unreadable flag carries it.
+	 */
+	public static boolean isNonCompliant(int failCount) {
+		return failCount > 0;
 	}
 
 	/** An object whose version has no SCG (Auto mode only). */
@@ -212,37 +242,40 @@ public final class ComplianceRollup {
 
 	/**
 	 * An object whose governing version could not be read and that had no
-	 * benchmark to fall back on (build 58 B2, build 65 W1). Nothing was
-	 * collected, so by the build 63 rule it scores 0: counted as scored
-	 * with 0, non-compliant, in the {@code unknown} bucket, never as
-	 * no_benchmark.
+	 * benchmark to fall back on (build 58 B2, build 65 W1). Build 95:
+	 * nothing was read, so it is counted in the {@code unknown} bucket only:
+	 * not scored, not non-compliant, never no_benchmark. Its
+	 * has_unreadable flag carries it.
 	 */
 	public void recordVersionUnreadable(BenchmarkSelector.Kind kind) {
-		Tally t = byKind.get(kind);
-		t.nonCompliant++;
-		t.scored++;
-		t.scoreSum += 0.0;
 		bump(BenchmarkSelector.BUCKET_UNKNOWN);
 	}
 
 	/**
-	 * An object evaluated against benchmark {@code bucket}. Scored (build
-	 * 63) when at least one control was attempted
-	 * ({@code totalCount + unreadableCount > 0}); {@code score} is then the
-	 * unreadable-counts-as-failing score. Nothing attempted adds to the
-	 * benchmark bucket only.
+	 * An object evaluated against benchmark {@code bucket}. Build 95: the
+	 * counts come from what was read, so the object is scored, and can be
+	 * non-compliant, only when at least one control was read
+	 * ({@code totalCount > 0}). Nothing read (nothing attempted, or every
+	 * attempted control unreadable) adds to the benchmark bucket only.
 	 */
 	public void recordEvaluated(BenchmarkSelector.Kind kind, String bucket,
 			int totalCount, int failCount, int unreadableCount, double score) {
 		Tally t = byKind.get(kind);
 		bump(bucket);
-		if (isNonCompliant(failCount, unreadableCount)) {
+		if (totalCount <= 0) {
+			return;   // nothing read: no score, no counts (build 95)
+		}
+		if (isNonCompliant(failCount)) {
 			t.nonCompliant++;
 		}
-		if (totalCount + unreadableCount > 0) {
-			t.scored++;
-			t.scoreSum += score;
-		}
+		t.scored++;
+		t.scoreSum += score;
+		// Build 95: control counts. totalCount is passed + failed
+		// (ComplianceResult), unreadable is in neither.
+		int evaluated = Math.max(0, totalCount);
+		int failed = Math.min(Math.max(0, failCount), evaluated);
+		t.controlsEvaluated += evaluated;
+		t.controlsPassed += evaluated - failed;
 	}
 
 	private void bump(String bucket) {
@@ -259,6 +292,8 @@ public final class ComplianceRollup {
 			all.nonCompliant += t.nonCompliant;
 			all.noBenchmark += t.noBenchmark;
 			all.scoreSum += t.scoreSum;
+			all.controlsEvaluated += t.controlsEvaluated;
+			all.controlsPassed += t.controlsPassed;
 		}
 		boolean complete = incomplete.isEmpty();
 		// Build 79 (review of build 78, WARNING): pushed EVERY cycle, never
@@ -305,5 +340,22 @@ public final class ComplianceRollup {
 		if (t.scored > 0) {
 			out.put(p + "avg_score", t.scoreSum / t.scored);
 		}
+		// Build 95: control counts and the pass rate. Same no-sentinel
+		// contract: no pass_rate without at least one evaluated control.
+		out.put(p + "controls_evaluated", (double) t.controlsEvaluated);
+		out.put(p + "controls_passed", (double) t.controlsPassed);
+		Double rate = passRate(t.controlsPassed, t.controlsEvaluated);
+		if (rate != null) {
+			out.put(p + "pass_rate", rate);
+		}
+	}
+
+	/**
+	 * Build 95: passed / evaluated * 100, or null when nothing was
+	 * evaluated (no data, never a substituted 100).
+	 */
+	public static Double passRate(long passed, long evaluated) {
+		if (evaluated <= 0) return null;
+		return (double) passed / evaluated * 100.0;
 	}
 }

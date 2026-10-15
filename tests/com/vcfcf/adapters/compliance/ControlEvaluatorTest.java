@@ -47,7 +47,12 @@ public final class ControlEvaluatorTest {
 						"vm1", unreadable);
 		T.eq(0, r.totalCount, "unreadable not in total");
 		T.eq(1, r.unreadableCount, "unreadable counted");
-		T.near(0, r.score, "build 63: only control unreadable -> score 0");
+		// Build 95 (point 7): nothing read, so no score; the value is the
+		// zero-divisor placeholder, never pushed (build 63 said 0).
+		T.near(100, r.score, "only control unreadable: placeholder");
+		T.check(ComplianceDecisions.nothingReadable(r), "nothing read");
+		T.check(!ComplianceDecisions.complianceStats(r).containsKey(
+				"VCF-CF Compliance|score"), "and no score pushed");
 		T.check(r.controlResults.get(0).unreadable, "result marked unreadable");
 		T.check(!r.controlResults.get(0).compliant, "unreadable not compliant");
 
@@ -56,8 +61,9 @@ public final class ControlEvaluatorTest {
 				"vm1", unreadable);
 		T.eq(1, r.passCount, "vmx-19 passes the 17 floor");
 
-		// Build 63: one pass + one unreadable -> 50 (unreadable counts as
-		// failing), while fail_count stays 0 and unreadable_count 1.
+		// Build 95 (point 7): one pass + one unreadable -> 100 over what was
+		// read (build 63 said 50: unreadable counted as failing);
+		// fail_count stays 0 and unreadable_count 1.
 		BenchmarkProfile.Control secure = new BenchmarkProfile.Control(
 				"vm.secure-boot", "P0", "VirtualMachine", "VMWARE",
 				"config.bootOptions.efiSecureBootEnabled", "vim_property",
@@ -69,7 +75,7 @@ public final class ControlEvaluatorTest {
 		ControlEvaluator.ComplianceResult m =
 				ControlEvaluator.evaluateVimProperties(Arrays.asList(vh, secure),
 						mixed, "vm1", unreadable);
-		T.near(50, m.score, "partial unreadable lowers the score");
+		T.near(100, m.score, "an unreadable control no longer lowers it");
 		T.eq(0, m.failCount, "fail_count unchanged by unreadable");
 		T.eq(1, m.unreadableCount, "unreadable counted separately");
 		T.eq(2, m.attempted(), "attempted = pass + fail + unreadable");

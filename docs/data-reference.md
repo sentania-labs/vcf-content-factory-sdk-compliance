@@ -43,9 +43,11 @@ installing.md, TLS section and Upgrading.
 - **Version the adapter could not read:** never a guess and never "no
   benchmark". The object is scored against the SCG it had last cycle; with
   no previous SCG (e.g. right after a collector restart) nothing was
-  collected: `profile_name` = `benchmark unknown: ESX version unreadable`,
-  score 0, `non_compliant` = 1, `collection_failed` = 1 (raises
-  "Compliance data not collected").
+  collected. Build 95: only the unreadable signals are pushed,
+  `has_unreadable` = 1, `collection_failed` = 1 and `unreadable_reason` =
+  `product version unreadable (...)` (no score, no counters, no
+  `non_compliant`; the last values stay). It raises "Compliance data not
+  collected" after two cycles.
 - **Overrides file (build 90):** applied on top. A `Profile` pin
   replaces Auto for every kind (no `kind`, the instance-wide pin) or for
   one kind (a `kind` pin wins over the instance-wide pin), whatever the
@@ -84,10 +86,17 @@ VCF-CF Compliance|<control_id>|Actual        property
 VCF-CF Compliance|<control_id>|Expected      property
 VCF-CF Compliance|<control_id>|Description   property
 VCF-CF Compliance|<control_id>|Compliant     metric: 1 compliant, 0 non-compliant,
-                                             -1 not evaluated (unreadable, no
-                                             longer in the applied benchmark, or
-                                             skipped by the overrides file)
+                                             -1 not evaluated (no longer in the
+                                             applied benchmark, or skipped by the
+                                             overrides file)
 ```
+
+Build 95 (Scott 2026-10-14): a control the adapter could not read this
+cycle is not pushed at all, whatever the cause (a host vCenter reports
+not responding included): no Compliant value, no Actual. Its last value,
+and any alert on it, stay as they were; the object's `has_unreadable`
+flag says the data is not current. Builds 57 to 94 pushed -1 and Actual
+`(unreadable)`.
 
 Build 90: for a control whose expected value comes from the overrides
 file, Expected reads `<value> (site override)` and a read Actual reads
@@ -109,25 +118,87 @@ Actual values you can see:
   matching setting with its value, for example
   `ethernet0.filter0.name=dvfilter-generic-vmware`. Any match fails
   `Not Present` (build 90; before build 90 this control always passed).
-- `(unreadable)`: the read failed; Compliant is -1.
+- `(unreadable)`: no longer pushed (build 95); an Actual reading
+  `(unreadable)` is left from build 94 or earlier and is replaced the
+  next time the control is read.
 - the site-override and skipped forms above.
 
 Per object:
 ```
 VCF-CF Compliance|profile_name       property: benchmark applied, or "no benchmark for ..."
-VCF-CF Compliance|score              0-100%: pass / (pass + fail + unreadable); unreadable
-                                     counts as failing; 0 when every control was unreadable;
-                                     not pushed only when nothing was attempted
+VCF-CF Compliance|score              0-100%: pass / (pass + fail), over what was read
+                                     (build 95; unreadable is in neither count); pushed only
+                                     when at least one control was read
 VCF-CF Compliance|pass_count         controls that passed
 VCF-CF Compliance|fail_count         controls evaluated and failed (unreadable NOT included)
-VCF-CF Compliance|total_count        pass + fail (0 when nothing was evaluated)
-VCF-CF Compliance|unreadable_count   not pushed when the governing version cannot be read
-VCF-CF Compliance|non_compliant      1 when fail_count > 0 or unreadable_count > 0
+VCF-CF Compliance|total_count        pass + fail; not pushed when nothing was read (it
+                                     keeps its last value; has_unreadable = 1 marks that)
+VCF-CF Compliance|unreadable_count   controls not read this cycle; not pushed when the
+                                     governing version cannot be read
+VCF-CF Compliance|non_compliant      1 when fail_count > 0 (build 95: a failing control
+                                     that was read; unreadable alone is not non-compliant)
 VCF-CF Compliance|no_benchmark       1 when the version has no SCG
 VCF-CF Compliance|collection_failed  1 when nothing could be read on the object (every attempted
                                      control unreadable, or its version unreadable with no
                                      previous SCG); 0 otherwise; pushed every cycle
+VCF-CF Compliance|has_unreadable     build 95: 1 when any control could not be read this
+                                     cycle, else 0; pushed every cycle on every object; the
+                                     "Compliance data not collected" alerts fire on it
+VCF-CF Compliance|unreadable_reason  build 95, property: why, per cause in plain words plus
+                                     the detail the adapter logged (see below); "" when
+                                     everything was read
+VCF-CF Compliance|unreadable_controls build 95, property: the unreadable control ids,
+                                     sorted, the first 20 then "(+N more)"; "" when none
+VCF-CF Compliance|object_kind        build 95, property: ESX host, VM, vCenter, Cluster,
+                                     Distributed switch or Distributed portgroup (the kind
+                                     column of the Objects with Unreadable Controls list)
 ```
+
+**An object with nothing readable** this cycle (every attempted control
+unreadable, or its version unreadable with no previous SCG) pushes only
+`has_unreadable` = 1, `unreadable_count` (when known), `collection_failed`
+= 1, `unreadable_reason`, `unreadable_controls` and `object_kind`: no
+score, no pass / fail / total, no `non_compliant`, no per-control value.
+Its last score and `total_count` stay on screen, not current: the Not
+Read column (`has_unreadable`) beside the score in the six per-kind
+views, and the same row in the ESX Hosts host details, mark them (the
+ESX Hosts heatmap colors by score alone and does not). A
+version-unreadable object's `unreadable_controls` reads `(not known: the
+benchmark depends on the version)`: its controls are not invented.
+
+**`unreadable_reason` wording** (build 95). Each cause the adapter logs
+is given in plain words, followed by the logged detail in brackets, for
+example `host not responding (host-not-connected:
+connectionState=notResponding)`. With several causes, each is followed by
+its control count and they are listed most controls first (equal counts
+in alphabetical order of the plain words, and the alphabetically first
+logged detail of each cause, so the text does not change with the order
+the controls were read in), separated by "; ", at most 1000 characters (then "(+N more causes)"). The plain words
+per logged reason code:
+
+| Reason code | Plain words |
+|---|---|
+| `host-not-connected` (connectionState notResponding / disconnected) | host not responding / host disconnected |
+| `advanced-settings-unreadable` (host flapped) | host disconnected during the read |
+| `advanced-settings-unreadable` (other) | host advanced settings unreadable |
+| `extraconfig-unreadable` | VM advanced settings unreadable |
+| `vcenter-settings-unreadable` | vCenter advanced settings unreadable |
+| `esxcli-host-unreachable` | host unreachable for esxcli |
+| `esxcli-unavailable` | esxcli unavailable |
+| `esxcli-command-failed` / `esxcli-field-missing` | esxcli command failed / esxcli field missing |
+| `soap-fault` naming NoPermission | permission refused |
+| `soap-fault` (other) | vCenter returned a fault |
+| `response-too-large` | vCenter response over the size cap |
+| `missing-element` | setting not returned by vCenter |
+| `prefix-cap` | property path not reachable |
+| `vami-session` | appliance session refused |
+| `vami-http-401` / `vami-http-403` | appliance permission refused |
+| `vami-http-<other>` | appliance returned HTTP `<status>` |
+| `vami-exception` / `vami-parse` / `vami-field-missing` | appliance not reached / appliance answer not readable / appliance field missing |
+| `vsan-probe-failed` | vSAN probe failed |
+| `version-unreadable` | product version unreadable |
+| any other code | could not be read (`<code>`) |
+
 
 Per vCenter (on each VMWARE `VMwareAdapter Instance`), `<K>` in `All`,
 `Host`, `VM`, `vCenter`, `Cluster`, `vDS`, `Portgroup`:
@@ -136,7 +207,14 @@ VCF-CF Compliance|Rollup|<K>|scored
 VCF-CF Compliance|Rollup|<K>|non_compliant
 VCF-CF Compliance|Rollup|<K>|no_benchmark
 VCF-CF Compliance|Rollup|<K>|score_sum
-VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0
+VCF-CF Compliance|Rollup|<K>|avg_score        only when scored > 0; mean of the object scores
+                                               (kept, no longer displayed, build 95)
+VCF-CF Compliance|Rollup|<K>|controls_evaluated  build 95: controls passed plus failed, summed
+                                               over the kind's scored objects
+VCF-CF Compliance|Rollup|<K>|controls_passed     build 95: controls passed
+VCF-CF Compliance|Rollup|<K>|pass_rate           build 95, %: controls_passed /
+                                               controls_evaluated * 100; only when
+                                               controls_evaluated > 0 (never 100 on nothing)
 VCF-CF Compliance|Rollup|<K>|unmatched        not for All (build 88): objects vCenter listed
                                                with no matching VCF Ops resource, so not
                                                scored and in no other key; 0 when none
@@ -205,16 +283,59 @@ DEBUG; the per-cycle count is at INFO ("vSphere Pod VM(s) skipped"). If
 the bulk listing cannot return the guest id in a cycle, Pods are not
 recognised that cycle and show up under `Rollup|VM|unmatched` instead.
 
-**Unreadable counts as failing (build 63, owner decision).** A setting the
-adapter could not read is counted against the score like a failure, so an
-object whose every setting was unreadable scores 0. It is not a violation:
-`fail_count` does not include it, its `Compliant` is -1 (no per-control
-alert), and `unreadable_count` carries it separately. Instead each kind has
-a "Compliance data not collected" alert (see Alerts). `score` and
-`avg_score` are not pushed only when nothing was attempted (a no-benchmark
-object, a non-vSAN cluster); VCF Ops then keeps showing the last value it
-had, so read them with `total_count` / `unreadable_count` / `no_benchmark`
-(per object) and `scored` (per vCenter, pushed every cycle).
+**Unreadable data is skipped and flagged per object (build 95, Scott
+2026-10-14: "if we have missing data we just don't log it - but flag the
+stale metric, and then that becomes an alarm").** A setting the adapter
+could not read this cycle is not pushed: its last `Compliant` value and
+any per-control alert stay as they were. It is never a pass and never a
+failure: it is outside the object's `score` (passed over evaluated, over
+what was read), outside `non_compliant` and outside every rollup count
+and pass rate. The object is flagged instead: `has_unreadable` = 1 with
+`unreadable_count`, `unreadable_reason` and `unreadable_controls`, listed
+on the Objects with Unreadable Controls view beside the Controls Passing
+tile, and after two cycles in a row its "Compliance data not collected"
+alert fires (see Alerts). An object with nothing readable pushes only
+those signals, so its last score stays on screen, marked by Not Read
+beside it in the per-kind views and the host details. A partial
+read outage still moves the score, over what was read, and can raise or
+cancel Host Compliance Score Degraded; only a whole-object outage leaves
+the score untouched. This replaces the build 63 rule (owner decision 2026-09-23), under
+which an unreadable setting counted as failing, pushed -1, made the object
+non-compliant and an all-unreadable object scored 0. `score` and
+`avg_score` are not pushed when nothing was read (an all-unreadable
+object, a no-benchmark object, a non-vSAN cluster); VCF Ops then keeps
+showing the last value it had, so read them with `has_unreadable` and
+`no_benchmark` (per object, both pushed every cycle; `total_count` is not
+pushed when nothing was read, so it is stale too) and `scored` (per
+vCenter, pushed every cycle).
+
+**The percentage is controls passing (build 95, Scott 2026-10-14).**
+Every percentage the dashboards show for a kind, a vCenter or the
+environment is `pass_rate`: controls passed over controls evaluated,
+counting each control on each object once. Before build 95 they showed
+`avg_score`, the mean of the object scores, which weighs every object the
+same: a port group with 7 evaluated controls (SCG 9.1) counted as much as
+a host with 56, so many well-configured port groups and VMs could lift the
+environment above every low-count kind (prod, 2026-10-14: 79.9% while
+vCenters scored 50 and vDS 75). Two kinds of number now sit side by side:
+- **Pass rate**, over controls: how much of the guide is met.
+- **Object counts** (`scored`, `non_compliant`, `no_benchmark`): how many
+  objects had at least one control read and how many have at least one
+  failing control that was read.
+
+Both come from what was read this cycle. Unreadable controls are in
+neither part of the pass rate (not passes, not in the denominator) and
+there is no unreadable rollup key: missing data shows per object, on the
+Objects with Unreadable Controls list and in the "Compliance data not
+collected" alerts. The per-object `score` follows the same rule (build
+95), so an object's score and its kind's pass rate agree. An object with
+nothing read is counted only in its `Benchmark|<B>|objects` bucket (a
+version-unreadable object in `unknown`). When nothing of a kind could be
+read, its `pass_rate` is not pushed and the cell keeps its last value
+(never 100 for nothing); the list and the alert say why. Manual-review and
+override-skipped controls are never evaluated and are in no count.
+`avg_score` and `score_sum` are still pushed; the alerts on a host's own
+`score` are unchanged.
 
 ## Keys on the pack's Compliance World
 
@@ -234,9 +355,14 @@ Rollup|Environment|scored            sum of every vCenter's VCF-CF Compliance|Ro
 Rollup|Environment|non_compliant     sum of every vCenter's VCF-CF Compliance|Rollup|All|non_compliant
 Rollup|Environment|no_benchmark      sum of every vCenter's VCF-CF Compliance|Rollup|All|no_benchmark
 Rollup|Environment|avg_score         % : summed Rollup|All|score_sum / summed Rollup|All|scored
+                                     (kept, no longer displayed, build 95)
+Rollup|Environment|controls_evaluated  build 95: sum of every vCenter's Rollup|All|controls_evaluated
+Rollup|Environment|controls_passed     build 95: sum of every vCenter's Rollup|All|controls_passed
+Rollup|Environment|pass_rate           build 95, % : summed Rollup|All|controls_passed /
+                                       summed Rollup|All|controls_evaluated * 100
 ```
 
-- **Engine-computed.** The four `Rollup|Environment` keys are
+- **Engine-computed.** The `Rollup|Environment` keys are
   `ComputedMetrics` declared on the ComplianceWorld kind in
   `describe.xml`. VCF Operations evaluates them over the Compliance
   World's `VMWARE / VMwareAdapter Instance` children (the vCenters), the
@@ -252,6 +378,10 @@ Rollup|Environment|avg_score         % : summed Rollup|All|score_sum / summed Ro
   is expected to have no data (0 over 0; not yet observed on a live
   instance) while `non_compliant` reads 0, so read `non_compliant` with
   `scored`.
+- **`pass_rate` is a ratio of sums** (build 95): summed `controls_passed`
+  over summed `controls_evaluated` across the vCenters, never a mean of
+  per-vCenter rates. With nothing evaluated anywhere it is expected to have
+  no data (0 over 0), never 100; read it with `controls_evaluated`.
 - **The parent/child link.** Each adapter instance, every cycle, makes its
   own vCenter's `VMwareAdapter Instance` a child of the Compliance World
   through an additive Suite API relationship add (it never replaces the
@@ -262,23 +392,58 @@ Rollup|Environment|avg_score         % : summed Rollup|All|score_sum / summed Ro
 
 ## Dashboards
 
-The pak installs four dashboards (plus their eight views) and the
+The pak installs four dashboards (plus their nine views) and the
 Compliance World Summary tab:
 
 | Dashboard | What it is for |
 |---|---|
-| [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). |
+| [VCF Content Factory] Compliance Environment Overview | The landing page: environment controls passing, beside it the objects with unreadable controls (build 95), non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Read in the host list and the host details marks it (build 95). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
-| [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
+| [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the objects with unreadable controls, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
 
-The Environment Overview's four score tiles and its score trend read the
-Compliance World's `Rollup|Environment|*` keys (above); no widget needs
+The Environment Overview's four tiles (Controls Passing, Non-Compliant,
+Without Benchmark, Objects Scored) and its trend (Controls Passing and
+Non-Compliant Objects) read the
+Compliance World's `Rollup|Environment|*` keys (above). The per-vCenter
+table shows the vCenter's All Controls Passing (%), Passed and Evaluated
+(`Rollup|All|pass_rate`, `controls_passed`, `controls_evaluated`; summed
+Passed over summed Evaluated in the totals row is the Controls Passing
+tile), Controls Passing (%) per kind (`Rollup|<K>|pass_rate`; the vCenter
+kind's column is "vCenter Appliance Controls Passing", the appliance
+controls only, not the vCenter's overall rate), and per kind a "Not in VCF Ops"
+column (`Rollup|<K>|unmatched`, issue #39); its totals row sums the count
+columns, not the percentages. Objects by SCG Version lists the newest
+guide first and spans the page (issue #32). The ESX Hosts heatmap colours
+on a fixed 0 to 100 scale: red below 80, amber 80 to 95, green from 95
+(issue #33). No widget needs
 policy enablement. The Objects Scored tile sits beside Non-Compliant
 Objects so that a 0 non-compliant reading is always shown with its
 denominator: 0 non-compliant with 0 scored means nothing was evaluated,
 not all clear.
+
+**Objects with Unreadable Controls** (build 95), next to the Controls
+Passing tile on the Environment Overview and the World Summary: the view
+"[VCF Content Factory] Compliance Objects with Unreadable Controls" lists
+every ESX host, VM, vCenter, cluster, distributed switch and distributed
+portgroup whose `has_unreadable` is 1, with its kind (`object_kind`),
+`unreadable_count`, `unreadable_reason` and `unreadable_controls`. For
+an object whose product version could not be read, `unreadable_count`
+is not pushed, so the count shown is from an earlier cycle; its
+`unreadable_controls` reads `(not known: ...)` and is current. It is the signal for missing
+data: the percentages count only what was read, so an object or a whole
+kind that could not be read keeps its last value on the tiles and in the
+table, and appears here. An empty list means every object the adapter
+visited on its last cycle was fully read. It says nothing about objects
+the cycle did not visit: when a kind's listing failed (that kind is held
+back) or vCenter could not be reached at all, those objects keep the
+flag from their last visit, so they stay off (or on) the list as they
+were. Both cases set `Rollup|incomplete` = 1 on the vCenter, which
+raises "Compliance data not collected (vCenter)"; an unreachable vCenter
+also leaves the ComplianceWorld resource in collection status down (no
+connection) or error (login or certificate), and the adapter log names
+the failed listing or the connection error.
 
 Builds 61 to 85 bundled four super metrics on `vSphere World` for those
 tiles ("[VCF Content Factory] Compliance Average Score", "... Non-Compliant
@@ -305,14 +470,21 @@ and recommendation names carry no prefix.
 
 - One "Compliance data not collected (<kind>)" alert per object kind
   (ESX host, VM, vCenter, cluster, distributed switch, distributed
-  portgroup), severity Immediate, raised when `unreadable_count` > 0 (the
-  adapter could not read some settings, and they count as failing in the
-  score) OR `collection_failed` = 1 (nothing could be read at all,
-  including an object whose version could not be read). Its recommendation explains the causes
-  (connectivity, permissions, read method not supported on this version),
-  where to see which settings (`unreadable_count`, and the controls whose
-  `Compliant` is -1 with Actual "(unreadable)"), and what to check. Alert
-  ids `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`.
+  portgroup), severity Immediate, raised when `has_unreadable` = 1 for
+  two cycles in a row (build 95: some or all of the object's settings
+  could not be read, an object whose version could not be read included)
+  and cleared after one cycle that reads everything. The build 65
+  `unreadable_count` > 0 OR `collection_failed` = 1 pair is retired. On
+  the vCenter the alert also fires on `Rollup|incomplete` = 1 (an
+  inventory listing failed). Its recommendation explains what is not
+  current (the setting is not pushed; the score counts only what was
+  read), the causes (connectivity, permissions, read method not supported
+  on this version), where to see which settings and why
+  (`unreadable_reason`, `unreadable_controls`, `unreadable_count`, the
+  Objects with Unreadable Controls list), and what to check. Alert ids
+  `vcfcf_compliance_collection_{host,vm,vcenter,cluster,vds,portgroup}`;
+  symptom ids `vcfcf_compliance_collection_<kind>_unreadable` (kept from
+  build 63, new condition).
 
 - `VCF Content Factory Compliance Alert: Compliance overrides file not
   loaded` (build 90) on the vCenter object (`VMwareAdapter Instance`),
@@ -326,10 +498,13 @@ All compliance alerts are type Compliance (subType 21).
 
 Wait and cancel cycles (build 86): the per-control alerts and the score
 alert, and their symptoms, raise after 1 cycle and cancel after 3
-consecutive cycles without the condition, so one cycle in which a failing
-control could not be read (`Compliant` -1) does not close the finding. A
-fixed control therefore clears its alert after 3 cycles (15 minutes at the
-5 minute default). The collection alerts raise and cancel after 1 cycle.
+consecutive cycles without the condition. A fixed control therefore
+clears its alert after 3 cycles (15 minutes at the 5 minute default).
+Since build 95 a cycle in which a failing control could not be read
+pushes nothing for it, so the finding stays open. The collection alerts'
+`has_unreadable` symptom raises after 2 consecutive cycles and cancels
+after 1 (build 95); the vCenter's `Rollup|incomplete` symptom and the
+overrides alert raise and cancel after 1 cycle.
 
 ## Limitations
 

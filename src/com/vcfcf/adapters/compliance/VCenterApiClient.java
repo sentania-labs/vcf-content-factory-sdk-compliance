@@ -9,7 +9,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Base64;
 
 public final class VCenterApiClient {
 
@@ -41,13 +40,14 @@ public final class VCenterApiClient {
 	}
 
 	public String login() throws IOException, InterruptedException {
-		String credentials = Base64.getEncoder().encodeToString(
-				(username + ":" + password).getBytes());
+		// Build 95 (issue #25): UTF-8, not the platform charset.
+		String authorization = ComplianceDecisions.basicAuthorization(
+				username, password);
 
 		HttpRequest req = HttpRequest.newBuilder()
 				.uri(URI.create(baseUrl + "/api/session"))
 				.POST(HttpRequest.BodyPublishers.ofString(""))
-				.header("Authorization", "Basic " + credentials)
+				.header("Authorization", authorization)
 				.header("Content-Type", "application/json")
 				.timeout(Duration.ofSeconds(30))
 				.build();

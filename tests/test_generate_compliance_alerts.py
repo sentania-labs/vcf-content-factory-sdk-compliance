@@ -106,11 +106,16 @@ class GeneratorTest(unittest.TestCase):
     def test_wait_and_cancel_cycles(self):
         # Build 86 (owner decision "let's set the alarm cycle cancel to
         # 3"): per-control and score symptoms/alerts wait 1, cancel 3;
-        # collection-health symptoms/alerts wait 1, cancel 1.
+        # collection-health symptoms/alerts wait 1, cancel 1, except the
+        # build 95 has_unreadable symptoms: wait 2, cancel 1 (Scott
+        # 2026-10-14: alert after two consecutive cycles, clear after one
+        # clean cycle; the alert's own wait of 1 adds no cycle).
         self.assertEqual((gen.CONTROL_WAIT_CYCLE, gen.CONTROL_CANCEL_CYCLE),
                          (1, 3))
         self.assertEqual((gen.COLLECTION_WAIT_CYCLE,
                           gen.COLLECTION_CANCEL_CYCLE), (1, 1))
+        self.assertEqual((gen.UNREADABLE_WAIT_CYCLE,
+                          gen.UNREADABLE_CANCEL_CYCLE), (2, 1))
         seen = {"control": 0, "score": 0, "collection": 0, "overrides": 0}
         for tag in ("SymptomDefinition", "AlertDefinition"):
             for el in self.root.iter(NS + tag):
@@ -119,6 +124,9 @@ class GeneratorTest(unittest.TestCase):
                     group, want = "control", ("1", "3")
                 elif i.startswith("vcfcf_compliance_score_"):
                     group, want = "score", ("1", "3")
+                elif (i.startswith("vcfcf_compliance_collection_")
+                      and i.endswith("_unreadable")):
+                    group, want = "collection", ("2", "1")
                 elif i.startswith("vcfcf_compliance_collection_"):
                     group, want = "collection", ("1", "1")
                 elif i.startswith("vcfcf_compliance_overrides_"):
@@ -129,7 +137,7 @@ class GeneratorTest(unittest.TestCase):
                 self.assertEqual((el.get("waitCycle"), el.get("cancelCycle")),
                                  want, i)
         self.assertEqual(seen, {"control": 272, "score": 3,
-                                "collection": 19, "overrides": 2})
+                                "collection": 13, "overrides": 2})
 
     def test_symptom_condition(self):
         for s in self.root.iter(NS + "SymptomDefinition"):
@@ -208,42 +216,47 @@ class GeneratorTest(unittest.TestCase):
             state = sym.find(NS + "State")
             self.assertEqual(state.get("severity"), "Immediate")
             cond = state.find(NS + "Condition")
+            # Build 95: one symptom, has_unreadable = 1, wait 2 cancel 1.
             self.assertEqual((cond.get("type"), cond.get("key"),
                               cond.get("operator"), cond.get("value")),
-                             ("metric", "VCF-CF Compliance|unreadable_count",
-                              ">", "0"))
-            # Build 65: OR collection_failed = 1, via a two-child
-            # SymptomSets (a bare-sibling list would drop all but one).
-            fsid = gen.collection_failed_symptom_id(sid)
-            fstate = syms[fsid].find(NS + "State")
-            self.assertEqual(fstate.get("severity"), "Immediate")
-            fcond = fstate.find(NS + "Condition")
-            self.assertEqual((fcond.get("type"), fcond.get("key"),
-                              fcond.get("operator"), fcond.get("value")),
-                             ("metric", "VCF-CF Compliance|collection_failed",
+                             ("metric", "VCF-CF Compliance|has_unreadable",
                               "=", "1"))
+            self.assertEqual((sym.get("waitCycle"), sym.get("cancelCycle")),
+                             ("2", "1"))
+            # The build 65 collection_failed symptom is retired.
+            self.assertNotIn(sid[:-len("_unreadable")] + "_failed", syms)
             sets = a.find(NS + "State/" + NS + "SymptomSets")
-            self.assertEqual(sets.get("operator"), "or")
-            refs = [x.get("ref") for x in sets.findall(NS + "SymptomSet")]
             if ops_kind == "VMwareAdapter Instance":
-                # Build 79: third symptom, the rollup-incomplete flag.
-                self.assertEqual(refs, [sid, fsid, gen.ROLLUP_INCOMPLETE_SYMPTOM])
+                # Build 79: second symptom, the rollup-incomplete flag, in
+                # a two-child "or" container.
+                self.assertEqual(sets.get("operator"), "or")
+                refs = [x.get("ref") for x in sets.findall(NS + "SymptomSet")]
+                self.assertEqual(refs, [sid, gen.ROLLUP_INCOMPLETE_SYMPTOM])
                 icond = syms[gen.ROLLUP_INCOMPLETE_SYMPTOM].find(
                     NS + "State/" + NS + "Condition")
                 self.assertEqual((icond.get("key"), icond.get("operator"),
                                   icond.get("value")),
                                  ("VCF-CF Compliance|Rollup|incomplete", "=", "1"))
             else:
-                self.assertEqual(refs, [sid, fsid])
+                # One symptom goes bare: VCF Operations rejects a
+                # SymptomSets container with fewer than two children.
+                self.assertIsNone(sets, aid)
+                bare = a.findall(NS + "State/" + NS + "SymptomSet")
+                self.assertEqual([x.get("ref") for x in bare], [sid])
         self.assertEqual(ops_kinds, OPS_KINDS)
         recs = [r for r in self.root.iter(NS + "Recommendation")
                 if r.get("key") == gen.COLLECTION_REC_ID]
         self.assertEqual(len(recs), 1)
         text = self.props[recs[0].find(NS + "Description").get("nameKey")]
-        for needle in ("unreadable_count", "-1", "permission", "disconnected",
-                       "not supported", "SystemConfiguration.Administrators",
-                       "WRITE access"):
+        for needle in ("has_unreadable", "two collection cycles",
+                       "unreadable_reason", "unreadable_controls",
+                       "Objects with Unreadable Controls", "permission",
+                       "disconnected", "not supported",
+                       "SystemConfiguration.Administrators", "WRITE access"):
             self.assertIn(needle, text)
+        for gone in ("count as failing", "-1", "collection_failed",
+                     "scores 0"):
+            self.assertNotIn(gone, text)
 
     def test_overrides_alert(self):
         # Build 90: "Compliance overrides file not loaded" on the vCenter,

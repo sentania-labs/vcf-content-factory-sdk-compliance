@@ -54,11 +54,12 @@ public final class ComplianceDecisionsTest {
 		}
 		T.check(!nb.containsKey(K + "score"), "nb never pushes a score");
 		Map<String, Double> vu = ComplianceDecisions.versionUnreadableStats();
-		T.near(1, vu.get(K + "non_compliant"), "version unreadable is nc");
-		T.near(0, vu.get(K + "no_benchmark"), "version unreadable not nb");
-		// Build 65 (W1): nothing collected -> score 0, collection_failed 1,
-		// and no invented unreadable_count.
-		T.near(0, vu.get(K + "score"), "version unreadable scores 0");
+		// Build 95: nothing readable pushes the flag only (no score 0, no
+		// non_compliant, no counters); build 65's collection_failed = 1
+		// stays, and no invented unreadable_count.
+		T.near(1, vu.get(ComplianceDecisions.HAS_UNREADABLE), "flagged");
+		T.check(!vu.containsKey(K + "non_compliant"), "no nc pushed");
+		T.check(!vu.containsKey(K + "score"), "no score pushed");
 		T.near(1, vu.get(K + "collection_failed"), "collection_failed = 1");
 		T.check(!vu.containsKey(K + "unreadable_count"),
 				"no invented unreadable_count");
@@ -68,26 +69,31 @@ public final class ComplianceDecisionsTest {
 
 		ControlEvaluator.ComplianceResult allUnread =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 3,
-						ControlEvaluator.score(0, 0, 3),
+						ControlEvaluator.score(0, 0),
 						Arrays.asList(new ControlEvaluator.ControlResult(
 								"esx.x", "(unreadable)", "5", false, "d", true)));
 		Map<String, Double> cs = ComplianceDecisions.complianceStats(allUnread);
-		// Build 63: all unreadable = nothing collected = score 0, pushed.
-		T.near(0, cs.get(K + "score"), "all unreadable scores 0");
+		// Build 95: all unreadable = nothing readable: only the unreadable
+		// signals go out, the last read values stay.
+		T.check(!cs.containsKey(K + "score"), "all unreadable: no score");
 		T.near(3, cs.get(K + "unreadable_count"), "unreadable counted apart");
 		T.near(1, cs.get(K + "collection_failed"),
 				"all unreadable = collection failed");
-		T.near(0, cs.get(K + "pass_count"), "pass zeroed when nothing scored");
-		T.near(0, cs.get(K + "fail_count"), "fail zeroed when nothing scored");
-		T.near(1, cs.get(K + "non_compliant"), "unreadable -> nc");
-		T.near(-1, cs.get(K + "esx.x|Compliant"), "unreadable Compliant=-1");
+		T.near(1, cs.get(ComplianceDecisions.HAS_UNREADABLE), "flagged");
+		T.check(!cs.containsKey(K + "pass_count"), "no pass_count");
+		T.check(!cs.containsKey(K + "fail_count"), "no fail_count");
+		T.check(!cs.containsKey(K + "non_compliant"), "no non_compliant");
+		// Build 95: an unreadable control is not pushed (was -1).
+		T.check(!cs.containsKey(K + "esx.x|Compliant"),
+				"unreadable control not pushed");
 
-		// Partial unreadable lowers the score; fail and unreadable stay apart.
+		// Build 95 (point 7): partly unreadable scores over what was read;
+		// fail and unreadable stay apart.
 		ControlEvaluator.ComplianceResult partial =
 				new ControlEvaluator.ComplianceResult("h", 7, 1, 8, 2,
-						ControlEvaluator.score(7, 1, 2), new java.util.ArrayList<>());
+						ControlEvaluator.score(7, 1), new java.util.ArrayList<>());
 		Map<String, Double> ps = ComplianceDecisions.complianceStats(partial);
-		T.near(70, ps.get(K + "score"), "7 pass of 10 attempted");
+		T.near(87.5, ps.get(K + "score"), "7 pass of 8 read (was 70)");
 		T.near(1, ps.get(K + "fail_count"), "fail_count = evaluated failures");
 		T.near(2, ps.get(K + "unreadable_count"), "unreadable kept separate");
 		T.near(1, ps.get(K + "non_compliant"), "non-compliant");
@@ -96,7 +102,7 @@ public final class ComplianceDecisionsTest {
 		// Nothing attempted: still no score (never a placeholder).
 		ControlEvaluator.ComplianceResult none =
 				new ControlEvaluator.ComplianceResult("h", 0, 0, 0, 0,
-						ControlEvaluator.score(0, 0, 0), new java.util.ArrayList<>());
+						ControlEvaluator.score(0, 0), new java.util.ArrayList<>());
 		T.check(!ComplianceDecisions.complianceStats(none).containsKey(
 				K + "score"), "nothing attempted: no score");
 
@@ -462,7 +468,7 @@ public final class ComplianceDecisionsTest {
 				"collectVimObject(");
 
 		inOrder(body(ca, "private boolean kindPushable("), "kindPushable",
-				"boolean failed = present && stitcher.loadFailed(resourceKind);",
+				"boolean failed = present && cycle.stitcher.loadFailed(resourceKind);",
 				"if (ComplianceDecisions.kindPushable(present, failed)) { return true; }",
 				"rollup.markIncomplete(kind);",
 				"return false;");

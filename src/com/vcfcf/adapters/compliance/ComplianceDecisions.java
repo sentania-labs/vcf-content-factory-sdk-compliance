@@ -32,9 +32,62 @@ import java.util.function.Function;
  */
 public final class ComplianceDecisions {
 
+	/**
+	 * Build 95 (issue #25): the HTTP Basic Authorization header value for
+	 * the vCenter REST and VAMI sessions, with the credential encoded as
+	 * UTF-8 explicitly (as the SOAP login sends it). The platform default
+	 * charset is not UTF-8 on every collector, and a non-ASCII password then
+	 * failed Test Connection and the appliance reads while SOAP worked.
+	 */
+	public static String basicAuthorization(String username, String password) {
+		return "Basic " + java.util.Base64.getEncoder().encodeToString(
+				(username + ":" + password).getBytes(
+						java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+
 	private ComplianceDecisions() {}
 
 	static final String K = "VCF-CF Compliance|";
+
+	/**
+	 * Build 95 (Scott 2026-10-14): 1 when some control of the object could
+	 * not be read this cycle, else 0; pushed on every object every cycle.
+	 * The "Compliance data not collected" alerts fire on it.
+	 */
+	public static final String HAS_UNREADABLE = K + "has_unreadable";
+	/** Build 95: why, in plain words plus the logged detail (property). */
+	public static final String UNREADABLE_REASON = K + "unreadable_reason";
+	/** Build 95: the unreadable control ids, capped (property). */
+	public static final String UNREADABLE_CONTROLS = K + "unreadable_controls";
+	/**
+	 * Build 95: the object's kind in words (property), pushed with every
+	 * object payload, so the "Objects with unreadable controls" list (one
+	 * view over six VMWARE kinds) can show what each row is.
+	 */
+	public static final String OBJECT_KIND = K + "object_kind";
+
+	/** Build 95: the object_kind text for a kind. */
+	public static String objectKindLabel(BenchmarkSelector.Kind kind) {
+		if (kind == null) return "";
+		switch (kind) {
+			case HOST: return "ESX host";
+			case VM: return "VM";
+			case VCENTER: return "vCenter";
+			case CLUSTER: return "Cluster";
+			case VDS: return "Distributed switch";
+			case PORTGROUP: return "Distributed portgroup";
+			default: return kind.rollupName;
+		}
+	}
+
+	/** Build 95: {@code props} with {@link #OBJECT_KIND} added (a copy). */
+	public static Map<String, String> withObjectKind(Map<String, String> props,
+			BenchmarkSelector.Kind kind) {
+		Map<String, String> out = new LinkedHashMap<>(props);
+		if (kind != null) out.put(OBJECT_KIND, objectKindLabel(kind));
+		return out;
+	}
 
 	// ----- benchmark decision --------------------------------------------
 
@@ -118,22 +171,51 @@ public final class ComplianceDecisions {
 	// ----- per-object payloads -------------------------------------------
 
 	/**
-	 * Stats for an evaluated object. Score (build 63, owner decision):
-	 * unreadable controls count as failing
-	 * ({@link ControlEvaluator#score}); pushed whenever at least one control
-	 * was attempted, so an all-unreadable object reads 0. Only with nothing
-	 * attempted is score omitted (never a stand-in). pass_count /
-	 * fail_count / unreadable_count are always pushed and stay separate.
+	 * Build 95: true when nothing on the object could be read this cycle:
+	 * controls were attempted and every one was unreadable (a host vCenter
+	 * reports not responding, a whole read channel refused). Such an object
+	 * pushes only its unreadable signals ({@link #complianceStats}).
+	 */
+	public static boolean nothingReadable(ControlEvaluator.ComplianceResult cr) {
+		return cr.totalCount == 0 && cr.unreadableCount > 0;
+	}
+
+	/**
+	 * Stats for an evaluated object. Score (build 95, decision point 7):
+	 * passed over evaluated, over what was read; an unreadable control is
+	 * in neither count ({@link ControlEvaluator#score}). Pushed whenever at
+	 * least one control was read, never as a stand-in. non_compliant is a
+	 * failing control that was read. pass_count / fail_count /
+	 * unreadable_count are pushed and stay separate.
+	 *
+	 * <p>Build 95 (Scott 2026-10-14): {@link #HAS_UNREADABLE} is pushed every
+	 * cycle (1 with any unreadable control). An object with nothing
+	 * readable ({@link #nothingReadable}) pushes only its unreadable signals
+	 * (has_unreadable, unreadable_count, collection_failed): no score, no
+	 * pass / fail / total, no non_compliant, so its last read values stay as
+	 * they were and the flag says they are not current.
 	 */
 	public static Map<String, Double> complianceStats(
 			ControlEvaluator.ComplianceResult cr) {
 		Map<String, Double> stats = new LinkedHashMap<>();
-		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
-			stats.put(K + ctrl.scgId + "|Compliant", ctrl.unreadable
-					? ComplianceAdapterConstants.COMPLIANT_NOT_EVALUATED
-					: (ctrl.compliant ? 1.0 : 0.0));
+		if (nothingReadable(cr)) {
+			stats.put(HAS_UNREADABLE, 1.0);
+			stats.put(K + "unreadable_count", (double) cr.unreadableCount);
+			stats.put(K + "collection_failed", 1.0);
+			return stats;
 		}
-		if (cr.attempted() > 0) {
+		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
+			// Build 95 (Scott 2026-10-14, "if we have missing data we just
+			// don't log it"): a control that could not be read this cycle
+			// is not pushed at all, for every cause (a host vCenter reports
+			// not responding included). Its last value, and any alert on
+			// it, stay as they were; the object's has_unreadable flag says
+			// the data is not current. Before build 95 it was pushed as -1.
+			if (ctrl.unreadable) continue;
+			stats.put(K + ctrl.scgId + "|Compliant",
+					ctrl.compliant ? 1.0 : 0.0);
+		}
+		if (cr.totalCount > 0) {
 			stats.put(K + "score", cr.score);
 		}
 		stats.put(K + "pass_count", (double) cr.passCount);
@@ -141,10 +223,35 @@ public final class ComplianceDecisions {
 		stats.put(K + "total_count", (double) cr.totalCount);
 		stats.put(K + "unreadable_count", (double) cr.unreadableCount);
 		stats.put(K + "non_compliant", ComplianceRollup.isNonCompliant(
-				cr.failCount, cr.unreadableCount) ? 1.0 : 0.0);
+				cr.failCount) ? 1.0 : 0.0);
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "collection_failed", collectionFailed(cr) ? 1.0 : 0.0);
+		stats.put(HAS_UNREADABLE, cr.unreadableCount > 0 ? 1.0 : 0.0);
 		return stats;
+	}
+
+	/** Build 95: the ids of the controls a result could not read. */
+	public static Set<String> unreadableIds(ControlEvaluator.ComplianceResult cr) {
+		Set<String> out = new TreeSet<>();
+		if (cr == null) return out;
+		for (ControlEvaluator.ControlResult r : cr.controlResults) {
+			if (r.unreadable) out.add(r.scgId);
+		}
+		return out;
+	}
+
+	/**
+	 * Build 95: the two unreadable properties of an object:
+	 * {@link #UNREADABLE_REASON} and {@link #UNREADABLE_CONTROLS}. Both
+	 * are pushed every cycle, "" when every control was read, so a reason
+	 * from an earlier cycle never lingers.
+	 */
+	public static Map<String, String> unreadableProps(String reason,
+			String controls) {
+		Map<String, String> props = new LinkedHashMap<>();
+		props.put(UNREADABLE_REASON, reason == null ? "" : reason);
+		props.put(UNREADABLE_CONTROLS, controls == null ? "" : controls);
+		return props;
 	}
 
 	/**
@@ -173,23 +280,47 @@ public final class ComplianceDecisions {
 	 * {@code siteOverridden} (its expected value comes from the overrides
 	 * file) Expected reads {@code "<v> (site override)"} and a read Actual
 	 * reads {@code "<actual>, expected <v> (site override)"}, so the object
-	 * and the published guide never silently disagree. An unreadable
-	 * control's Actual stays {@code (unreadable)}.
+	 * and the published guide never silently disagree. Build 95: an
+	 * unreadable control is left out entirely (its keys keep their last
+	 * values).
 	 */
 	public static Map<String, String> complianceProps(
 			ControlEvaluator.ComplianceResult cr, String profileName,
 			Set<String> siteOverridden) {
+		return complianceProps(cr, profileName, siteOverridden, null);
+	}
+
+	/**
+	 * Build 95: as {@link #complianceProps(ControlEvaluator.ComplianceResult,
+	 * String, Set)}, with the object's unreadable_reason ({@code reason};
+	 * null: from the count alone, see {@link ObjectUnreadable#reasonText})
+	 * and unreadable_controls. An object with nothing readable
+	 * ({@link #nothingReadable}) pushes those two properties only.
+	 */
+	public static Map<String, String> complianceProps(
+			ControlEvaluator.ComplianceResult cr, String profileName,
+			Set<String> siteOverridden, String reason) {
+		String why = cr.unreadableCount == 0 ? ""
+				: (reason != null && !reason.isEmpty() ? reason
+						: new ObjectUnreadable().reasonText(cr.unreadableCount));
+		Map<String, String> unread = unreadableProps(why,
+				ObjectUnreadable.controlsText(unreadableIds(cr)));
+		if (nothingReadable(cr)) {
+			return unread;
+		}
 		Map<String, String> props = new LinkedHashMap<>();
 		for (ControlEvaluator.ControlResult ctrl : cr.controlResults) {
+			// Build 95: an unreadable control's Actual, Expected and
+			// Description are not pushed, so its last read Actual is not
+			// overwritten with "(unreadable)" (see complianceStats).
+			if (ctrl.unreadable) continue;
 			String base = K + ctrl.scgId;
 			boolean site = siteOverridden != null
 					&& siteOverridden.contains(ctrl.scgId);
 			String actual = ctrl.actual;
 			String expected = ctrl.expected;
 			if (site) {
-				if (!ctrl.unreadable) {
-					actual = actual + ", expected " + expected + SITE_OVERRIDE;
-				}
+				actual = actual + ", expected " + expected + SITE_OVERRIDE;
 				expected = expected + SITE_OVERRIDE;
 			}
 			props.put(base + "|Actual", actual);
@@ -197,6 +328,7 @@ public final class ComplianceDecisions {
 			props.put(base + "|Description", ctrl.description);
 		}
 		props.put(K + "profile_name", profileName);
+		props.putAll(unread);
 		return props;
 	}
 
@@ -206,6 +338,7 @@ public final class ComplianceDecisions {
 		stats.put(K + "no_benchmark", 1.0);
 		stats.put(K + "non_compliant", 0.0);
 		stats.put(K + "collection_failed", 0.0);
+		stats.put(HAS_UNREADABLE, 0.0);
 		return stats;
 	}
 
@@ -215,28 +348,41 @@ public final class ComplianceDecisions {
 		stats.put(K + "no_benchmark", 0.0);
 		stats.put(K + "non_compliant", 0.0);
 		stats.put(K + "collection_failed", 0.0);
+		stats.put(HAS_UNREADABLE, 0.0);
 		return stats;
 	}
 
 	/**
 	 * Governing version unreadable and no previous benchmark (build 58 B2,
-	 * build 65 W1): nothing could be collected, so by the build 63 rule
-	 * (unreadable counts as failing) the object scores 0, is non-compliant,
-	 * and {@code collection_failed} = 1 raises its "Compliance data not
-	 * collected" alert. unreadable_count is NOT pushed: the adapter does not
-	 * know which benchmark's controls apply, so it will not invent a count.
+	 * build 65 W1): nothing could be collected. Build 95 (Scott
+	 * 2026-10-14): nothing readable pushes only the unreadable signals,
+	 * has_unreadable = 1 and collection_failed = 1 (no score 0, no
+	 * counters, no non_compliant; the last read values stay as they were).
+	 * unreadable_count is NOT pushed: the adapter does not know which
+	 * benchmark's controls apply, so it will not invent a count.
 	 */
 	public static Map<String, Double> versionUnreadableStats() {
 		Map<String, Double> stats = new LinkedHashMap<>();
-		stats.put(K + "score", 0.0);
-		stats.put(K + "pass_count", 0.0);
-		stats.put(K + "fail_count", 0.0);
-		stats.put(K + "total_count", 0.0);
-		stats.put(K + "no_benchmark", 0.0);
-		stats.put(K + "non_compliant", 1.0);
+		stats.put(HAS_UNREADABLE, 1.0);
 		stats.put(K + "collection_failed", 1.0);
 		return stats;
 	}
+
+	/**
+	 * Build 95: the properties of a version-unreadable object: its reason
+	 * ("product version unreadable" and the label the selector gave, e.g.
+	 * "benchmark unknown: ESX version unreadable") and, since the benchmark
+	 * and so its controls are unknown, a plain statement in place of ids.
+	 */
+	public static Map<String, String> versionUnreadableProps(String label) {
+		ObjectUnreadable u = new ObjectUnreadable();
+		u.record("version-unreadable: " + label, 1);
+		return unreadableProps(u.reasonText(1), VERSION_UNREADABLE_CONTROLS);
+	}
+
+	/** Build 95: unreadable_controls of a version-unreadable object. */
+	public static final String VERSION_UNREADABLE_CONTROLS =
+			"(not known: the benchmark depends on the version)";
 
 	private static Map<String, Double> zeroCounters() {
 		Map<String, Double> stats = new LinkedHashMap<>();
@@ -508,6 +654,58 @@ public final class ComplianceDecisions {
 		return stitcherPresent && !resourceListFailed;
 	}
 
+	/** Build 95 review N5: an inventory listing that may fail. */
+	public interface Lister<T> {
+		java.util.List<T> list() throws Exception;
+	}
+
+	/**
+	 * Build 95 (issue #18), made SDK-free by review N5: list one kind's
+	 * inventory; when the listing fails, report it ({@code onFailure}),
+	 * hold the kind back ({@link ComplianceRollup#markIncomplete}: its
+	 * rollup keys, All and Benchmark keep their values and
+	 * Rollup|incomplete = 1) and return null, so the caller skips the kind
+	 * and the cycle goes on with the others. Never an empty list on a
+	 * failure: an empty inventory would read as "nothing to score".
+	 */
+	public static <T> java.util.List<T> listOrHoldBack(Lister<T> lister,
+			ComplianceRollup rollup, BenchmarkSelector.Kind kind,
+			java.util.function.Consumer<Exception> onFailure) {
+		try {
+			return lister.list();
+		} catch (Exception e) {
+			onFailure.accept(e);
+			rollup.markIncomplete(kind);
+			return null;
+		}
+	}
+
+	/**
+	 * Build 95 review N4: the line a cycle logs when it ends, or null when
+	 * nothing more is to be logged. An abandoned cycle (Stop Collecting)
+	 * logs one WARN: where it stopped, what that leaves behind, and the
+	 * cycle's timing summary (the per-phase time and call counts that
+	 * sizing a cycle budget needs, issue #16), and no second "failed"
+	 * line. A completed cycle logs its time at INFO; any other failure
+	 * one WARN (the exception itself is logged by onCollect).
+	 * {@code metricsSummary} may be null.
+	 */
+	public static String cycleEndLine(boolean completed, String abandonedAt,
+			long ms, String metricsSummary) {
+		if (abandonedAt != null) {
+			return "ComplianceAdapter cycle abandoned after " + ms + " ms: "
+					+ abandonedAt + ". Nothing more was read or pushed this "
+					+ "cycle (the per-vCenter rollup included); the values "
+					+ "already pushed stay, the rest keep their last values."
+					+ (metricsSummary != null ? " " + metricsSummary : "");
+		}
+		if (completed) {
+			return "ComplianceAdapter cycle took " + ms + " ms";
+		}
+		return "ComplianceAdapter cycle failed after " + ms + " ms (the "
+				+ "exception is logged by onCollect)";
+	}
+
 	/**
 	 * Build 87: the per-host score line is INFO when the host has any
 	 * unreadable control (so a partly unreadable host is named at INFO),
@@ -517,7 +715,13 @@ public final class ComplianceDecisions {
 		return unreadableCount > 0;
 	}
 
-	/** Control ids whose Compliant value a result pushes. */
+	/**
+	 * Control ids the stale-key cleanup must leave alone for one object:
+	 * every control with a result this cycle. Build 95: that includes an
+	 * unreadable control, which is not pushed but is held at its last
+	 * value on purpose; the cleanup must not retire it to -1 either (a
+	 * control of the current benchmark missing from this set would be).
+	 */
 	public static Set<String> pushedIds(ControlEvaluator.ComplianceResult cr) {
 		Set<String> out = new TreeSet<>();
 		if (cr == null) return out;

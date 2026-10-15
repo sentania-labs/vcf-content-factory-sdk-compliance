@@ -6,21 +6,23 @@ description: >
   VMWARE VMwareAdapter Instance). Includes the unknown bucket for
   objects whose governing version could not be read and had no prior
   benchmark (never a guess, never "no benchmark"). Feeds Environment
-  Overview W4 (Objects by SCG Version).
+  Overview W4 (Objects by SCG Version). Build 95 (issue #32): newest
+  guide first, so the versions in use on a current estate (9.1, 9.0) are
+  the first columns, and every bucket is listed.
 subject:
   adapter_kind: VMWARE
   resource_kind: VMwareAdapter Instance
 columns:
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_6.7|objects
-    display_name: "SCG 6.7"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_7.0|objects
-    display_name: "SCG 7.0"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_8.0|objects
-    display_name: "SCG 8.0"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.0|objects
-    display_name: "SCG 9.0"
   - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.1|objects
     display_name: "SCG 9.1"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.0|objects
+    display_name: "SCG 9.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_8.0|objects
+    display_name: "SCG 8.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_7.0|objects
+    display_name: "SCG 7.0"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_6.7|objects
+    display_name: "SCG 6.7"
   - attribute: VCF-CF Compliance|Rollup|Benchmark|none|objects
     display_name: "No Benchmark"
   - attribute: VCF-CF Compliance|Rollup|Benchmark|unknown|objects

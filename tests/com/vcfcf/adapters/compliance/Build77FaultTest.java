@@ -138,9 +138,10 @@ public final class Build77FaultTest {
 
 	/**
 	 * The adapter's handler for a thrown option read: every
-	 * advanced_setting control of the slice is UNREADABLE. None passes, each
-	 * is pushed as Compliant = -1, and the cleanup plan does not touch them
-	 * (they were pushed this cycle), so real earlier 0s and 1s stay.
+	 * advanced_setting control of the slice is UNREADABLE. None passes, none
+	 * is pushed (build 95; builds 77 to 94 pushed Compliant = -1), and the
+	 * cleanup plan does not touch them (they are held this cycle), so real
+	 * earlier 0s and 1s stay.
 	 */
 	private static void assertUnreadableAndProtected(String what,
 			BenchmarkSelector.Kind kind, BenchmarkProfile profile,
@@ -153,8 +154,8 @@ public final class Build77FaultTest {
 		T.eq(0, cr.failCount, what + ": nothing is an evaluated failure");
 		Map<String, Double> stats = ComplianceDecisions.complianceStats(cr);
 		for (ControlEvaluator.ControlResult r : cr.controlResults) {
-			T.near(-1, stats.get("VCF-CF Compliance|" + r.scgId + "|Compliant"),
-					what + ": " + r.scgId + " pushed as -1");
+			T.check(!stats.containsKey("VCF-CF Compliance|" + r.scgId
+					+ "|Compliant"), what + ": " + r.scgId + " not pushed");
 		}
 		Set<String> pushed = ComplianceDecisions.pushedIds(cr);
 		ComplianceDecisions.CleanupPlan plan = ComplianceDecisions.cleanupPlan(

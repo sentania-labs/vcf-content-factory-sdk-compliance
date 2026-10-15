@@ -27,7 +27,7 @@ These edges are created at collection time via the Suite API and never appear in
 ## Quick Reference
 
 - **Adapter kind:** `vcfcf_compliance`
-- **Version:** 0.0.0.94
+- **Version:** 0.0.0.95
 - **Traversal spec:** (none)
 - **Resource kinds:** 1
 - **Cross-MP relationships:** 1 (see [Cross-MP Relationships](#cross-mp-relationships) below)

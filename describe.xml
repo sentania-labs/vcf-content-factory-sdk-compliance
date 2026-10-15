@@ -108,17 +108,36 @@
           <ResourceAttribute key="avg_score" nameKey="35"
                              dataType="float" isProperty="false"
                              defaultMonitored="true" unit="%"/>
+          <ResourceAttribute key="controls_evaluated" nameKey="36"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true"/>
+          <ResourceAttribute key="controls_passed" nameKey="37"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true"/>
+          <ResourceAttribute key="pass_rate" nameKey="39"
+                             dataType="float" isProperty="false"
+                             defaultMonitored="true" unit="%"/>
         </ResourceGroup>
       </ResourceGroup>
       <!-- avg_score is weighted: summed score_sum over summed scored, never
            an average of per-vCenter averages. With nothing scored anywhere
            the division is 0/0; the expected result is no data (to be
-           confirmed on devel), never a substituted 100. -->
+           confirmed on devel), never a substituted 100.
+           Build 95: pass_rate is the displayed percentage, summed
+           controls_passed over summed controls_evaluated times 100 (a ratio
+           of sums across vCenters, never a mean of per-vCenter rates).
+           Unreadable controls are in neither sum (build 95, Scott
+           2026-10-14: no unreadable rollup key; each object carries
+           has_unreadable and its reason instead). With nothing evaluated
+           anywhere the division is 0/0: no data, never 100. -->
       <ComputedMetrics>
         <ComputedMetric key="Rollup|Environment|scored" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
         <ComputedMetric key="Rollup|Environment|non_compliant" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|non_compliant})"/>
         <ComputedMetric key="Rollup|Environment|no_benchmark" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|no_benchmark})"/>
         <ComputedMetric key="Rollup|Environment|avg_score" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|score_sum}) / sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|scored})"/>
+        <ComputedMetric key="Rollup|Environment|controls_evaluated" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_evaluated})"/>
+        <ComputedMetric key="Rollup|Environment|controls_passed" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_passed})"/>
+        <ComputedMetric key="Rollup|Environment|pass_rate" expression="sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_passed}) / sum(${adapterkind=VMWARE, resourcekind=VMwareAdapter Instance, metric=VCF-CF Compliance|Rollup|All|controls_evaluated}) * 100"/>
       </ComputedMetrics>
     </ResourceKind>
 
@@ -1792,22 +1811,10 @@
                        nameKey="2000"
                        adapterKind="VMWARE"
                        resourceKind="HostSystem"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_host_failed"
-                       nameKey="2020"
-                       adapterKind="VMWARE"
-                       resourceKind="HostSystem"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -1816,22 +1823,10 @@
                        nameKey="2002"
                        adapterKind="VMWARE"
                        resourceKind="VirtualMachine"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_vm_failed"
-                       nameKey="2021"
-                       adapterKind="VMWARE"
-                       resourceKind="VirtualMachine"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -1840,22 +1835,10 @@
                        nameKey="2004"
                        adapterKind="VMWARE"
                        resourceKind="VMwareAdapter Instance"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_vcenter_failed"
-                       nameKey="2022"
-                       adapterKind="VMWARE"
-                       resourceKind="VMwareAdapter Instance"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -1876,22 +1859,10 @@
                        nameKey="2006"
                        adapterKind="VMWARE"
                        resourceKind="ClusterComputeResource"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_cluster_failed"
-                       nameKey="2023"
-                       adapterKind="VMWARE"
-                       resourceKind="ClusterComputeResource"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -1900,22 +1871,10 @@
                        nameKey="2008"
                        adapterKind="VMWARE"
                        resourceKind="VmwareDistributedVirtualSwitch"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_vds_failed"
-                       nameKey="2024"
-                       adapterKind="VMWARE"
-                       resourceKind="VmwareDistributedVirtualSwitch"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -1924,22 +1883,10 @@
                        nameKey="2010"
                        adapterKind="VMWARE"
                        resourceKind="DistributedVirtualPortgroup"
-                       waitCycle="1"
+                       waitCycle="2"
                        cancelCycle="1">
       <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|unreadable_count"
-                   operator="&gt;" value="0"
-                   valueType="numeric" thresholdType="static"/>
-      </State>
-    </SymptomDefinition>
-    <SymptomDefinition id="vcfcf_compliance_collection_portgroup_failed"
-                       nameKey="2025"
-                       adapterKind="VMWARE"
-                       resourceKind="DistributedVirtualPortgroup"
-                       waitCycle="1"
-                       cancelCycle="1">
-      <State severity="Immediate">
-        <Condition type="metric" key="VCF-CF Compliance|collection_failed"
+        <Condition type="metric" key="VCF-CF Compliance|has_unreadable"
                    operator="=" value="1"
                    valueType="numeric" thresholdType="static"/>
       </State>
@@ -4033,12 +3980,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_collection_host_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_host_failed" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_collection_host_unreadable" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_collection_check" priority="1"/>
         </Recommendations>
@@ -4052,12 +3995,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_collection_vm_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_vm_failed" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_collection_vm_unreadable" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_collection_check" priority="1"/>
         </Recommendations>
@@ -4073,8 +4012,6 @@
         <Impact type="badge" key="risk"/>
         <SymptomSets operator="or">
           <SymptomSet ref="vcfcf_compliance_collection_vcenter_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_vcenter_failed" operator="and"
                       aggregation="any" applyOn="self" negateCondition="false"/>
           <SymptomSet ref="vcfcf_compliance_collection_vcenter_rollup_incomplete" operator="and"
                       aggregation="any" applyOn="self" negateCondition="false"/>
@@ -4092,12 +4029,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_collection_cluster_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_cluster_failed" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_collection_cluster_unreadable" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_collection_check" priority="1"/>
         </Recommendations>
@@ -4111,12 +4044,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_collection_vds_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_vds_failed" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_collection_vds_unreadable" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_collection_check" priority="1"/>
         </Recommendations>
@@ -4130,12 +4059,8 @@
                      waitCycle="1" cancelCycle="1">
       <State severity="Automatic">
         <Impact type="badge" key="risk"/>
-        <SymptomSets operator="or">
-          <SymptomSet ref="vcfcf_compliance_collection_portgroup_unreadable" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-          <SymptomSet ref="vcfcf_compliance_collection_portgroup_failed" operator="and"
-                      aggregation="any" applyOn="self" negateCondition="false"/>
-        </SymptomSets>
+        <SymptomSet ref="vcfcf_compliance_collection_portgroup_unreadable" operator="and"
+                    aggregation="any" applyOn="self" negateCondition="false"/>
         <Recommendations>
           <Recommendation ref="vcfcf_compliance_collection_check" priority="1"/>
         </Recommendations>

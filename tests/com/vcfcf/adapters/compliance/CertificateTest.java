@@ -257,29 +257,33 @@ public final class CertificateTest {
 		// (the REST, VAMI and Test Connection clients dial baseUrl(), the
 		// SOAP and esxcli clients https://<vcenterHost>/sdk, both the
 		// config's vcenterHost).
-		OverridesTest.inOrder(ca, "REST client", "this.vcApi = new "
-				+ "VCenterApiClient(", "config.baseUrl(),",
-				"sslContextFor(config.vcenterHost));");
-		OverridesTest.inOrder(ca, "SOAP client", "this.vsphere = new "
-				+ "VSphereClient(", "config.vcenterHost,",
-				"sslSocketFactoryFor(config.vcenterHost),");
+		// Build 95 (issue #28): the unused collection REST client (vcApi)
+		// is gone; Test Connection's REST client is pinned below.
+		T.check(!OverridesTest.stripComments(ca).contains("vcApi"),
+				"no collection REST client");
+		// Build 95 review W4: configure builds the client into a local
+		// before swapping it in.
+		OverridesTest.inOrder(ca, "SOAP client", "VSphereClient newVsphere = "
+				+ "new VSphereClient(", "account.vcenterHost,",
+				"sslSocketFactoryFor(account.vcenterHost),");
 		OverridesTest.inOrder(ca, "Test Connection client",
 				"VCenterApiClient testApi = new VCenterApiClient(",
 				"testCfg.baseUrl(),",
 				"sslContextFor(testCfg.vcenterHost));");
+		// Review N13 and W12: the cycle reads its holder copy's account.
 		OverridesTest.inOrder(ca, "VAMI client", "new VamiApiClient(",
-				"config.baseUrl(),",
-				"sslContextFor(config.vcenterHost), this::logWarn);");
-		T.eq(4, OverridesTest.count(ca, "sslContextFor(config.vcenterHost)")
+				"cycle.account.baseUrl(),",
+				"sslContextFor(cycle.account.vcenterHost),", "this::logWarn);");
+		T.eq(3, OverridesTest.count(ca, "sslContextFor(cycle.account.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(testCfg.vcenterHost)")
 				+ OverridesTest.count(ca, "sslContextFor(dialledHost)"),
 				"every context build names the dialled host");
 		T.eq(0, OverridesTest.count(ca, "sslContextFor()")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor()"),
 				"no context without a host");
-		T.eq(5, OverridesTest.count(ca, "sslContextFor(")
+		T.eq(4, OverridesTest.count(ca, "sslContextFor(")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor(") - 2,
-				"call sites: REST, SOAP, Test Connection, VAMI, and the "
+				"call sites: SOAP, Test Connection, VAMI, and the "
 						+ "factory's own (the two declarations excluded)");
 		String vc = read(
 				"src/com/vcfcf/adapters/compliance/VCenterCertificates.java");
@@ -345,18 +349,20 @@ public final class CertificateTest {
 				"} catch (Exception e) {",
 				"markCycleNotCollected(e);",
 				"throw e;",
-				"vsphere.beginCycle();");
+				"cycle.vsphere.beginCycle();");
 		OverridesTest.inOrder(ca, "the marker",
 				"private void markCycleNotCollected(Exception cause) {",
-				"ComplianceDecisions.markNotCollected(lastVcResourceId,",
+				"ComplianceDecisions.markNotCollected(cycle.lastVcResourceId(),",
 				"st.loadVCenterAdapterInstance();",
 				"st.matchVCenterAdapterInstance(",
-				"config.vcenterHost, null);",
+				"cycle.account.vcenterHost, null);",
 				"st.pushStats(rid, stats,",
 				"} catch (RuntimeException e) {");
+		// Review W12: the id lives in the configuration's holder (a new
+		// holder starts empty); the cycle writes it only through its copy.
 		OverridesTest.inOrder(ca, "last resolved id kept per configure",
-				"this.lastVcResourceId = null;",
-				"lastVcResourceId = vcEntry.resourceId;",
+				"this.configured = new Configured<>(",
+				"cycle.rememberVcResourceId(vcEntry.resourceId);",
 				"pushRollup(vcEntry, rollup);");
 	}
 

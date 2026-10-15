@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 94
+build_number: 95
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -48,6 +48,9 @@ bundled_content:
     - views/compliance-cluster-list.yaml
     - views/compliance-vds-list.yaml
     - views/compliance-portgroup-list.yaml
+    # Build 95: objects with unreadable controls (has_unreadable = 1),
+    # beside the Controls Passing tile on both environment dashboards.
+    - views/compliance-unreadable-objects.yaml
   dashboards:
     - dashboards/compliance-environment-overview.yaml
     - dashboards/compliance-esxi-hosts.yaml

@@ -174,7 +174,7 @@ version, use the overrides file ([overrides.md](overrides.md)).
 | Dashboard | What it is for |
 |---|---|
 | [VCF Content Factory] Compliance Environment Overview | The landing page: environment score, non-compliant objects and objects without a benchmark, compliance by vCenter and object type, objects per SCG version, the score trend, and open compliance alerts. |
-| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). |
+| [VCF Content Factory] Compliance ESX Hosts | Pick a scope (vSphere World or one vCenter), see its hosts worst first with score and applied SCG, select a host to see its failing controls and their runbooks (that panel is currently empty, issue #30). The Host Score Heatmap colors by score alone, so a host that could not be read keeps its last color; Not Read in the host list and the host details marks it (build 95). |
 | [VCF Content Factory] Compliance VMs | The same flow for VMs, built for thousands of objects (sorted list and totals, no heatmap). |
 | [VCF Content Factory] Compliance vCenter & Networking | One page for the low-count kinds: vCenter, cluster, distributed switch and distributed portgroup lists, worst first, with the selected object's failing controls. |
 | [VCF Content Factory] Compliance World Summary | Not in the dashboard menu: it is the **Summary tab** of the pack's Compliance World object (build 88; find Compliance World in the inventory and open it). The Environment Overview re-cut for that tab: the four environment tiles, the last scan time, compliance by vCenter and object type, the score trend, objects per SCG version, and the open compliance alerts of the vCenter selected in the table. |
@@ -281,14 +281,21 @@ version, use the overrides file ([overrides.md](overrides.md)).
   accounts that collected before the upgrade): the account names vCenter
   by an IP or name the certificate does not list. Edit the account, enter the name on the certificate, and click
   Validate Connection. Accepting the certificate does not fix this.
-- **"Compliance data not collected" alert, or a host scoring 0** (build
-  63): the adapter could not read some or all of the object's settings,
-  and unreadable settings count as failing. A disconnected or
-  not-responding host scores 0. Check the object's connection state in
-  vCenter, the adapter account's read permissions, and the adapter log for
-  read errors naming the object; `unreadable_count` and the controls whose
-  `Compliant` is -1 with Actual "(unreadable)" show which settings. The
-  alert clears on the first cycle in which everything is read. On a
+- **"Compliance data not collected" alert, or an object on the Objects
+  with Unreadable Controls list** (build 95): the adapter could not read
+  some or all of the object's settings for two cycles in a row. Those
+  settings are not pushed (their last values stay) and the object's score
+  counts only what was read, so a partial outage can move it either way
+  and raise or cancel Host Compliance Score Degraded. A disconnected or
+  not-responding host keeps its last score, shown with Not Read = 1
+  beside it in the per-kind views and the ESX Hosts host details. The
+  object's
+  `unreadable_reason` property says why in plain words (for example "host
+  not responding" or "permission refused") with the logged detail, and
+  `unreadable_controls` lists the settings. Check the object's connection
+  state in vCenter, the adapter account's read permissions, and the
+  adapter log for read errors naming the object. The alert clears on the
+  first cycle in which everything is read. On a
   vCenter, the same alert with `VCF-CF Compliance|Rollup|incomplete` = 1
   and the account in error means the last cycle could not reach vCenter
   at all (build 93): the collector log and the account status give the

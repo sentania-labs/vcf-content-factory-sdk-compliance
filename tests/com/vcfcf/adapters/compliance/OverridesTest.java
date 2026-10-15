@@ -440,10 +440,12 @@ public final class OverridesTest {
 				"actual carries the site value");
 		T.eq("3 (site override)", props.get(k + LOCKOUT + "|Expected"),
 				"expected marked");
-		T.eq("(unreadable)", props.get(k + "esx.other|Actual"),
-				"unreadable actual untouched");
-		T.eq("3 (site override)", props.get(k + "esx.other|Expected"),
-				"unreadable expected still marked");
+		// Build 95: an unreadable control is not pushed at all, so its
+		// last Actual and Expected stay as they were.
+		T.check(!props.containsKey(k + "esx.other|Actual"),
+				"unreadable actual not pushed");
+		T.check(!props.containsKey(k + "esx.other|Expected"),
+				"unreadable expected not pushed");
 		T.eq("1", props.get(k + "esx.plain|Actual"), "plain control untouched");
 		T.eq("1", props.get(k + "esx.plain|Expected"), "plain expected");
 		T.eq(props, ComplianceDecisions.complianceProps(cr, "VMware_SCG_9.0",
@@ -1132,7 +1134,7 @@ public final class OverridesTest {
 				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
 						+ "bundled, cycleOverrides.skipped);",
 				"ComplianceDecisions.orphanProps(stale, p.profileName, "
-						+ "cycleOverrides.skipped, config.overridesFile)");
+						+ "cycleOverrides.skipped, cycle.account.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its
 		// skipped controls in force, every cycle, and the cleanup treats
@@ -1148,7 +1150,7 @@ public final class OverridesTest {
 		inOrder(skipIn, "skipInForce",
 				"ComplianceDecisions.skipPush(kind,",
 				"cycleUnadjusted.get(d.profileName), r.skipped,",
-				"config.overridesFile);");
+				"cycle.account.overridesFile);");
 		T.check(!skipIn.contains("latest"),
 				"the skip push never depends on a read-back");
 		T.check(!skipIn.contains("stitcher."),
@@ -1159,7 +1161,7 @@ public final class OverridesTest {
 				"private void pushComplianceViaClient(",
 				"private void pushProfileNamePropertyOnly("}) {
 			String b = body(ca, sig);
-			inOrder(b, sig, "ComplianceDecisions.pushObject(stitcher, "
+			inOrder(b, sig, "ComplianceDecisions.pushObject(cycle.stitcher, "
 					+ "resourceId,", "skip,");
 			T.check(!b.contains("stitcher.push"), sig
 					+ ": only the merged push");
@@ -1209,16 +1211,18 @@ public final class OverridesTest {
 		// Review N2: an account stored as Custom zeroes the retired
 		// bucket in its rollup push, and only once.
 		inOrder(ca, "zeroCustomBucket",
-				"this.zeroCustomBucket = storedAsCustom;",
+				"newSuite, newStitcher, storedAsCustom);",
+				"cycle.zeroCustomBucketPending()",
 				"ComplianceRollup.zeroRetiredCustom(stats);",
 				"stitcher.pushStats(vcEntry.resourceId, stats,",
-				"zeroCustomBucket = false;");
+				"cycle.customBucketZeroed();");
 
 		// The push marks site-overridden controls.
 		inOrder(body(ca, "private void pushComplianceViaClient("),
 				"pushComplianceViaClient",
-				"ComplianceDecisions.complianceProps(cr, profileName, "
-						+ "siteOverriddenFor(profileName))");
+				"ComplianceDecisions.complianceProps(cr, profileName,",
+				"siteOverriddenFor(profileName),",
+				"objectUnreadable.reasonText(cr.unreadableCount)),");
 
 		// The counts are the in-force ones, and the alert flag is the
 		// snapshot's (which covers fetch failures, W2).
