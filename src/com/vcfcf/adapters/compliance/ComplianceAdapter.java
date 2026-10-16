@@ -210,8 +210,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		try {
 			newSuite = SuiteApiStitcher.create(
 					this, componentLogger(SuiteApiStitcher.class));
-			newStitcher = new ComplianceStitcher(newSuite,
-					componentLogger(ComplianceStitcher.class));
+			newStitcher = new ComplianceStitcher(suiteApi(newSuite),
+					clientLog(componentLogger(ComplianceStitcher.class)));
 		} catch (RuntimeException e) {
 			newSuite = null;
 			newStitcher = null;
@@ -440,8 +440,38 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// -----------------------------------------------------------------------
 
 	/**
+	 * Build 96 (issue #27): the framework Suite API client as the SDK-free
+	 * {@link ComplianceStitcher.SuiteApi}, so the stitcher compiles and is
+	 * tested without the framework jar. Every call is passed through
+	 * unchanged.
+	 */
+	private static ComplianceStitcher.SuiteApi suiteApi(
+			final SuiteApiStitcher sas) {
+		return new ComplianceStitcher.SuiteApi() {
+			@Override
+			public String get(String path)
+					throws java.io.IOException, InterruptedException {
+				return sas.get(path);
+			}
+
+			@Override
+			public void pushProperties(String resourceId,
+					java.util.Map<String, String> properties, long ts) {
+				sas.pushProperties(resourceId, properties, ts);
+			}
+
+			@Override
+			public void pushStats(String resourceId,
+					java.util.Map<String, Double> stats, long ts) {
+				sas.pushStats(resourceId, stats, ts);
+			}
+		};
+	}
+
+	/**
 	 * Build 95: the platform logger as the SDK-free {@link VSphereClient.Log}
-	 * (null stays null: the client then logs nothing).
+	 * (null stays null: the client then logs nothing). Build 96: also the
+	 * stitcher's log.
 	 */
 	private static VSphereClient.Log clientLog(
 			final com.integrien.alive.common.adapter3.Logger l) {

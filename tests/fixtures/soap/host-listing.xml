@@ -1,0 +1,5 @@
+<RetrievePropertiesResponse xmlns="urn:vim25">
+ <returnval><obj type="HostSystem">host-10</obj><propSet><name>name</name><val xsi:type="xsd:string">esx01.lab.example</val></propSet></returnval>
+ <returnval><obj type="HostSystem">host-11</obj><propSet><name>name</name><val xsi:type="xsd:string">esx02.lab.example</val></propSet></returnval>
+ <returnval><obj type="HostSystem">host-12</obj></returnval>
+</RetrievePropertiesResponse>

@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 # Compiles and runs the adapter's plain-main Java tests (no test
 # framework, no external deps beyond a JDK; BcHandshakeTest also fetches
-# the BouncyCastle TLS jars, see below), then the alert generator's
-# Python tests (stdlib only). Exits non-zero on any compile error or
-# failed assertion. Run from anywhere:
+# the BouncyCastle TLS jars, see below), then the Python checks (stdlib
+# only). Exits non-zero on any compile error or failed assertion. Run
+# from anywhere:
 #   ci/run_java_tests.sh
-# The tested classes (loader, profile, selector, evaluator, rollup) have
-# no VCF Ops SDK dependency, so no SDK jar is needed.
+# Build 96 (issue #27): EVERY adapter source file is compiled, the
+# SDK-dependent ones (ComplianceAdapter, ComplianceStitcher, the REST
+# clients) included, against the test-only stubs in tests/stubs (no SDK
+# jar, no framework jar; see tests/stubs/README.md). The stubs never ship:
+# build-sdk compiles src/ only, against the real jars. Every *Test.java
+# and every tests/test_*.py runs, so a new test cannot be added and
+# silently skipped.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
-javac -d "$out" -sourcepath src:tests \
+javac -d "$out" -sourcepath src:tests:tests/stubs \
+    src/com/vcfcf/adapters/compliance/*.java \
     tests/com/vcfcf/adapters/compliance/*.java
-for t in BenchmarkLoaderTest ProfileSetTest BenchmarkSelectorTest \
-        ControlEvaluatorTest ComplianceRollupTest ComplianceDecisionsTest \
-        MixedVersionSimulationTest Build74ReadPathsTest \
-        Build76CleanupAbsentTest Build77FaultTest \
-        EnvironmentKeyContractTest EsxcliCycleCacheTest OverridesTest \
-        CertificateTest Build95CollectionTest Build95TriageTest \
-        Build95PrefixBoundsTest Build95UnreadableTest SnapshotHolderTest; do
+for f in tests/com/vcfcf/adapters/compliance/*Test.java; do
+    t="$(basename "$f" .java)"
+    # BcHandshakeTest needs the BouncyCastle jars; it runs below.
+    [ "$t" = "BcHandshakeTest" ] && continue
     java -cp "$out" "com.vcfcf.adapters.compliance.$t"
 done
 
@@ -57,15 +60,9 @@ elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
 else
     bc_skipped=1
 fi
-python3 tests/test_generate_compliance_alerts.py
-python3 tests/test_describe_symptom_sets.py
-python3 tests/test_describe_account_dialog.py
-python3 tests/test_dashboard_alert_lists.py
-python3 tests/test_dashboard_widget_types.py
-python3 tests/test_overrides_template.py
-python3 tests/test_pass_rate_bindings.py
-python3 tests/test_build95_dashboards.py
-python3 tests/test_cycle_snapshot.py
+for p in tests/test_*.py; do
+    python3 "$p"
+done
 # Printed last and on stdout so a passing exit code on a workstation is
 # not mistaken for a run that exercised the BouncyCastle handshakes.
 if [ "$bc_skipped" = 1 ]; then

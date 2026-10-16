@@ -1,0 +1,14 @@
+<ExecuteSoapResponse xmlns="urn:vim25">
+ <returnval>
+  <response>&lt;obj versionId="5.0" xsi:type="VimEsxCLIsystemsyslogconfiggetSyslogConfiguration"&gt;
+    &lt;AllowVsanBacking&gt;false&lt;/AllowVsanBacking&gt;
+    &lt;EnforceSSLCertificates&gt;true&lt;/EnforceSSLCertificates&gt;
+    &lt;LocalLogOutput&gt;/scratch/log&lt;/LocalLogOutput&gt;
+    &lt;LocalLogOutputIsConfigured&gt;false&lt;/LocalLogOutputIsConfigured&gt;
+    &lt;LocalLogOutputIsPersistent&gt;true&lt;/LocalLogOutputIsPersistent&gt;
+    &lt;LogLevel&gt;info&lt;/LogLevel&gt;
+    &lt;RemoteHost&gt;tcp://syslog.example.invalid:514&lt;/RemoteHost&gt;
+    &lt;StrictX509Compliance&gt;false&lt;/StrictX509Compliance&gt;
+  &lt;/obj&gt;</response>
+ </returnval>
+</ExecuteSoapResponse>

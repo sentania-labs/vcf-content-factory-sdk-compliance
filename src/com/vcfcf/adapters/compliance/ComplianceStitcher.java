@@ -1,8 +1,6 @@
 package com.vcfcf.adapters.compliance;
 
-import com.integrien.alive.common.adapter3.Logger;
 import com.vcfcf.adapter.json.SimpleJson;
-import com.vcfcf.adapter.stitch.SuiteApiStitcher;
 
 import java.util.HashMap;
 import java.util.List;
@@ -10,19 +8,25 @@ import java.util.Map;
 
 /**
  * v2 compliance stitcher — resolves foreign VMWARE resource UUIDs via the
- * framework {@link SuiteApiStitcher} facade and pushes per-control / rollup
+ * framework {@code SuiteApiStitcher} facade and pushes per-control / rollup
  * data onto them.
+ *
+ * <p>Build 96 (issue #27): the class carries no SDK or framework type
+ * except {@link SimpleJson}. The Suite API calls go through {@link SuiteApi}
+ * (the adapter adapts its {@code SuiteApiStitcher}) and the logging through
+ * {@link VSphereClient.Log} (the adapter adapts its platform logger), so the
+ * class compiles and runs in ci/run_java_tests.sh against a fake.
  *
  * <p><b>v1 → v2 change.</b> v1 held an aria-ops-core {@code SuiteAPIClient}
  * (injected on {@code UnlicensedAdapter}) and used the
  * {@code com.vmware.ops.api.model.resource.ResourceDto} model + heavy
  * reflection to resolve resources and invoke {@code addProperties}/{@code
  * addStats}. v2 has no aria-ops-core and no {@code com.vmware.ops.*} on the
- * classpath: all transport goes through the ambient {@link SuiteApiStitcher},
+ * classpath: all transport goes through the ambient {@code SuiteApiStitcher},
  * which acquires/releases a Suite API token per call as {@code
  * maintenanceAdmin}. Resource resolution is now a plain authenticated
  * {@code GET /api/resources?...} parsed with {@link SimpleJson}; pushes go
- * through {@link SuiteApiStitcher#pushProperties}/{@link
+ * through {@code SuiteApiStitcher#pushProperties}/{@code
  * SuiteApiStitcher#pushStats}.
  *
  * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
@@ -65,8 +69,32 @@ import java.util.Map;
 public final class ComplianceStitcher
 		implements ComplianceDecisions.PushSink {
 
-	private final SuiteApiStitcher stitcher;
-	private final Logger logger;
+	/**
+	 * Build 96 (issue #27): the three Suite API calls this class makes, so
+	 * it needs no framework type. The adapter passes its
+	 * {@code SuiteApiStitcher}; tests pass a fake. Same contract as the
+	 * framework methods: {@link #get} throws on a failed read, the pushes
+	 * log and swallow their own failures.
+	 */
+	public interface SuiteApi {
+		String get(String path) throws java.io.IOException,
+				InterruptedException;
+		void pushProperties(String resourceId, Map<String, String> properties,
+				long timestamp);
+		void pushStats(String resourceId, Map<String, Double> stats,
+				long timestamp);
+	}
+
+	/** Build 96: a log that drops everything (no platform logger). */
+	private static final VSphereClient.Log NO_LOG = new VSphereClient.Log() {
+		@Override public void info(String m) {}
+		@Override public void debug(String m) {}
+		@Override public void warn(String m) {}
+		@Override public boolean isDebugEnabled() { return false; }
+	};
+
+	private final SuiteApi stitcher;
+	private final VSphereClient.Log logger;
 
 	// Per-VMWARE-resource-kind name/moid lookup tables.
 	private final Map<String, Map<String, HostEntry>> resourcesByName =
@@ -107,9 +135,9 @@ public final class ComplianceStitcher
 		if (m != null) m.suiteCall();
 	}
 
-	public ComplianceStitcher(SuiteApiStitcher stitcher, Logger logger) {
+	public ComplianceStitcher(SuiteApi stitcher, VSphereClient.Log logger) {
 		this.stitcher = stitcher;
-		this.logger = logger;
+		this.logger = logger != null ? logger : NO_LOG;
 	}
 
 	/**
