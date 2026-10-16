@@ -23,9 +23,11 @@ import java.util.function.Function;
  * consecutive cycles, and every object is read within a bounded number of
  * cycles, whatever the per-kind sizes. Kept in the configured holder (one
  * per instance configuration, in memory). The order changes nothing in a
- * score: every object is scored on its own, and a kind's rollup is pushed
- * only from a cycle that read all of it (a resumed tail holds it back).
- * SDK-free.
+ * score: every object is scored on its own. A kind's rollup is pushed
+ * only over all of its objects: when a resumed walk finishes the kind, the
+ * share read by the earlier cycles of the pass ({@link Carry}) is added;
+ * when it ends early again, the kind stays held back and the share grows.
+ * Each kind is walked in MOID order (peer review item 7). SDK-free.
  */
 final class ResumeCursor {
 
@@ -40,14 +42,28 @@ final class ResumeCursor {
 	 */
 	synchronized <T> List<T> order(BenchmarkSelector.Kind kind,
 			List<T> objects, Function<T, String> id) {
+		if (objects == null) return null;
+		List<T> sorted = sorted(objects, id);
 		String c = after.get(kind);
-		if (c == null || objects == null) return objects;
-		for (int i = 0; i < objects.size(); i++) {
-			if (c.equals(id.apply(objects.get(i)))) {
-				return new ArrayList<>(objects.subList(i + 1, objects.size()));
+		if (c == null) return sorted;
+		for (int i = 0; i < sorted.size(); i++) {
+			if (c.equals(id.apply(sorted.get(i)))) {
+				return new ArrayList<>(sorted.subList(i + 1, sorted.size()));
 			}
 		}
-		return objects;
+		return sorted;
+	}
+
+	/**
+	 * Peer review item 7: the walk order is by MOID (nulls last), so the
+	 * cursor means the same position whatever order vCenter lists in.
+	 */
+	static <T> List<T> sorted(List<T> objects, Function<T, String> id) {
+		List<T> out = new ArrayList<>(objects);
+		out.sort(java.util.Comparator.comparing(id,
+				java.util.Comparator.nullsLast(
+						java.util.Comparator.<String>naturalOrder())));
+		return out;
 	}
 
 	/**
@@ -138,5 +154,40 @@ final class ResumeCursor {
 
 	synchronized void clearDropped() {
 		dropped = null;
+	}
+
+	// ----- Build 96 (peer review item 3): the pass carried across cycles --
+
+	/**
+	 * What the cycles of the current pass that ended early in a kind read
+	 * of it: its rollup share and the objects seen. When a later cycle
+	 * reads the rest of the kind, both are added, so the kind's rollup
+	 * covers every object (read across those cycles) and is pushed, and
+	 * the benchmark memory is trimmed against every object seen.
+	 */
+	static final class Carry {
+		final ComplianceRollup.Part part;
+		final java.util.Set<String> seen;
+
+		Carry(ComplianceRollup.Part part, java.util.Set<String> seen) {
+			this.part = part;
+			this.seen = java.util.Collections.unmodifiableSet(
+					new java.util.HashSet<>(seen));
+		}
+	}
+
+	private final Map<BenchmarkSelector.Kind, Carry> carry =
+			new EnumMap<>(BenchmarkSelector.Kind.class);
+
+	synchronized Carry carry(BenchmarkSelector.Kind kind) {
+		return carry.get(kind);
+	}
+
+	synchronized void carry(BenchmarkSelector.Kind kind, Carry c) {
+		if (c == null) {
+			carry.remove(kind);
+		} else {
+			carry.put(kind, c);
+		}
 	}
 }

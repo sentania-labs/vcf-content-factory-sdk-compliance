@@ -33,6 +33,7 @@ public final class Build96BudgetTest {
 
 	public static void main(String[] args) throws Exception {
 		intervalAndBudget();
+		resumeOrderByMoid();
 		breakerAndDeadline();
 		shortTimeoutForCheapCalls();
 		refusedOnceExhausted();
@@ -42,6 +43,7 @@ public final class Build96BudgetTest {
 		twoCyclesVisitEverything();
 		vmsNotStarved();
 		objectLongerThanBudget();
+		dropsMustBeConsecutive();
 		deadlineAfterReadsDoesNotDrop();
 		hungHostCostsOneTimeout();
 		noPartialScore();
@@ -67,8 +69,20 @@ public final class Build96BudgetTest {
 				"0 is not reported: the resource's value");
 		T.eq(300, CycleBudget.interval(-1, null).seconds,
 				"nothing reported: the default");
-		T.eq(240000L, CycleBudget.budgetMs(300), "80% of 5 minutes");
+		T.eq(285000L, CycleBudget.budgetMs(300), "95% of 5 minutes (peer review item 3)");
 		T.eq(5, CycleBudget.BREAKER_TIMEOUTS, "breaker default");
+	}
+
+	/** Peer review item 7: each kind is walked in MOID order. */
+	static void resumeOrderByMoid() {
+		ResumeCursor c = new ResumeCursor();
+		List<String> listed = Arrays.asList("host-3", "host-1", "host-2");
+		T.eq("[host-1, host-2, host-3]", c.order(BenchmarkSelector.Kind.HOST,
+				listed, x -> x).toString(), "sorted, whatever vCenter's order");
+		c.stoppedAfter(BenchmarkSelector.Kind.HOST, "host-1");
+		T.eq("[host-2, host-3]", c.order(BenchmarkSelector.Kind.HOST,
+				Arrays.asList("host-2", "host-3", "host-1"), x -> x).toString(),
+				"the tail after the cursor in MOID order");
 	}
 
 	static void breakerAndDeadline() {
@@ -282,7 +296,7 @@ public final class Build96BudgetTest {
 			h.cycle();
 			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
 					"cycle 1 complete");
-			T.check(h.logged("Cycle limits: time budget 240 s (80% of the "
+			T.check(h.logged("Cycle limits: time budget 285 s (95% of the "
 					+ "300 s interval, the default collection interval"),
 					"budget line names its source");
 
@@ -318,8 +332,9 @@ public final class Build96BudgetTest {
 					"the next cycle starts at the hosts");
 
 			// Cycle 3 resumes the host walk with host-11 (the tail of the
-			// pass: Host still held back, since it is not a whole-kind
-			// read), then VMs and round to the small kinds.
+			// pass), then VMs and round to the small kinds. Peer review item
+			// 3: the round completes, so Host is pushed over all three
+			// hosts (host-10's share carried from cycle 2), not held back.
 			h.override = null;
 			int before3 = h.suite.pushes.size();
 			h.cycle();
@@ -327,8 +342,10 @@ public final class Build96BudgetTest {
 			T.check(pushedTo(h, before3, "r-host-12"), "host-12 read");
 			T.check(!pushedTo(h, before3, "r-host-10"),
 					"host-10, read earlier in this pass, is not read again");
-			T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
-					"a resumed tail holds Host back");
+			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"the round completed: incomplete cleared");
+			T.eq(3.0, h.lastRollup().get(P + "Host|scored"),
+					"Host over all three hosts (carried share added)");
 			T.eq(null, h.holder.resume.cursor(BenchmarkSelector.Kind.HOST),
 					"the pass reached the end of the hosts");
 			T.eq(null, h.holder.resume.startKind(), "and the round");
@@ -344,7 +361,7 @@ public final class Build96BudgetTest {
 
 	/**
 	 * Review B1: two consecutive budget-ended cycles together visit every
-	 * object. Each host costs 50 s of the 240 s budget, so a cycle reads
+	 * object. Each host costs 50 s of the 285 s budget, so a cycle reads
 	 * four of six hosts and is cut in the fifth; the next cycle starts
 	 * after the last host finished.
 	 */
@@ -367,8 +384,14 @@ public final class Build96BudgetTest {
 			for (int cycle = 1; cycle <= 2; cycle++) {
 				int before = h.suite.pushes.size();
 				h.cycle();
-				T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
-						"cycle " + cycle + " ended early");
+				// Cycle 1 ends early; cycle 2 reads the rest and completes
+				// the round, so Host is pushed over all six (item 3).
+				T.eq(cycle == 1 ? 1.0 : 0.0, h.lastRollup().get(
+						ComplianceRollup.INCOMPLETE_KEY), "cycle " + cycle);
+				if (cycle == 2) {
+					T.eq(6.0, h.lastRollup().get(P + "Host|scored"),
+							"Host over all six hosts");
+				}
 				synchronized (h.suite.pushes) {
 					for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
 							h.suite.pushes.size())) {
@@ -385,7 +408,7 @@ public final class Build96BudgetTest {
 
 	/**
 	 * Review B1-r2 (a): the host walk alone overruns the budget (4 hosts at
-	 * 100 s each, 240 s budget) and the vCenter object costs 150 s, and
+	 * 100 s each, 285 s budget) and the vCenter object costs 150 s, and
 	 * every VM is still read within 3 cycles, because the next cycle
 	 * carries on from the hosts into the VMs instead of starting again at
 	 * the small kinds. (Restarting at the top each cycle, the vCenter's
@@ -437,6 +460,10 @@ public final class Build96BudgetTest {
 				"host-11", "esx02")) {
 			AtomicLong now = new AtomicLong(0);
 			h.adapter.budgetClock = now::get;
+			h.cycle();   // a full read first: host-10's score on record
+			Double before = h.suite.statsFor("r-host-10").get(
+					"VCF-CF Compliance|score");
+			T.check(before != null, "host-10 scored by a full read");
 			h.override = r -> {
 				if (r.body.contains("runtime.connectionState")
 						&& r.body.contains(">host-10<")) {
@@ -452,25 +479,67 @@ public final class Build96BudgetTest {
 			int b2 = h.suite.pushes.size();
 			h.cycle();
 			Map<String, Double> h10 = new java.util.HashMap<>();
+			Map<String, String> h10p = new java.util.HashMap<>();
 			synchronized (h.suite.pushes) {
 				for (FakeSuiteApi.Push p : h.suite.pushes.subList(b2,
 						h.suite.pushes.size())) {
-					if (p.stats != null && p.resourceId.equals("r-host-10")) {
-						h10.putAll(p.stats);
-					}
+					if (!p.resourceId.equals("r-host-10")) continue;
+					if (p.stats != null) h10.putAll(p.stats);
+					if (p.props != null) h10p.putAll(p.props);
 				}
 			}
 			T.eq(1.0, h10.get(ComplianceDecisions.HAS_UNREADABLE),
-					"cycle 2: pushed flagged (Not Read = 1)");
+					"cycle 2: Not Read = 1");
+			// Peer review item 2: markers only.
+			T.eq(java.util.Collections.singleton(
+					ComplianceDecisions.HAS_UNREADABLE), h10.keySet(),
+					"cycle 2: no score, counter or per-control key pushed");
+			T.check(h10p.get(ComplianceDecisions.UNREADABLE_REASON)
+					.startsWith("cut by cycle budget twice"), "the reason");
+			T.eq(before, h.suite.statsFor("r-host-10").get(
+					"VCF-CF Compliance|score"), "the score did not move");
 			T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
 					"cycle 2: Host held back");
-			T.check(h.logged("pushed now with what was read"),
-					"the WARN says so");
+			T.check(h.logged("cut by cycle budget twice"), "the WARN says so");
 
 			int b3 = h.suite.pushes.size();
 			h.cycle();
 			T.check(pushedTo(h, b3, "r-host-11"),
 					"cycle 3: the walk moved past host-10");
+		}
+	}
+
+	/**
+	 * Peer review item 5: the two-drop rule needs consecutive drops. A drop
+	 * in one cycle, clean cycles after it, then a drop again counts as a
+	 * first drop (not pushed), not a second.
+	 */
+	static void dropsMustBeConsecutive() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			final boolean[] slow = {true};
+			h.override = r -> {
+				if (slow[0] && r.body.contains("runtime.connectionState")
+						&& r.body.contains(">host-10<")) {
+					now.addAndGet(300L * 1_000_000_000L);
+				}
+				return null;
+			};
+			int b = h.suite.pushes.size();
+			h.cycle();   // cycle N: dropped
+			T.check(!pushedTo(h, b, "r-host-10"), "cycle N: dropped");
+			slow[0] = false;
+			for (int i = 1; i <= 4; i++) {
+				b = h.suite.pushes.size();
+				h.cycle();   // clean cycles
+				T.check(pushedTo(h, b, "r-host-10"), "clean cycle " + i);
+			}
+			slow[0] = true;
+			b = h.suite.pushes.size();
+			h.cycle();   // cycle N+5: a first drop again
+			T.check(!pushedTo(h, b, "r-host-10"),
+					"cycle N+5: dropped (a first drop), not pushed as a second");
 		}
 	}
 
@@ -523,10 +592,13 @@ public final class Build96BudgetTest {
 	}
 
 	/**
-	 * Review B1: a host whose hostd hangs (vCenter still says connected)
-	 * costs one timeout per cycle: its QueryOptions times out, then none of
-	 * its vim25 or esxcli reads is attempted; the next host is read
-	 * normally.
+	 * Review B1, peer review item 1: a host whose hostd hangs (vCenter
+	 * still says connected) costs one host-relayed timeout: its QueryOptions
+	 * times out, and none of its esxcli commands is attempted. Properties
+	 * vCenter answers from its own inventory are still read, exactly as in
+	 * build 95, so the host scores the same controls build 95 would
+	 * (advanced settings and esxcli unreadable, vCenter-answered controls
+	 * read); the next host is read normally.
 	 */
 	static void hungHostCostsOneTimeout() throws Exception {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
@@ -534,15 +606,15 @@ public final class Build96BudgetTest {
 			h.cycle();
 			h.client.setReadTimeoutMs(200);
 			h.client.setShortReadTimeoutMs(200);
-			final int[] late = {0};
+			final int[] relayed = {0};
 			h.override = r -> {
 				boolean hostTen = r.body.contains(">host-10<")
 						|| r.body.contains("EsxHostAdvSettings-host-10");
-				boolean relayed = r.action.endsWith("/QueryOptions")
+				boolean hostRelayed = r.action.endsWith("/QueryOptions")
 						|| r.action.endsWith("/ExecuteSoap")
 						|| r.action.endsWith("/RetrieveManagedMethodExecuter");
-				if (hostTen && relayed) {
-					late[0]++;
+				if (hostTen && hostRelayed) {
+					relayed[0]++;
 					return late(1000, FakeVCenter.ok("QueryOptions", ""));
 				}
 				return null;
@@ -550,23 +622,19 @@ public final class Build96BudgetTest {
 			int reqBefore = h.vc.requests.size();
 			int before = h.suite.pushes.size();
 			h.cycle();
-			T.eq(1, late[0], "one host-relayed call to the hung host");
-			int laterHostTen = 0;
-			boolean afterQuery = false;
+			T.eq(1, relayed[0], "one host-relayed call to the hung host");
+			boolean lockdownRead = false;
 			synchronized (h.vc.requests) {
 				for (FakeVCenter.Req q : h.vc.requests.subList(reqBefore,
 						h.vc.requests.size())) {
-					if (q.action.endsWith("/QueryOptions")
-							&& q.body.contains("host-10")) {
-						afterQuery = true;
-						continue;
-					}
-					if (afterQuery && q.body.contains(">host-10<")) {
-						laterHostTen++;
+					if (q.body.contains(">host-10<")
+							&& q.body.contains("config.lockdownMode")) {
+						lockdownRead = true;
 					}
 				}
 			}
-			T.eq(0, laterHostTen, "no read of host-10 after its timeout");
+			T.check(lockdownRead,
+					"a vCenter-answered property of host-10 is still read");
 			T.check(pushedTo(h, before, "r-host-11"),
 					"the next host is read and pushed");
 			Map<String, Double> h10 = new java.util.HashMap<>();
@@ -579,9 +647,11 @@ public final class Build96BudgetTest {
 				}
 			}
 			T.eq(1.0, h10.get(ComplianceDecisions.HAS_UNREADABLE),
-					"host-10 flagged not read");
-			T.check(!h10.containsKey("VCF-CF Compliance|score"),
-					"no score from nothing read");
+					"advanced settings and esxcli unreadable: flagged");
+			T.eq(1.0, h10.get("VCF-CF Compliance|esx.lockdown-mode|Compliant"),
+					"the vCenter-answered control is read and scored");
+			T.check(h10.containsKey("VCF-CF Compliance|score"),
+					"scored over what was read, as build 95 would");
 		}
 	}
 

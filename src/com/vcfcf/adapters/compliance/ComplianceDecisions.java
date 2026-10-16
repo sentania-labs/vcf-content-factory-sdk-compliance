@@ -384,6 +384,28 @@ public final class ComplianceDecisions {
 	public static final String VERSION_UNREADABLE_CONTROLS =
 			"(not known: the benchmark depends on the version)";
 
+	/**
+	 * Build 96 (issue #16, peer review item 2): an object cut by the cycle
+	 * budget two cycles in a row. Only the markers are pushed:
+	 * has_unreadable = 1 (Not Read) and the reason; no score, no counters,
+	 * no per-control value, so nothing from a partial read is shown (its
+	 * last values stay). The walk then moves past it.
+	 */
+	public static Map<String, Double> cutTwiceStats() {
+		Map<String, Double> stats = new LinkedHashMap<>();
+		stats.put(HAS_UNREADABLE, 1.0);
+		return stats;
+	}
+
+	/** Build 96: the reason text of an object cut twice. */
+	public static final String CUT_TWICE_REASON = "cut by cycle budget twice";
+
+	public static Map<String, String> cutTwiceProps() {
+		return unreadableProps(CUT_TWICE_REASON + " (not read in full on two "
+				+ "cycles in a row; the values shown are from its last full "
+				+ "read)", "(not known: " + CUT_TWICE_REASON + ")");
+	}
+
 	private static Map<String, Double> zeroCounters() {
 		Map<String, Double> stats = new LinkedHashMap<>();
 		stats.put(K + "pass_count", 0.0);
@@ -950,6 +972,35 @@ public final class ComplianceDecisions {
 					orphanStats(ids));
 			this.props = java.util.Collections.unmodifiableMap(
 					orphanProps(ids, null, ids, overridesFile));
+		}
+
+		private SkipPush(Set<String> ids, Map<String, Double> stats,
+				Map<String, String> props) {
+			this.ids = java.util.Collections.unmodifiableSet(ids);
+			this.stats = java.util.Collections.unmodifiableMap(stats);
+			this.props = java.util.Collections.unmodifiableMap(props);
+		}
+
+		/**
+		 * Build 96 (issue #42, peer review item 4): this Skip payload plus
+		 * -1 and the "(not in applied benchmark: ...)" Actual for the
+		 * retired keys whose repeat rides the object's push this cycle
+		 * ({@code retired}; none of them is live or skipped). {@code skip}
+		 * may be null.
+		 */
+		public static SkipPush withRetired(SkipPush skip, Set<String> retired,
+				String appliedName) {
+			if (retired == null || retired.isEmpty()) return skip;
+			Set<String> ids = new TreeSet<>(retired);
+			Map<String, Double> stats = new LinkedHashMap<>(orphanStats(retired));
+			Map<String, String> props = new LinkedHashMap<>(
+					orphanProps(retired, appliedName));
+			if (skip != null) {
+				ids.addAll(skip.ids);
+				stats.putAll(skip.stats);
+				props.putAll(skip.props);
+			}
+			return new SkipPush(ids, stats, props);
 		}
 
 		public boolean isEmpty() {

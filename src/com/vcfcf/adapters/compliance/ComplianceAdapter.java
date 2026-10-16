@@ -695,10 +695,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 *       score: a host at 64.58 never shows 100 from five passing
 	 *       reads), the kind held back, the next cycle starts with it.</li>
 	 *   <li>{@link #PUSH_THEN_STOP}: the second drop in a row of the same
-	 *       object. It is pushed with what was read (the refused reads
-	 *       UNREADABLE, Not Read = 1, the build 95 skip-and-flag rule), the
-	 *       kind held back, and the walk steps past it, so an object that
-	 *       never fits costs at most two cycles and never pins the walk.</li>
+	 *       object. Only its markers are pushed (Not Read = 1 and the
+	 *       reason "cut by cycle budget twice", no score: peer review item
+	 *       2), the kind held back, and the walk steps past it, so an
+	 *       object that never fits costs at most two cycles and never pins
+	 *       the walk.</li>
 	 * </ul>
 	 * {@link #finish} clears the cursor when the whole kind was read.
 	 */
@@ -709,27 +710,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		final BenchmarkSelector.Kind kind;
 		final ComplianceRollup rollup;
+		final java.util.Set<String> seen;
 		private String inFlight;
 		private String done;
 		private boolean ended;
+		private boolean resumed;
 		private int refusalsAtStart;
 
-		KindWalk(BenchmarkSelector.Kind kind, ComplianceRollup rollup) {
+		KindWalk(BenchmarkSelector.Kind kind, ComplianceRollup rollup,
+				java.util.Set<String> seen) {
 			this.kind = kind;
 			this.rollup = rollup;
+			this.seen = seen;
 		}
 
 		/**
-		 * This cycle's objects of the kind. A resumed walk (only the tail
-		 * after the cursor, review B1-r2) cannot read the whole kind, so
-		 * the kind is held back this cycle (its rollup keys keep their
-		 * values; Rollup|incomplete = 1); the objects read are pushed.
+		 * This cycle's objects of the kind, in MOID order: the whole list,
+		 * or, resuming a pass (review B1-r2), only the tail after the last
+		 * object an early-ended cycle finished. A walk that is not a
+		 * resume drops any share carried from an earlier pass.
 		 */
 		<T> List<T> order(List<T> objects,
 				java.util.function.Function<T, String> id) {
-			if (cycle.resume.resumed(kind, objects, id)) {
-				rollup.markIncomplete(kind);
-			}
+			resumed = cycle.resume.resumed(kind, objects, id);
+			if (!resumed) cycle.resume.carry(kind, null);
 			return cycle.resume.order(kind, objects, id);
 		}
 
@@ -762,11 +766,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				cycle.resume.clearDropped();
 				cycle.resume.stoppedAfter(kind, inFlight);
 				logWarn("Cycle ended early while reading " + where + ": "
-						+ why + ". It was cut the cycle before too, so it is "
-						+ "pushed now with what was read (the rest UNREADABLE, "
-						+ "Not Read = 1) and the walk moves past it; "
-						+ kind.rollupName + " and every kind not yet collected "
-						+ "are held back (Rollup|incomplete = 1).");
+						+ why + ". It was cut the cycle before too, so only "
+						+ "Not Read = 1 and the reason (\"cut by cycle budget "
+						+ "twice\") are pushed, no score from the partial read, "
+						+ "and the walk moves past it; " + kind.rollupName
+						+ " and every kind not yet collected are held back "
+						+ "(Rollup|incomplete = 1).");
 				return PUSH_THEN_STOP;
 			}
 			cycle.resume.dropped(key);
@@ -781,8 +786,40 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return DROP;
 		}
 
+		/**
+		 * Call after the loop, however it ended. Peer review item 3:
+		 * <ul>
+		 *   <li>Ended early: the kind is held back; what this cycle read of
+		 *       it (its rollup share and the objects seen) is added to the
+		 *       share carried for the pass.</li>
+		 *   <li>Finished, resuming a pass: the carried share and seen
+		 *       objects are added to this cycle's, so the kind's rollup
+		 *       covers every object and is pushed (not held back), and the
+		 *       benchmark memory is trimmed against all of them.</li>
+		 *   <li>Finished from the top: nothing carried.</li>
+		 * </ul>
+		 */
 		void finish() {
-			if (!ended) cycle.resume.completed(kind);
+			ResumeCursor.Carry prior = cycle.resume.carry(kind);
+			if (ended) {
+				java.util.Set<String> s2 = new java.util.HashSet<>(
+						prior == null ? java.util.Collections.<String>emptySet()
+								: prior.seen);
+				String prefix = kind.name() + "|";
+				for (String k2 : seen) {
+					if (k2.startsWith(prefix)) s2.add(k2);
+				}
+				ComplianceRollup.Part now = rollup.part(kind);
+				cycle.resume.carry(kind, new ResumeCursor.Carry(
+						prior == null ? now : prior.part.plus(now), s2));
+				return;
+			}
+			cycle.resume.completed(kind);
+			if (resumed && prior != null) {
+				rollup.addPart(kind, prior.part);
+				seen.addAll(prior.seen);
+			}
+			cycle.resume.carry(kind, null);
 		}
 	}
 
@@ -1038,6 +1075,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// (vmHostVersion), the same value. collectVCenter runs every cycle
 		// (it resolves the vCenter object the rollup goes to, with no
 		// vCenter call once the limit is reached).
+		cycle.retiredRepeats.beginCycle();
+		// Peer review item 4: last cycle's unfinished cleanup first.
+		runDeferredCleanup(cs);
 		ComplianceStitcher.HostEntry vcEntry = null;
 		java.util.Map<String, String> hostVersions =
 				new java.util.HashMap<>();
@@ -1655,6 +1695,49 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				cycle.account.overridesFile);
 	}
 
+	/**
+	 * Build 96 (issue #42, peer review item 4): {@code skip} plus -1 for the
+	 * object's retired keys still owed a repeat ({@link RetiredKeyRepeats},
+	 * at most 4 -1 pushes per key in all), so the repeats ride the object's
+	 * own push, inside the cycle budget, like a Skip. A key pushed with a
+	 * value or skipped this cycle is never among them.
+	 */
+	private ComplianceDecisions.SkipPush withRetiredRepeats(
+			ComplianceDecisions.SkipPush skip, BenchmarkSelector.Kind kind,
+			String moid, ComplianceDecisions.Decision d,
+			ControlEvaluator.ComplianceResult cr) {
+		if (moid == null) return skip;
+		java.util.Set<String> live = new java.util.HashSet<>(
+				ComplianceDecisions.pushedIds(cr));
+		if (skip != null) live.addAll(skip.ids);
+		java.util.Set<String> due = cycle.retiredRepeats.fold(
+				LastBenchmarkMemory.key(kind, moid), live);
+		return ComplianceDecisions.SkipPush.withRetired(skip, due,
+				d.profileName);
+	}
+
+	/**
+	 * Build 96 (issue #16, peer review item 2): an object cut by the cycle
+	 * budget two cycles in a row. Only Not Read = 1 (has_unreadable) and
+	 * the reason "cut by cycle budget twice" are pushed, no score, no
+	 * counters, no per-control value, so nothing from the partial read is
+	 * shown; its last values stay. Counted in the rollup like an object
+	 * with nothing read (its benchmark bucket only); the kind is already
+	 * held back.
+	 */
+	private void pushCutTwice(BenchmarkSelector.Kind kind,
+			ComplianceDecisions.Decision d, String resourceId,
+			ComplianceRollup rollup) {
+		rollup.recordEvaluated(kind, d.bucket, 0, 0, 0, 0.0);
+		if (resourceId == null || cycle.stitcher == null) return;
+		long ts = System.currentTimeMillis();
+		cycle.stitcher.pushProperties(resourceId,
+				ComplianceDecisions.withObjectKind(
+						ComplianceDecisions.cutTwiceProps(), kind), ts);
+		cycle.stitcher.pushStats(resourceId,
+				ComplianceDecisions.cutTwiceStats(), ts);
+	}
+
 	/** One object queued for end-of-cycle cleanup. */
 	private static final class PendingCleanup {
 		final BenchmarkSelector.Kind kind;
@@ -1698,11 +1781,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void cleanStaleControls(CycleStats cs) throws InterruptedException {
 		if (cycle.stitcher == null || pendingCleanup.isEmpty()) return;
 		if (budgetExhausted()) {
-			// Build 96 (issue #16): over budget; the cleanup (VCF Ops reads
-			// and pushes only) is retried next cycle.
+			// Build 96 (issue #16, peer review item 4): over budget; the
+			// cleanup (VCF Ops reads and pushes only) is carried to the
+			// start of the next cycle, before its walk.
+			deferCleanup(pendingCleanup, 0);
 			logInfo("Stale-control cleanup skipped this cycle: the cycle "
-					+ "ended early; retried next cycle");
-			pendingCleanup.clear();
+					+ "ended early; carried to the start of the next cycle");
 			return;
 		}
 		java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
@@ -1713,6 +1797,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			byKind.computeIfAbsent(p.kind, k -> new java.util.ArrayList<>())
 					.add(p);
 		}
+		java.util.List<PendingCleanup> ordered = new java.util.ArrayList<>();
+		for (java.util.List<PendingCleanup> l : byKind.values()) {
+			ordered.addAll(l);
+		}
+		int done = 0;
 		for (java.util.Map.Entry<BenchmarkSelector.Kind,
 				java.util.List<PendingCleanup>> e : byKind.entrySet()) {
 			java.util.List<PendingCleanup> objs = e.getValue();
@@ -1720,16 +1809,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				stop.check("per-control cleanup of " + e.getKey().rollupName
 						+ " objects " + i + "+");
 				if (budgetExhausted()) {
-					// Build 96 (review W1): the cleanup's reads and pushes
-					// count against the budget too; the rest is retried
-					// next cycle.
+					// Build 96 (review W1, peer review item 4): the
+					// cleanup's reads and pushes count against the budget;
+					// the rest is carried to the start of the next cycle.
+					deferCleanup(ordered, done);
 					logInfo("Stale-control cleanup stopped at "
 							+ e.getKey().rollupName + " object " + i + ": the "
-							+ "cycle time budget was reached; retried next "
-							+ "cycle");
-					pendingCleanup.clear();
+							+ "cycle time budget was reached; the rest is "
+							+ "carried to the start of the next cycle");
 					return;
 				}
+				done += Math.min(CLEANUP_BATCH, objs.size() - i);
 				cleanBatch(e.getKey(), objs.subList(i,
 						Math.min(objs.size(), i + CLEANUP_BATCH)),
 						bundled.values(), cs);
@@ -1757,6 +1847,36 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// Objects per cleanup batch; requests within a batch are sized by URL
 	// length, so this only bounds the candidate union and memory.
 	private static final int CLEANUP_BATCH = 500;
+
+	/**
+	 * Build 96 (peer review item 4): keep the cleanup entries from
+	 * {@code from} on for the start of the next cycle (in the configured
+	 * holder), and clear this cycle's list. The retirements they find (a
+	 * lingering 0 or 1 set to -1) then happen within one cycle of the
+	 * object's visit even when every cycle ends early; the repeats ride
+	 * the objects' own pushes.
+	 */
+	private void deferCleanup(java.util.List<PendingCleanup> all, int from) {
+		cycle.deferredCleanup.clear();
+		cycle.deferredCleanup.addAll(all.subList(from, all.size()));
+		pendingCleanup.clear();
+	}
+
+	/**
+	 * Build 96 (peer review item 4): the cleanup a cycle that ended early
+	 * carried over, run at the start of this cycle, before the walk (the
+	 * budget is checked before every batch, as at the end).
+	 */
+	private void runDeferredCleanup(CycleStats cs) throws InterruptedException {
+		if (cycle.deferredCleanup.isEmpty()) return;
+		java.util.List<PendingCleanup> carried = new java.util.ArrayList<>();
+		for (Object o : cycle.deferredCleanup) carried.add((PendingCleanup) o);
+		cycle.deferredCleanup.clear();
+		logInfo("Stale-control cleanup carried from the last cycle: "
+				+ carried.size() + " object(s)");
+		pendingCleanup.addAll(carried);
+		cleanStaleControls(cs);
+	}
 
 	private void cleanBatch(BenchmarkSelector.Kind kind,
 			java.util.List<PendingCleanup> batch,
@@ -1819,7 +1939,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					ComplianceDecisions.heldNotEvaluatedControls(plan,
 							objLatest);
 			java.util.Set<String> ids = cycle.retiredRepeats.toPush(
-					p.objectKey, stale, heldAll);
+					p.objectKey, stale, heldAll,
+					objLatest == null || objLatest.isEmpty());
 			java.util.Set<String> held = new java.util.TreeSet<>(ids);
 			held.removeAll(stale);
 			if (ids.isEmpty()) continue;
@@ -1928,7 +2049,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.HOST,
 				"HostSystem", rollup);
 		Shadow shadow = new Shadow("Host", "HostSystem", bulkShadow);
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.HOST, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.HOST, rollup, seen);
 		hosts = walk.order(hosts, h -> h.moid);   // build 96 (review B1)
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
@@ -2062,6 +2183,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (verdict == KindWalk.DROP) {
 				break;   // build 96 (review W2): no partial score
 			}
+			if (verdict == KindWalk.PUSH_THEN_STOP) {
+				// Peer review item 2: markers only, never a partial score.
+				pushCutTwice(BenchmarkSelector.Kind.HOST, d, resourceId,
+						rollup);
+				break;
+			}
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
@@ -2116,10 +2243,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			ComplianceDecisions.SkipPush skip =
 					skipInForce(BenchmarkSelector.Kind.HOST, d);
-			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
+			pushComplianceViaClient(resourceId, cr, d.profileName,
+					withRetiredRepeats(skip, BenchmarkSelector.Kind.HOST,
+							hostId, d, cr));
 			afterPush(BenchmarkSelector.Kind.HOST, hostId, d, resourceId, cs,
 					ComplianceDecisions.pushedIds(cr), skip);
-			if (verdict == KindWalk.PUSH_THEN_STOP) break;   // review B1-r2
 		}
 		logInfo("Hosts scored this cycle: " + cs.hostsScored + " of "
 				+ cs.hosts + " (" + cs.hostsNonCompliant + " non-compliant, "
@@ -2260,7 +2388,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.VM,
 				"VirtualMachine", rollup);
 		Shadow shadow = new Shadow("VM", "VirtualMachine", bulkShadow);
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VM, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VM, rollup, seen);
 		vms = walk.order(vms, v -> v.moid);   // build 96 (review B1)
 
 		for (VSphereClient.VmInfo vm : vms) {
@@ -2340,6 +2468,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (verdict == KindWalk.DROP) {
 				break;   // build 96 (review W2): no partial score
 			}
+			if (verdict == KindWalk.PUSH_THEN_STOP) {
+				// Peer review item 2: markers only, never a partial score.
+				pushCutTwice(BenchmarkSelector.Kind.VM, d, resourceId, rollup);
+				break;
+			}
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
@@ -2347,10 +2480,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 			ComplianceDecisions.SkipPush skip =
 					skipInForce(BenchmarkSelector.Kind.VM, d);
-			pushComplianceViaClient(resourceId, cr, d.profileName, skip);
+			pushComplianceViaClient(resourceId, cr, d.profileName,
+					withRetiredRepeats(skip, BenchmarkSelector.Kind.VM,
+							vm.moid, d, cr));
 			afterPush(BenchmarkSelector.Kind.VM, vm.moid, d, resourceId, cs,
 					ComplianceDecisions.pushedIds(cr), skip);
-			if (verdict == KindWalk.PUSH_THEN_STOP) break;   // review B1-r2
 		}
 		logInfo("VM compliance: " + cs.vms + " VMs seen, "
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
@@ -2423,7 +2557,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					resourceName, moid);
 			return null;
 		}
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VCENTER, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VCENTER, rollup, seen);
 		if (!walk.next(moid, "the vCenter object")) {
 			// Build 96 (issue #16): not read this cycle, but its object is
 			// resolved, so the rollup (incomplete = 1) is still pushed.
@@ -2479,7 +2613,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// Build 96 (review W2, B1-r2): a call refused while the vCenter was
 		// read drops it this cycle (no partial score); cut two cycles in a
 		// row, it is pushed flagged.
-		if (walk.afterRead("the vCenter object") == KindWalk.DROP) {
+		int verdict = walk.afterRead("the vCenter object");
+		if (verdict == KindWalk.DROP) {
+			return he;
+		}
+		if (verdict == KindWalk.PUSH_THEN_STOP) {
+			// Peer review item 2: markers only, never a partial score.
+			pushCutTwice(BenchmarkSelector.Kind.VCENTER, d, resourceId, rollup);
 			return he;
 		}
 
@@ -2489,7 +2629,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		ComplianceDecisions.SkipPush skip =
 				skipInForce(BenchmarkSelector.Kind.VCENTER, d);
-		pushComplianceViaClient(resourceId, cr, d.profileName, skip);
+		pushComplianceViaClient(resourceId, cr, d.profileName,
+				withRetiredRepeats(skip, BenchmarkSelector.Kind.VCENTER, moid,
+						d, cr));
 		logInfo("Pushed vCenter compliance data to " + he.hostName
 				+ " (resource=" + he.resourceId + ", VCURL=" + he.moid
 				+ ")");
@@ -2525,7 +2667,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type,
 				bulkShadow);
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VDS, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VDS, rollup, seen);
 		switches = walk.order(switches, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
@@ -2572,7 +2714,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type,
 				bulkShadow);
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.PORTGROUP, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.PORTGROUP, rollup, seen);
 		pgs = walk.order(pgs, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
@@ -2627,7 +2769,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type,
 				bulkShadow);
-		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.CLUSTER, rollup);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.CLUSTER, rollup, seen);
 		clusters = walk.order(clusters, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);
@@ -2709,14 +2851,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (verdict == KindWalk.DROP) {
 			return verdict;   // build 96 (review W2): no partial score
 		}
+		if (verdict == KindWalk.PUSH_THEN_STOP) {
+			// Peer review item 2: markers only, never a partial score.
+			pushCutTwice(kind, d, resourceId, rollup);
+			return verdict;
+		}
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 				cr.unreadableCount, cr.score);
 		ComplianceDecisions.SkipPush skip = skipInForce(kind, d);
-		pushOrProfileName(resourceId, cr, d.profileName, skip);
+		pushOrProfileName(resourceId, cr, d.profileName,
+				withRetiredRepeats(skip, kind, moid, d, cr));
 		afterPush(kind, moid, d, resourceId, cs,
 				ComplianceDecisions.pushedIds(cr), skip);
-		return verdict;   // PUSH_THEN_STOP ends the walk (review B1-r2)
+		return verdict;
 	}
 
 	/**

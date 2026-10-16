@@ -210,6 +210,12 @@ final class AdapterHarness implements AutoCloseable {
 					v = FakeVCenter.vals(path, "<val xsi:type="
 							+ "\"HostSystemConnectionState\">connected</val>");
 					break;
+				case "config.lockdownMode":
+					// Build 96 (peer review item 1): a property vCenter
+					// answers from its inventory, read for esx.lockdown-mode.
+					v = FakeVCenter.vals(path, "<val xsi:type="
+							+ "\"HostLockdownMode\">lockdownNormal</val>");
+					break;
 				case "configManager.advancedOption":
 					v = FakeVCenter.vals(path, "<val type=\"OptionManager\">"
 							+ "EsxHostAdvSettings-" + moid + "</val>");

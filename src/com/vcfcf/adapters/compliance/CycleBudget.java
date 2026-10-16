@@ -13,8 +13,12 @@ import java.util.function.LongSupplier;
  *       {@link #DEFAULT_INTERVAL_SEC}; clamped to {@link #MIN_INTERVAL_SEC}
  *       to {@link #MAX_INTERVAL_SEC}). The budget is checked before each
  *       call and does not cancel a call in flight, so the worst case is
- *       the budget plus one call (30 s connect plus 120 s read): 390 s on
- *       a 5 minute interval, which is the interval plus 90 s.</li>
+ *       the budget plus one call (30 s connect plus 120 s read): 435 s on
+ *       a 5 minute interval, which is the interval plus 135 s. 95 percent
+ *       (peer review item 3): a walk that took 80 to 95 percent of the
+ *       interval completed every cycle on build 95 and still does; only a
+ *       walk longer than 95 percent ends early (remedy: a longer
+ *       interval).</li>
  *   <li><b>Consecutive-timeout breaker:</b> {@link #BREAKER_TIMEOUTS} vCenter
  *       calls in a row that timed out (connect or read), with no answer in
  *       between: the vCenter is not answering, and every further call would
@@ -31,7 +35,7 @@ import java.util.function.LongSupplier;
 public final class CycleBudget {
 
 	/** Share of the collection interval a cycle may take. */
-	public static final double FRACTION = 0.8;
+	public static final double FRACTION = 0.95;
 
 	/** VCF Operations' default collection interval (5 minutes). */
 	public static final int DEFAULT_INTERVAL_SEC = 300;

@@ -1,23 +1,33 @@
 package com.vcfcf.adapters.compliance;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Build 96 (issue #42, review W1): how many times the stale-key cleanup
- * has pushed -1 to each retired key, so the repeat stops after
- * {@link #MAX_PUSHES} pushes per key (the retirement itself counts as one).
- * The per-control alert cancels after 3 fresh non-failing samples, so 4 is
- * enough; an unbounded repeat would cost two Suite API calls per object
- * per cycle for good. In memory, one per instance configuration: after a
- * restart a held key gets at most {@link #MAX_PUSHES} more, which is
- * harmless. Keyed by the object's {@link LastBenchmarkMemory#key} (kind and
- * MOID). An object's entries are dropped for keys that are no longer
- * retired, so a later retirement counts from the start, and (review N1-r2)
- * objects that leave inventory are dropped by {@link #retain}, with the
- * same seen set as the benchmark memory. SDK-free.
+ * Build 96 (issue #42, review W1, peer review items 4 and 6): the -1
+ * pushes to each retired control key, capped at {@link #MAX_PUSHES} per key
+ * (the retirement itself counts as one). The per-control alert cancels
+ * after 3 fresh non-failing samples, so 4 is enough; an unbounded repeat
+ * would cost two Suite API calls per object per cycle for good.
+ *
+ * <p>Where the pushes go: the retirement (a lingering 0 or 1 set to -1)
+ * comes from the stale-key cleanup's read-back ({@link #toPush}). The
+ * repeats ride the object's own per-cycle push, the way a Skip in force
+ * does ({@link #fold}), so they cost no extra call and are made whenever
+ * the object is visited, inside the cycle budget, even on a cycle whose
+ * cleanup is cut. The cleanup pushes a repeat itself only for a key the
+ * object's push did not carry this cycle.
+ *
+ * <p>In memory, one per instance configuration: after a restart a held key
+ * gets at most {@link #MAX_PUSHES} more, which is harmless. Keyed by the
+ * object's {@link LastBenchmarkMemory#key} (kind and MOID). Counts are
+ * dropped for keys a read-back shows are no longer retired, and for
+ * objects that leave inventory ({@link #retain}, the benchmark memory's
+ * seen set); a read-back that returned nothing for the object changes
+ * nothing (item 6). SDK-free.
  */
 final class RetiredKeyRepeats {
 
@@ -25,18 +35,54 @@ final class RetiredKeyRepeats {
 	static final int MAX_PUSHES = 4;
 
 	private final Map<String, Map<String, Integer>> byObject = new HashMap<>();
+	private final Map<String, Set<String>> foldedThisCycle = new HashMap<>();
+
+	/** Start of a cycle: nothing folded yet. */
+	synchronized void beginCycle() {
+		foldedThisCycle.clear();
+	}
 
 	/**
-	 * The keys to push -1 on this cycle for one object: every key retired
-	 * now ({@code stale}, counted as its first push), plus each key already
-	 * at -1 ({@code held}) that has had fewer than {@link #MAX_PUSHES}.
-	 * Records the pushes.
+	 * The retired keys to carry -1 for in the object's own push this cycle:
+	 * known retired, fewer than {@link #MAX_PUSHES} pushes so far, and not
+	 * in {@code live} (pushed with a value, or skipped, this cycle). Records
+	 * the pushes.
+	 */
+	synchronized Set<String> fold(String objectKey, Set<String> live) {
+		Set<String> out = new TreeSet<>();
+		Map<String, Integer> counts = byObject.get(objectKey);
+		if (counts == null) return out;
+		for (Map.Entry<String, Integer> e : counts.entrySet()) {
+			if (live != null && live.contains(e.getKey())) continue;
+			if (e.getValue() < MAX_PUSHES) {
+				out.add(e.getKey());
+				e.setValue(e.getValue() + 1);
+			}
+		}
+		if (!out.isEmpty()) {
+			foldedThisCycle.computeIfAbsent(objectKey, k -> new HashSet<>())
+					.addAll(out);
+		}
+		return out;
+	}
+
+	/**
+	 * After the cleanup's read-back for one object: the keys to push -1 on
+	 * now. Every key retired now ({@code stale}, counted as its first
+	 * push), plus each key already at -1 ({@code held}) with fewer than
+	 * {@link #MAX_PUSHES} pushes that the object's own push did not carry
+	 * this cycle. Records the pushes. A key read back as neither is no
+	 * longer retired and its count is dropped. {@code readBackEmpty}: the
+	 * read returned no value for the object, so nothing is changed.
 	 */
 	synchronized Set<String> toPush(String objectKey, Set<String> stale,
-			Set<String> held) {
-		Map<String, Integer> prev = byObject.get(objectKey);
-		Map<String, Integer> next = new HashMap<>();
+			Set<String> held, boolean readBackEmpty) {
 		Set<String> out = new TreeSet<>();
+		if (readBackEmpty) return out;
+		Map<String, Integer> prev = byObject.get(objectKey);
+		Set<String> folded = foldedThisCycle.getOrDefault(objectKey,
+				java.util.Collections.<String>emptySet());
+		Map<String, Integer> next = new HashMap<>();
 		for (String id : stale) {
 			next.put(id, 1);
 			out.add(id);
@@ -44,7 +90,7 @@ final class RetiredKeyRepeats {
 		for (String id : held) {
 			if (next.containsKey(id)) continue;
 			int n = prev == null ? 0 : prev.getOrDefault(id, 0);
-			if (n < MAX_PUSHES) {
+			if (!folded.contains(id) && n < MAX_PUSHES) {
 				out.add(id);
 				n++;
 			}

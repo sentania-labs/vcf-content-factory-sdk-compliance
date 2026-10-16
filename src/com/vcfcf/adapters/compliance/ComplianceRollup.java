@@ -237,7 +237,7 @@ public final class ComplianceRollup {
 	/** An object whose version has no SCG (Auto mode only). */
 	public void recordNoBenchmark(BenchmarkSelector.Kind kind) {
 		byKind.get(kind).noBenchmark++;
-		bump(BenchmarkSelector.BUCKET_NONE);
+		bump(kind, BenchmarkSelector.BUCKET_NONE);
 	}
 
 	/**
@@ -248,7 +248,7 @@ public final class ComplianceRollup {
 	 * has_unreadable flag carries it.
 	 */
 	public void recordVersionUnreadable(BenchmarkSelector.Kind kind) {
-		bump(BenchmarkSelector.BUCKET_UNKNOWN);
+		bump(kind, BenchmarkSelector.BUCKET_UNKNOWN);
 	}
 
 	/**
@@ -261,7 +261,7 @@ public final class ComplianceRollup {
 	public void recordEvaluated(BenchmarkSelector.Kind kind, String bucket,
 			int totalCount, int failCount, int unreadableCount, double score) {
 		Tally t = byKind.get(kind);
-		bump(bucket);
+		bump(kind, bucket);
 		if (totalCount <= 0) {
 			return;   // nothing read: no score, no counts (build 95)
 		}
@@ -278,9 +278,113 @@ public final class ComplianceRollup {
 		t.controlsPassed += evaluated - failed;
 	}
 
-	private void bump(String bucket) {
+	private void bump(BenchmarkSelector.Kind kind, String bucket) {
 		String b = bucket == null ? BenchmarkSelector.BUCKET_NONE : bucket;
 		byBucket.merge(b, 1, Integer::sum);
+		bucketsByKind.computeIfAbsent(kind, k -> new LinkedHashMap<>())
+				.merge(b, 1, Integer::sum);
+	}
+
+	// ----- Build 96 (issue #16, peer review item 3) -----------------------
+
+	// Each kind's share of byBucket, so one kind's contribution can be
+	// carried across cycles (Part). byBucket stays the sum.
+	private final Map<BenchmarkSelector.Kind, Map<String, Integer>>
+			bucketsByKind = new EnumMap<>(BenchmarkSelector.Kind.class);
+
+	/**
+	 * Build 96: one kind's contribution to a rollup (its counts, its
+	 * benchmark buckets, its unmatched count, and for VMs the skipped
+	 * Pods), so the part of a kind read by cycles that ended early can be
+	 * added to the cycle that reads the rest of it: the kind's rollup is
+	 * then pushed over every object of the kind, read across those
+	 * cycles, instead of held back. Immutable once taken.
+	 */
+	public static final class Part {
+		private final Tally tally;
+		private final Map<String, Integer> buckets;
+		private final java.util.List<String> unmatchedNames;
+		private final int skippedPods;
+
+		private Part(Tally tally, Map<String, Integer> buckets,
+				java.util.List<String> unmatchedNames, int skippedPods) {
+			this.tally = tally;
+			this.buckets = buckets;
+			this.unmatchedNames = unmatchedNames;
+			this.skippedPods = skippedPods;
+		}
+
+		/** This part plus {@code more} (a later cycle's share). */
+		public Part plus(Part more) {
+			if (more == null) return this;
+			Tally t = copy(tally);
+			add(t, more.tally);
+			Map<String, Integer> b = new LinkedHashMap<>(buckets);
+			for (Map.Entry<String, Integer> e : more.buckets.entrySet()) {
+				b.merge(e.getKey(), e.getValue(), Integer::sum);
+			}
+			java.util.List<String> n = new java.util.ArrayList<>(unmatchedNames);
+			for (String x : more.unmatchedNames) {
+				if (n.size() < UNMATCHED_LOG_CAP) n.add(x);
+			}
+			return new Part(t, b, n, skippedPods + more.skippedPods);
+		}
+	}
+
+	private static Tally copy(Tally src) {
+		Tally t = new Tally();
+		add(t, src);
+		return t;
+	}
+
+	private static void add(Tally into, Tally src) {
+		into.scored += src.scored;
+		into.nonCompliant += src.nonCompliant;
+		into.noBenchmark += src.noBenchmark;
+		into.scoreSum += src.scoreSum;
+		into.unmatched += src.unmatched;
+		into.controlsEvaluated += src.controlsEvaluated;
+		into.controlsPassed += src.controlsPassed;
+	}
+
+	/** Build 96: {@code kind}'s contribution so far (a copy). */
+	public Part part(BenchmarkSelector.Kind kind) {
+		Map<String, Integer> b = bucketsByKind.get(kind);
+		java.util.List<String> n = unmatchedNames.get(kind);
+		return new Part(copy(byKind.get(kind)),
+				b == null ? new LinkedHashMap<>() : new LinkedHashMap<>(b),
+				n == null ? new java.util.ArrayList<>()
+						: new java.util.ArrayList<>(n),
+				kind == BenchmarkSelector.Kind.VM ? skippedPods : 0);
+	}
+
+	/**
+	 * Build 96: add {@code p}, the earlier share of {@code kind} read by
+	 * cycles that ended early, to this cycle's rollup (this cycle read the
+	 * rest of the kind).
+	 */
+	public void addPart(BenchmarkSelector.Kind kind, Part p) {
+		if (p == null) return;
+		add(byKind.get(kind), p.tally);
+		for (Map.Entry<String, Integer> e : p.buckets.entrySet()) {
+			byBucket.merge(e.getKey(), e.getValue(), Integer::sum);
+			bucketsByKind.computeIfAbsent(kind, k -> new LinkedHashMap<>())
+					.merge(e.getKey(), e.getValue(), Integer::sum);
+		}
+		java.util.List<String> names = unmatchedNames.computeIfAbsent(kind,
+				k -> new java.util.ArrayList<>());
+		for (String x : p.unmatchedNames) {
+			if (names.size() < UNMATCHED_LOG_CAP) names.add(x);
+		}
+		skippedPods += p.skippedPods;
+	}
+
+	/**
+	 * Build 96: the kind is no longer held back (a resumed walk finished
+	 * it and its earlier share was added with {@link #addPart}).
+	 */
+	public void clearIncomplete(BenchmarkSelector.Kind kind) {
+		incomplete.remove(kind);
 	}
 
 	/** Every rollup stat, keyed by full metric key, in a stable order. */

@@ -468,11 +468,14 @@ public final class VSphereClient {
 		EsxcliSoapClient.beginCycleOn(esxcli);
 	}
 
-	// Build 96 (issue #16, review B1): hosts whose host-relayed call (the
-	// advanced-settings QueryOptions, or an esxcli command) timed out this
-	// cycle, with the first reason. Their remaining reads are skipped
-	// (UNREADABLE) for the rest of the cycle, so a host whose hostd hangs
-	// costs one timeout, not one per read. Cleared by beginCycle.
+	// Build 96 (issue #16, review B1, peer review item 1): hosts whose
+	// host-relayed call (the advanced-settings QueryOptions, or an esxcli
+	// command) timed out this cycle, with the first reason. Their remaining
+	// HOST-RELAYED reads (QueryOptions and esxcli) are skipped (UNREADABLE)
+	// for the rest of the cycle, so a host whose hostd hangs costs one
+	// timeout, not one per read. Property reads vCenter answers from its
+	// own inventory (RetrieveProperties on the HostSystem) go on exactly as
+	// in build 95. Cleared by beginCycle.
 	private final Map<String, String> hungHosts =
 			new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -975,18 +978,6 @@ public final class VSphereClient {
 			Object value;
 			readFailure = null;
 			lastFault = null;
-			String hung = "HostSystem".equals(moRef.type)
-					? hostHungReason(moRef.value) : null;
-			if (hung != null) {
-				// Build 96 (review B1): no call to a host that stopped
-				// answering this cycle; UNREADABLE, never a value.
-				synchronized (lastReasons) {
-					lastReasons.put(c.parameter, "host-not-answering: " + hung
-							+ " (host skipped for the rest of this cycle)");
-				}
-				result.put(c.parameter, UNREADABLE);
-				continue;
-			}
 			try {
 				value = readByRecipe(new SoapSource(moRef), recipe.trim());
 			} catch (Exception e) {
