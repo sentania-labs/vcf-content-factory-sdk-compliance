@@ -372,23 +372,44 @@ collection continues; compliance is never failed over a stitch error.
   cycle abandoned after ...") followed by the cycle's timing so far.
 
 - **A cycle has a time limit and a timeout breaker (build 96, issue
-  #16).** A cycle may take 80% of the account's collection interval
-  (240 s at the default 5 minutes; the adapter reads the interval from
-  the platform, else the Compliance World resource, else uses 5 minutes,
-  and logs one "Cycle limits:" INFO line saying which). It also ends
-  after 5 vCenter calls in a row time out with no answer between them (a
-  vCenter that accepts connections but does not answer). When either is
-  reached, no more vCenter calls are made: a read in progress is
-  UNREADABLE (never a value), the kind being collected and every kind
-  not yet started are held back (`Rollup|incomplete` = 1, which raises
-  "Compliance data not collected (vCenter)"; their Rollup keys keep
-  their values), objects already pushed keep this cycle's values, the
-  rollup is still pushed, and one WARN says where and why ("Cycle ended
-  early before ..."); the collection-complete line ends with "ENDED
-  EARLY". The stale-key cleanup and the bulk shadow are skipped that
-  cycle. The next cycle starts from the top. The cheap calls (the
-  keepalive and single-value reads such as a name, a connection state or
-  a version) wait 30 s for an answer, not 120 s.
+  #16).** A cycle may take about 80% of the account's collection
+  interval (240 s at the default 5 minutes; the adapter reads the
+  interval from the platform, else the Compliance World resource, else
+  uses 5 minutes, clamps it to 60 s to 24 h, and logs one "Cycle limits:"
+  INFO line saying which). The limit is checked before each call and
+  does not cut a call in flight, so the worst case is the budget plus one
+  call (30 s connect plus 120 s read): 390 s on a 5 minute interval. A
+  cycle also ends after 5 vCenter calls in a row time out with no answer
+  between them (a vCenter that accepts connections but does not answer);
+  the appliance (VAMI) and esxcli calls count too.
+  - **Order.** The small kinds go first (the vCenter object, distributed
+    switches, portgroups, clusters), then hosts, then VMs, so a cycle
+    that ends early never starves them.
+  - **When a limit is reached**, no more vCenter calls are made. The
+    object being read is not pushed at all (no partial score: its last
+    values stay, as for an object not visited), the kind being collected
+    and every kind not yet started are held back (`Rollup|incomplete` =
+    1, which raises "Compliance data not collected (vCenter)"; their
+    Rollup keys keep their values), objects already pushed keep this
+    cycle's values, the rollup is still pushed, and one WARN says where
+    and why ("Cycle ended early ..."); the collection-complete line ends
+    with "ENDED EARLY". The stale-key cleanup and the bulk shadow stop.
+  - **Resume.** The next cycle starts each host, VM, switch, portgroup
+    and cluster walk after the last object the early-ended cycle
+    finished, and goes round to the top, so consecutive early-ended
+    cycles together read every object. A cycle that reads a whole kind
+    starts it from the top next time.
+  - **A host that stops answering costs one timeout.** When a host's
+    advanced-settings read or an esxcli command (both relayed by vCenter
+    to the host) times out, the rest of that host's reads are skipped for
+    the cycle (UNREADABLE, reason "host not answering"), so one hung hostd
+    cannot use up the budget.
+  - **If every cycle ends early** on a vCenter that answers normally, its
+    walk is longer than the interval allows: lengthen the account's
+    collection interval (docs/installing.md).
+  - The cheap calls (the keepalive and single-value reads such as a
+    name, a connection state or a version) wait 30 s for an answer, not
+    120 s.
 
 - **Bulk read shadow (build 95).** After each kind is scored, the adapter
   also reads that kind's objects in a few paged bulk calls, evaluates the
@@ -422,10 +443,12 @@ collection continues; compliance is never failed over a stitch error.
   still at 0 to -1 with an explanatory `Actual`, which cancels their
   alerts. It never creates a key the object did not have and leaves a
   lingering 1 outside the SCG alone. Since build 96 (issue #42) a key it
-  finds already at -1 gets -1 again every cycle while the control stays
-  out of the object's SCG: a per-control alert cancels only after three
-  fresh non-failing samples, and one -1 used to leave it open after a
-  guide version change. Since build 76 the same read-back also covers
+  finds already at -1 gets -1 again on later cycles while the control
+  stays out of the object's SCG, up to 4 -1 pushes per key in all: a
+  per-control alert cancels only after three fresh non-failing samples,
+  and one -1 used to leave it open after a guide version change. The
+  count is kept in memory, so after a restart a retired key gets at most
+  4 more. Since build 76 the same read-back also covers
   controls that ARE in the object's SCG but were not evaluated this cycle
   because they do not apply (for example vSAN controls on a cluster where
   vSAN is not enabled): any 0 or 1 left on them is set to -1, so an old

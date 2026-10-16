@@ -62,6 +62,15 @@ fails, with Actual "(undefined)", unless the guide allows it to be unset:
 an expected value of "X or Undefined", "X or Not Present" or a bare "Not
 Present".
 
+**Keeps each cycle inside the collection interval.** A cycle may take
+about 80% of the account's collection interval (240 s at the default 5
+minutes), and it also stops after 5 vCenter calls in a row time out.
+When a cycle stops early, what was not finished keeps its last values,
+"Compliance data not collected" fires on the vCenter, and the next cycle
+carries on from where it stopped, so every object is still read every
+few cycles. If it keeps happening on a large vCenter, lengthen the
+account's collection interval (see docs/installing.md).
+
 ## The dashboards
 
 Four dashboards install with the pack, plus a Summary tab on the pack's
