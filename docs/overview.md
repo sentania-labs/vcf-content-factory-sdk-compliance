@@ -370,7 +370,25 @@ collection continues; compliance is never failed over a stitch error.
   vCenter walk. Nothing more is read or pushed that cycle (values already
   pushed stay), and one WARN says where it stopped ("ComplianceAdapter
   cycle abandoned after ...") followed by the cycle's timing so far.
-  There is no time limit on a cycle yet.
+
+- **A cycle has a time limit and a timeout breaker (build 96, issue
+  #16).** A cycle may take 80% of the account's collection interval
+  (240 s at the default 5 minutes; the adapter reads the interval from
+  the platform, else the Compliance World resource, else uses 5 minutes,
+  and logs one "Cycle limits:" INFO line saying which). It also ends
+  after 5 vCenter calls in a row time out with no answer between them (a
+  vCenter that accepts connections but does not answer). When either is
+  reached, no more vCenter calls are made: a read in progress is
+  UNREADABLE (never a value), the kind being collected and every kind
+  not yet started are held back (`Rollup|incomplete` = 1, which raises
+  "Compliance data not collected (vCenter)"; their Rollup keys keep
+  their values), objects already pushed keep this cycle's values, the
+  rollup is still pushed, and one WARN says where and why ("Cycle ended
+  early before ..."); the collection-complete line ends with "ENDED
+  EARLY". The stale-key cleanup and the bulk shadow are skipped that
+  cycle. The next cycle starts from the top. The cheap calls (the
+  keepalive and single-value reads such as a name, a connection state or
+  a version) wait 30 s for an answer, not 120 s.
 
 - **Bulk read shadow (build 95).** After each kind is scored, the adapter
   also reads that kind's objects in a few paged bulk calls, evaluates the

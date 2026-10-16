@@ -531,6 +531,69 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	// Build 95 (issue #17): this cycle's measurement (phases and calls).
 	private volatile CycleMetrics cycleMetrics;
 
+	// Build 96 (issue #16): this cycle's time budget and consecutive-timeout
+	// breaker (CycleBudget), why the cycle ended early (null: it did not),
+	// and the last budget line logged (logged once per change). The clock
+	// is a test seam.
+	private volatile CycleBudget cycleBudget;
+	private volatile String cycleEndedEarly;
+	private volatile String budgetLogged;
+	volatile java.util.function.LongSupplier budgetClock = System::nanoTime;
+
+	/**
+	 * Build 96 (issue #16): the platform's collection interval in seconds,
+	 * or null when it cannot be read (the budget then falls back, see
+	 * {@link CycleBudget#interval}).
+	 */
+	private Integer platformIntervalSec() {
+		try {
+			return getMonitoringIntervalInSec();
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	private static Integer resourceIntervalSec(ResourceConfig rc) {
+		try {
+			return rc == null ? null : rc.getIntervalInSec();
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Build 96 (issue #16): true when this cycle's budget or breaker is
+	 * reached. The kind being collected is then held back
+	 * ({@code markIncomplete}: Rollup|incomplete = 1, its keys keep their
+	 * values) and the caller stops; every later collector does the same
+	 * for its own kind, so every kind not finished is held back. The first
+	 * time, one WARN says where and why. Objects already pushed this cycle
+	 * keep their fresh values.
+	 */
+	private boolean cycleOver(BenchmarkSelector.Kind kind,
+			ComplianceRollup rollup, String where) {
+		CycleBudget b = cycleBudget;
+		String why = b == null ? null : b.exhausted();
+		if (why == null) return false;
+		rollup.markIncomplete(kind);
+		if (cycleEndedEarly == null) {
+			cycleEndedEarly = why;
+			logWarn("Cycle ended early before " + where + ": " + why + ". "
+					+ kind.rollupName + " and every kind not yet collected "
+					+ "are held back this cycle (Rollup|incomplete = 1, their "
+					+ "Rollup keys keep their values; objects already pushed "
+					+ "keep this cycle's values; no more vCenter calls are "
+					+ "made). The next cycle starts from the top.");
+		}
+		return true;
+	}
+
+	/** Build 96 (issue #16): this cycle's budget or breaker is reached. */
+	private boolean budgetExhausted() {
+		CycleBudget b = cycleBudget;
+		return b != null && b.exhausted() != null;
+	}
+
 	private CycleMetrics.Scope phase(CycleMetrics.Phase p) {
 		return CycleMetrics.scope(cycleMetrics, p);
 	}
@@ -600,6 +663,24 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		cycleMetrics = metrics;
 		if (c.vsphere != null) c.vsphere.setMetrics(metrics);
 		if (c.stitcher != null) c.stitcher.setMetrics(metrics);
+		// Build 96 (issue #16): the cycle's time budget and breaker.
+		CycleBudget.Interval iv = CycleBudget.interval(platformIntervalSec(),
+				resourceIntervalSec(worldRc));
+		CycleBudget budget = new CycleBudget(CycleBudget.budgetMs(iv.seconds),
+				CycleBudget.BREAKER_TIMEOUTS, budgetClock);
+		cycleBudget = budget;
+		cycleEndedEarly = null;
+		String budgetLine = "Cycle limits: time budget "
+				+ (budget.budgetMs() / 1000) + " s ("
+				+ Math.round(CycleBudget.FRACTION * 100) + "% of the "
+				+ iv.seconds + " s interval, " + iv.source + "); a cycle "
+				+ "also ends after " + CycleBudget.BREAKER_TIMEOUTS
+				+ " vCenter calls in a row time out";
+		if (!budgetLine.equals(budgetLogged)) {
+			budgetLogged = budgetLine;
+			logInfo(budgetLine);
+		}
+		if (c.vsphere != null) c.vsphere.setCycleBudget(budget);
 		try {
 			collectWorldCycle(worldRc, out);
 			completed = true;
@@ -612,6 +693,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		} finally {
 			if (c.vsphere != null) c.vsphere.setMetrics(null);
 			if (c.stitcher != null) c.stitcher.setMetrics(null);
+			if (c.vsphere != null) c.vsphere.setCycleBudget(null);
+			cycleBudget = null;
 			cycleMetrics = null;
 			long ms = (System.nanoTime() - cycleStartNs) / 1_000_000L;
 			String line = ComplianceDecisions.cycleEndLine(completed,
@@ -830,6 +913,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ "skipped, "
 				+ cs.cleanedKeys + " stale per-control key(s) marked "
 				+ "not evaluated on " + cs.cleanedObjects + " object(s)"
+				+ (cycleEndedEarly != null ? "; ENDED EARLY: " + cycleEndedEarly
+						+ " (" + rollup.incompleteKinds() + " held back)" : "")
 				+ (cycleMetrics != null ? "; " + cycleMetrics.summary() : ""));
 	}
 
@@ -1361,6 +1446,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private void cleanStaleControls(CycleStats cs) throws InterruptedException {
 		if (cycle.stitcher == null || pendingCleanup.isEmpty()) return;
+		if (budgetExhausted()) {
+			// Build 96 (issue #16): over budget; the cleanup (VCF Ops reads
+			// and pushes only) is retried next cycle.
+			logInfo("Stale-control cleanup skipped this cycle: the cycle "
+					+ "ended early; retried next cycle");
+			pendingCleanup.clear();
+			return;
+		}
 		java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
 		if (bundled == null) return;
 		java.util.Map<BenchmarkSelector.Kind, java.util.List<PendingCleanup>>
@@ -1536,6 +1629,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			BenchmarkSelector selector, ComplianceRollup rollup,
 			CycleStats cs, java.util.Set<String> seen) throws Exception {
 		java.util.Map<String, String> hostVersions = new java.util.HashMap<>();
+		if (cycleOver(BenchmarkSelector.Kind.HOST, rollup, "the host listing")) {
+			return hostVersions;   // build 96 (issue #16)
+		}
 		// Build 95 (issue #18): a failed host listing holds the Host kind
 		// back like every other kind (Rollup|Host, All and Benchmark keys
 		// keep their values, Rollup|incomplete = 1 raises "Compliance data
@@ -1569,6 +1665,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			stop.check("host " + hostInfo.name);
+			if (cycleOver(BenchmarkSelector.Kind.HOST, rollup,
+					"host " + hostInfo.name)) {
+				break;   // build 96 (issue #16)
+			}
 			beginObject(BenchmarkSelector.Kind.HOST);
 			String hostId = hostInfo.moid;
 			String hostName = hostInfo.name;
@@ -1802,6 +1902,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void runShadow(Shadow sh) throws InterruptedException {
 		// Off (a release build): nothing was recorded, so no bulk read.
 		if (sh == null || !sh.comparator.hasRecords()) return;
+		if (budgetExhausted()) {
+			// Build 96 (issue #16): no bulk comparison on a cycle that
+			// ended early (its vCenter calls would be refused anyway).
+			logInfo("Bulk shadow " + sh.comparator.summaryKind()
+					+ ": skipped, the cycle ended early");
+			return;
+		}
 		java.util.Set<String> paths = new java.util.LinkedHashSet<>();
 		java.util.Set<java.util.List<BenchmarkProfile.Control>> slices =
 				java.util.Collections.newSetFromMap(
@@ -1861,6 +1968,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private void collectVms(BenchmarkSelector selector,
 			java.util.Map<String, String> hostVersions, ComplianceRollup rollup,
 			CycleStats cs, java.util.Set<String> seen) throws InterruptedException {
+		if (cycleOver(BenchmarkSelector.Kind.VM, rollup, "the VM listing")) {
+			return;   // build 96 (issue #16)
+		}
 		java.util.List<VSphereClient.VmInfo> vms;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			vms = cycle.vsphere.getVms();
@@ -1880,6 +1990,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		for (VSphereClient.VmInfo vm : vms) {
 			stop.check("VM " + vm.name);
+			if (cycleOver(BenchmarkSelector.Kind.VM, rollup, "VM " + vm.name)) {
+				break;   // build 96 (issue #16)
+			}
 			beginObject(BenchmarkSelector.Kind.VM);
 			// Build 88: vSphere Pod VMs (guest id crx*) are out of scope:
 			// skipped before matching, scoring and the rollup, counted in
@@ -2029,6 +2142,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					resourceName, moid);
 			return null;
 		}
+		if (cycleOver(BenchmarkSelector.Kind.VCENTER, rollup,
+				"the vCenter object")) {
+			// Build 96 (issue #16): not read this cycle, but its object is
+			// resolved, so the rollup (incomplete = 1) is still pushed.
+			return he;
+		}
 		String resourceId = he.resourceId;
 
 		ComplianceDecisions.Decision d = decide(selector,
@@ -2096,6 +2215,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) throws InterruptedException {
 		if (cycle.stitcher == null) return;   // nothing to push onto; skip the reads
+		if (cycleOver(BenchmarkSelector.Kind.VDS, rollup,
+				"the distributed switch listing")) {
+			return;   // build 96 (issue #16)
+		}
 		java.util.List<VSphereClient.DvsInfo> switches;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			switches = cycle.vsphere.getDvSwitches();
@@ -2117,6 +2240,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkShadow);
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
+			if (cycleOver(BenchmarkSelector.Kind.VDS, rollup,
+					"vDS " + dvs.name)) {
+				break;   // build 96 (issue #16)
+			}
 			cs.dvs++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchDvs(dvs.name,
 					dvs.moid);
@@ -2131,6 +2258,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) throws InterruptedException {
 		if (cycle.stitcher == null) return;
+		if (cycleOver(BenchmarkSelector.Kind.PORTGROUP, rollup,
+				"the portgroup listing")) {
+			return;   // build 96 (issue #16)
+		}
 		java.util.List<VSphereClient.DvpgInfo> pgs;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			pgs = cycle.vsphere.getDvPortgroups();
@@ -2152,6 +2283,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkShadow);
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
+			if (cycleOver(BenchmarkSelector.Kind.PORTGROUP, rollup,
+					"portgroup " + pg.name)) {
+				break;   // build 96 (issue #16)
+			}
 			cs.dvpg++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchDvpg(pg.name,
 					pg.moid);
@@ -2172,6 +2307,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceRollup rollup, CycleStats cs,
 			java.util.Set<String> seen) throws InterruptedException {
 		if (cycle.stitcher == null) return;
+		if (cycleOver(BenchmarkSelector.Kind.CLUSTER, rollup,
+				"the cluster listing")) {
+			return;   // build 96 (issue #16)
+		}
 		java.util.List<VSphereClient.ClusterInfo> clusters;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.INVENTORY)) {
 			clusters = cycle.vsphere.getClusters();
@@ -2195,6 +2334,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkShadow);
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);
+			if (cycleOver(BenchmarkSelector.Kind.CLUSTER, rollup,
+					"cluster " + cluster.name)) {
+				break;   // build 96 (issue #16)
+			}
 			cs.clusters++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchCluster(
 					cluster.name, cluster.moid);

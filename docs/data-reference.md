@@ -443,7 +443,9 @@ visited on its last cycle was fully read. It says nothing about objects
 the cycle did not visit: when a kind's listing failed (that kind is held
 back) or vCenter could not be reached at all, those objects keep the
 flag from their last visit, so they stay off (or on) the list as they
-were. Both cases set `Rollup|incomplete` = 1 on the vCenter, which
+were. The same holds for the kinds a cycle did not finish because it
+ended early on its time budget or timeout breaker (build 96). All these
+cases set `Rollup|incomplete` = 1 on the vCenter, which
 raises "Compliance data not collected (vCenter)"; an unreachable vCenter
 also leaves the ComplianceWorld resource in collection status down (no
 connection) or error (login or certificate), and the adapter log names

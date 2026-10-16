@@ -176,6 +176,19 @@ final class EsxcliSoapClient {
 		this.metrics = m;
 	}
 
+	// Build 96 (issue #16): this cycle's budget and breaker, null for none.
+	private volatile CycleBudget budget;
+
+	/**
+	 * Build 96 (issue #16): esxcli calls count toward the cycle's breaker
+	 * (a timeout, or an answer), and none is made once the limit is
+	 * reached ({@link CycleBudget.Exhausted}, an I/O failure: the host's
+	 * remaining esxcli controls are UNREADABLE for the cycle).
+	 */
+	void setCycleBudget(CycleBudget b) {
+		this.budget = b;
+	}
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
 		this.sdkUrl = sdkUrl;
@@ -646,6 +659,8 @@ final class EsxcliSoapClient {
 				+ "<soapenv:Body>" + soapBody + "</soapenv:Body>"
 				+ "</soapenv:Envelope>";
 
+		CycleBudget b = budget;
+		if (b != null) b.check();   // build 96 (issue #16)
 		CycleMetrics m = metrics;
 		if (m != null) m.soapCall();
 		URL url = new URL(sdkUrl);
@@ -698,8 +713,14 @@ final class EsxcliSoapClient {
 			// call (no disconnect); a failed one is dropped, never reused.
 			conn.disconnect();
 			if (body != null && body.exceeded()) return null;
+			if (b != null && e instanceof java.net.SocketTimeoutException) {
+				b.timedOut();   // build 96 (issue #16)
+			}
 			throw e;
 		}
+		// Build 96 (issue #16): answered in full; the breaker's run of
+		// timeouts is broken.
+		if (b != null) b.answered();
 		if (body != null && body.exceeded()) {
 			// Build 95 (issue #24): over the cap: the call failed (the
 			// command's controls are UNREADABLE), never a partial read.
