@@ -32,7 +32,11 @@ public final class LastBenchmarkMemory {
 		return kind.name() + "|" + moid;
 	}
 
-	/** Benchmark applied last cycle, or null. */
+	/**
+	 * The benchmark last applied to the object, or null. Build 96 (review
+	 * N17): not necessarily last cycle's; a held-back kind or a version
+	 * that stays unreadable keeps it for several cycles.
+	 */
 	public String previous(String key) {
 		return key == null ? null : applied.get(key);
 	}

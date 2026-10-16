@@ -99,7 +99,7 @@ public final class ComplianceDecisions {
 		public final BenchmarkProfile profile;     // SCORE only
 		public final String profileName;           // pushed as profile_name
 		public final String bucket;                // rollup benchmark bucket
-		public final boolean reusedPrevious;       // SCORE via last cycle's benchmark
+		public final boolean reusedPrevious;       // SCORE via the last benchmark applied
 
 		Decision(Outcome outcome, BenchmarkProfile profile, String profileName,
 				String bucket, boolean reusedPrevious) {

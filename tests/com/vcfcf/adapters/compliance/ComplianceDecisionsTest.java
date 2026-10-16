@@ -30,7 +30,7 @@ public final class ComplianceDecisionsTest {
 				"readable unmapped version is no-benchmark even with history");
 		d = ComplianceDecisions.decide(auto, HOST, null, "VMware_SCG_8.0", all);
 		T.eq(ComplianceDecisions.Outcome.SCORE, d.outcome,
-				"unreadable version reuses last cycle's benchmark");
+				"unreadable version reuses the last benchmark applied");
 		T.check(d.reusedPrevious, "flagged as reused");
 		T.eq("VMware_SCG_8.0", d.profileName, "reused profile");
 		T.eq("SCG_8.0", d.bucket, "reused bucket");

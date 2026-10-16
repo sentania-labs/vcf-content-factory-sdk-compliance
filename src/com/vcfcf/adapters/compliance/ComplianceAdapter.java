@@ -1369,7 +1369,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * Benchmark decision for one object: {@link ComplianceDecisions#decide}
-	 * with the object's benchmark from last cycle, so an unreadable version
+	 * with the benchmark the object was last scored against (it can be
+	 * several cycles old: a version that stays unreadable, or a kind held
+	 * back in between; review N17), so an unreadable version
 	 * reuses it instead of dropping the object (review B2).
 	 */
 	private ComplianceDecisions.Decision decide(BenchmarkSelector selector,
@@ -1381,7 +1383,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (d.reusedPrevious) {
 			logWarn(kind.rollupName + " " + moid + ": governing "
 					+ kind.product + " version unreadable this cycle; scoring "
-					+ "against last cycle's benchmark " + d.profileName);
+					+ "against the benchmark it was last scored against, "
+					+ d.profileName + " (that can be more than one cycle "
+					+ "ago)");
 		}
 		return d;
 	}

@@ -15,6 +15,7 @@ public final class Build96OrchestrationTest {
 	public static void main(String[] args) throws Exception {
 		normalCycle();
 		hostListingFailure();
+		reuseWarnWording();
 		System.out.println("Build96OrchestrationTest: all assertions passed");
 	}
 
@@ -80,6 +81,32 @@ public final class Build96OrchestrationTest {
 					"listing back: complete again");
 			T.eq(2.0, h.lastRollup().get(P + "Host|scored"),
 					"both hosts scored again");
+		}
+	}
+
+	/**
+	 * Build 95 review N17, fixed in build 96: an unreadable version reuses
+	 * the benchmark the object was last scored against, which can be more
+	 * than one cycle old; the WARN no longer says "last cycle's".
+	 */
+	static void reuseWarnWording() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			h.cycle();
+			h.override = r -> {
+				java.util.List<String> paths = FakeVCenter.pathSets(r.body);
+				if (!paths.isEmpty() && paths.get(0).endsWith("product.version")) {
+					String[] o = FakeVCenter.obj(r.body);
+					return FakeVCenter.ok("RetrieveProperties",
+							FakeVCenter.objectContent("returnval", o[0], o[1],
+									FakeVCenter.vals()));
+				}
+				return null;
+			};
+			h.cycle();
+			T.check(h.logged("scoring against the benchmark it was last scored "
+					+ "against, VMware_SCG_9.0 (that can be more than one "
+					+ "cycle ago)"), "reuse WARN wording");
+			T.check(!h.logged("last cycle's benchmark"), "old wording gone");
 		}
 	}
 }
