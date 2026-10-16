@@ -151,6 +151,10 @@ _LOOSE_FIELD_RE = re.compile(r"^[\s>]*-\s+\*\*[^:]+:\*\*")
 # A fenced code block delimiter (indent already split off): ``` or ~~~,
 # three or more, optional info string on the opening fence.
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+# The id tail (after "DEF-") of a heading that may sit inside a fence before
+# the first entry: a placeholder with no digit, such as the "NNN" in the
+# schema example "### DEF-NNN". Any digit in the id fails closed.
+_FENCED_PLACEHOLDER_ID_RE = re.compile(r"^[^\d\s]+(?:\s|$)")
 _FIELD_RE = re.compile(r"^-\s+\*\*([^:]+):\*\*\s*(.*)")
 
 # Anything that makes an Affects value more than one bare token.
@@ -245,8 +249,12 @@ def load_registry(
 
         # --- Fenced code blocks ---
         # Lines inside a fence are description text, never fields or
-        # headings. A defect heading inside a fence after the first entry
-        # fails closed: a defect must not hide in a code block.
+        # headings. A defect heading inside a fence fails closed: a defect
+        # must not hide in a code block. Before the first entry the only
+        # exception is a schema placeholder with no digit in its id (the
+        # literal "### DEF-NNN"); a numeric id there fails closed too (Codex
+        # P1: a fence opened before "### DEF-001" hid that open blocker while
+        # a later DEF-002 made the registry look valid).
         m_fence = None if code_indent else _FENCE_RE.match(rest)
         if fence is not None:
             if (m_fence and m_fence.group(1)[0] == fence[0]
@@ -254,7 +262,11 @@ def load_registry(
                     and not m_fence.group(2).strip()):
                 fence = None
                 continue
-            if current_id is not None and _LOOSE_DEF_HEADING_RE.match(line):
+            m_fenced_def = _LOOSE_DEF_HEADING_RE.match(line)
+            if m_fenced_def and (
+                    current_id is not None
+                    or _FENCED_PLACEHOLDER_ID_RE.match(line[m_fenced_def.end():])
+                    is None):
                 raise DefectRegistryError(
                     f"line {lineno}: defect heading {line.strip()!r} is inside "
                     f"a fenced code block; refusing to guess"

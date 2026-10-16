@@ -202,6 +202,17 @@ class GateTest(unittest.TestCase):
         p = self.write(registry(text))
         self.assertEqual(self.run_cli(p, "template"), 1)
 
+    def test_numeric_heading_fenced_before_first_entry_fails_closed(self):
+        # Codex P1: a fence opened before the first numeric heading hid that
+        # entry (current_id was still None), and a later valid entry made the
+        # registry look fine, so an open blocker was silently omitted.
+        fenced = "```\n" + entry(1, "template") + "```\n"
+        p = self.write(registry(fenced, entry(2, "unifi", severity="tracked")))
+        with self.assertRaises(defect_gate.DefectRegistryError) as cm:
+            defect_gate.gate_pak("template", p)
+        self.assertIn("line 6", str(cm.exception))
+        self.assertEqual(self.run_cli(p, "template"), 1)
+
     def test_bom_does_not_hide_first_heading(self):
         d = Path(tempfile.mkdtemp())
         p = d / "defects.md"
