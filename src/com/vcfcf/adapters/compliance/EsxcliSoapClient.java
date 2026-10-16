@@ -243,6 +243,26 @@ final class EsxcliSoapClient {
 		executerByHost.clear();
 		unreachableHosts.clear();
 		unreachableReported.clear();
+		budgetRefused.clear();
+	}
+
+	// Build 96 (review N2): host|command keys whose call the cycle budget
+	// refused (not a host fault; the host is not marked unreachable).
+	private final Set<String> budgetRefused = new HashSet<>();
+
+	/** Build 96 (review N2): the command's call was refused by the budget. */
+	synchronized boolean refusedByBudget(String hostMoid,
+			String namespaceCommand) {
+		return budgetRefused.contains(hostMoid + "|" + namespaceCommand);
+	}
+
+	/**
+	 * Build 96 (issue #16, review B1): skip this host's esxcli commands for
+	 * the rest of the cycle, because a host-relayed vim25 call to it (its
+	 * advanced settings) timed out. The first reason is kept.
+	 */
+	synchronized void markUnreachable(String hostMoid, String reason) {
+		if (hostMoid != null) unreachableHosts.putIfAbsent(hostMoid, reason);
 	}
 
 	/**
@@ -438,6 +458,12 @@ final class EsxcliSoapClient {
 				} else {
 					result = transport.execute(executer, namespaceCommand);
 				}
+			} catch (CycleBudget.Exhausted e) {
+				// Build 96 (review N2): the cycle's budget or breaker was
+				// reached; no call was made. Not a host fault: the host is
+				// not marked unreachable, and the reason says "budget".
+				budgetRefused.add(cacheKey);
+				result = null;
 			} catch (java.io.IOException e) {
 				// Build 86: timeout / connect / I/O on the request to
 				// vCenter's /sdk for this host (vCenter or the host). The

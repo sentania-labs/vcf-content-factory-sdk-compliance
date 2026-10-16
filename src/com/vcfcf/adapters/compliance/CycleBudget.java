@@ -10,8 +10,11 @@ import java.util.function.LongSupplier;
  *   <li><b>Time budget:</b> {@link #FRACTION} of the instance's collection
  *       interval (the platform's {@code getMonitoringIntervalInSec}, else
  *       the collected resource's interval, else
- *       {@link #DEFAULT_INTERVAL_SEC}), so a slow vCenter cannot hold the
- *       collector thread past the next scheduled cycle.</li>
+ *       {@link #DEFAULT_INTERVAL_SEC}; clamped to {@link #MIN_INTERVAL_SEC}
+ *       to {@link #MAX_INTERVAL_SEC}). The budget is checked before each
+ *       call and does not cancel a call in flight, so the worst case is
+ *       the budget plus one call (30 s connect plus 120 s read): 390 s on
+ *       a 5 minute interval, which is the interval plus 90 s.</li>
  *   <li><b>Consecutive-timeout breaker:</b> {@link #BREAKER_TIMEOUTS} vCenter
  *       calls in a row that timed out (connect or read), with no answer in
  *       between: the vCenter is not answering, and every further call would
@@ -33,10 +36,7 @@ public final class CycleBudget {
 	/** VCF Operations' default collection interval (5 minutes). */
 	public static final int DEFAULT_INTERVAL_SEC = 300;
 
-	/**
-	 * An interval outside this range is not believed (an unexpected unit,
-	 * or an unset value), and the default is used instead.
-	 */
+	/** A reported interval outside this range is clamped into it. */
 	public static final int MIN_INTERVAL_SEC = 60;
 	public static final int MAX_INTERVAL_SEC = 24 * 60 * 60;
 
@@ -64,26 +64,39 @@ public final class CycleBudget {
 	}
 
 	/**
-	 * The collection interval: the platform's value when it is believable,
-	 * else the collected resource's, else {@link #DEFAULT_INTERVAL_SEC}.
+	 * The collection interval: the platform's value, else the collected
+	 * resource's, else {@link #DEFAULT_INTERVAL_SEC}. A value of 0 or less
+	 * counts as not reported. A reported value outside
+	 * {@link #MIN_INTERVAL_SEC} to {@link #MAX_INTERVAL_SEC} is clamped
+	 * into that range (review N3), and the source says so.
 	 */
 	public static Interval interval(Integer platformSec, Integer resourceSec) {
-		if (sane(platformSec)) {
-			return new Interval(platformSec, "the collection interval from "
-					+ "the platform");
+		if (reported(platformSec)) {
+			return clamped(platformSec, "the collection interval from the "
+					+ "platform");
 		}
-		if (sane(resourceSec)) {
-			return new Interval(resourceSec, "the collection interval of the "
+		if (reported(resourceSec)) {
+			return clamped(resourceSec, "the collection interval of the "
 					+ "Compliance World resource");
 		}
 		return new Interval(DEFAULT_INTERVAL_SEC, "the default collection "
-				+ "interval (the platform did not report one"
-				+ (platformSec != null ? ": it reported " + platformSec + " s"
-						: "") + ")");
+				+ "interval (none was reported)");
 	}
 
-	private static boolean sane(Integer s) {
-		return s != null && s >= MIN_INTERVAL_SEC && s <= MAX_INTERVAL_SEC;
+	private static boolean reported(Integer s) {
+		return s != null && s > 0;
+	}
+
+	private static Interval clamped(int s, String source) {
+		if (s < MIN_INTERVAL_SEC) {
+			return new Interval(MIN_INTERVAL_SEC, source + ", " + s
+					+ " s raised to the " + MIN_INTERVAL_SEC + " s minimum");
+		}
+		if (s > MAX_INTERVAL_SEC) {
+			return new Interval(MAX_INTERVAL_SEC, source + ", " + s
+					+ " s lowered to the " + MAX_INTERVAL_SEC + " s maximum");
+		}
+		return new Interval(s, source);
 	}
 
 	/** The cycle budget for an interval, in milliseconds. */

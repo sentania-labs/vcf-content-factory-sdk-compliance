@@ -92,6 +92,34 @@ final class VamiApiClient {
 		this.httpClient = builder.build();
 	}
 
+	// Build 96 (review N10): this cycle's budget and breaker, null for none.
+	private volatile CycleBudget budget;
+
+	/**
+	 * Build 96 (review N10): the appliance calls join the cycle's budget and
+	 * timeout breaker like the SOAP calls: no call once the limit is
+	 * reached (the field is UNREADABLE, reason "cycle ended early"), a
+	 * timed-out call counts toward the breaker, an answer resets it. The
+	 * session DELETE in {@link #close} is never refused.
+	 */
+	void setCycleBudget(CycleBudget b) {
+		this.budget = b;
+	}
+
+	private HttpResponse<String> send(HttpRequest req) throws Exception {
+		CycleBudget b = budget;
+		if (b != null) b.check();
+		try {
+			HttpResponse<String> resp = httpClient.send(req,
+					HttpResponse.BodyHandlers.ofString());
+			if (b != null) b.answered();
+			return resp;
+		} catch (java.net.http.HttpTimeoutException e) {
+			if (b != null) b.timedOut();
+			throw e;
+		}
+	}
+
 	private void warnOnce(String key, String message) {
 		if (warn != null && logged.add(key)) {
 			warn.accept(message);
@@ -124,8 +152,7 @@ final class VamiApiClient {
 					.header("Content-Type", "application/json")
 					.timeout(Duration.ofSeconds(30))
 					.build();
-			HttpResponse<String> resp = httpClient.send(req,
-					HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> resp = send(req);   // build 96 (review N10)
 			if (resp.statusCode() != 200 && resp.statusCode() != 201) {
 				String et = errorType(resp.body());
 				sessionFailure = "vami-session: POST /api/session HTTP "
@@ -174,8 +201,7 @@ final class VamiApiClient {
 					.header("Accept", "application/json")
 					.timeout(Duration.ofSeconds(30))
 					.build();
-			HttpResponse<String> resp = httpClient.send(req,
-					HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> resp = send(req);   // build 96 (review N10)
 			// Only a 200 yields a value; 401/403/404/5xx fold to UNREADABLE
 			// upstream, never "disabled / compliant".
 			if (resp.statusCode() != 200) {

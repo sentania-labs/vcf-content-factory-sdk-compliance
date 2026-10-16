@@ -36,8 +36,12 @@ public final class Build96BudgetTest {
 		breakerAndDeadline();
 		shortTimeoutForCheapCalls();
 		refusedOnceExhausted();
+		esxcliAndVamiRefusals();
 		hungVCenterTripsBreaker();
 		adapterBudgetEndsCycle();
+		twoCyclesVisitEverything();
+		hungHostCostsOneTimeout();
+		noPartialScore();
 		adapterBreakerEndsCycle();
 		System.out.println("Build96BudgetTest: all assertions passed");
 	}
@@ -48,12 +52,18 @@ public final class Build96BudgetTest {
 		T.check(a.source.contains("platform"), "source named: " + a.source);
 		T.eq(600, CycleBudget.interval(null, 600).seconds, "resource next");
 		T.eq(300, CycleBudget.interval(null, null).seconds, "default 5 min");
-		T.eq(300, CycleBudget.interval(5, null).seconds,
-				"5 (minutes, not seconds) is not believed");
-		T.check(CycleBudget.interval(5, null).source.contains("reported 5 s"),
-				"the unbelieved value is named");
-		T.eq(900, CycleBudget.interval(30, 900).seconds,
-				"an unbelievable platform value falls to the resource");
+		// Review N3: a reported value out of range is clamped, not replaced.
+		T.eq(60, CycleBudget.interval(5, null).seconds, "5 s raised to 60 s");
+		T.check(CycleBudget.interval(5, null).source.contains(
+				"5 s raised to the 60 s minimum"), "the clamp is named");
+		T.eq(60, CycleBudget.interval(30, 900).seconds,
+				"the platform value wins, clamped");
+		T.eq(86400, CycleBudget.interval(90000, null).seconds,
+				"25 h lowered to 24 h");
+		T.eq(600, CycleBudget.interval(0, 600).seconds,
+				"0 is not reported: the resource's value");
+		T.eq(300, CycleBudget.interval(-1, null).seconds,
+				"nothing reported: the default");
 		T.eq(240000L, CycleBudget.budgetMs(300), "80% of 5 minutes");
 		T.eq(5, CycleBudget.BREAKER_TIMEOUTS, "breaker default");
 	}
@@ -171,6 +181,50 @@ public final class Build96BudgetTest {
 		}
 	}
 
+	/**
+	 * Review N2: an esxcli command refused by the budget says "budget
+	 * reached" and does not mark the host unreachable. Review N10: the
+	 * appliance (VAMI) calls are refused too, with no request made.
+	 */
+	static void esxcliAndVamiRefusals() throws Exception {
+		try (FakeVCenter f = new FakeVCenter()) {
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			AtomicLong now = new AtomicLong(0);
+			CycleBudget b = new CycleBudget(1000, 5, now::get);
+			c.setCycleBudget(b);
+			now.set(2_000_000_000L);
+			VSphereClient.MoRef h = new VSphereClient.MoRef("HostSystem",
+					"host-1");
+			List<BenchmarkProfile.Control> ctl = Arrays.asList(
+					new BenchmarkProfile.Control("esx.syslog", "P1",
+							"HostSystem", "VMWARE", "persistent", "esxcli",
+							"boolean", "true", "esx.syslog", "", "", "",
+							"esxcli:system.syslog.config.get:"
+							+ "LocalLogOutputIsPersistent"));
+			int before = f.requests.size();
+			Object v = c.readVimProperties(h, ctl).get("persistent");
+			T.check(v == VSphereClient.UNREADABLE, "refused: UNREADABLE");
+			String why = c.lastReadReasons().get("persistent");
+			T.check(why != null && why.startsWith("esxcli-budget-reached"),
+					"reason says budget: " + why);
+			T.eq(null, c.takeEsxcliUnreachable("host-1"),
+					"the host is not marked unreachable");
+			T.eq(before, f.requests.size(), "no request made");
+		}
+		AtomicLong now = new AtomicLong(0);
+		CycleBudget b = new CycleBudget(1000, 5, now::get);
+		now.set(2_000_000_000L);
+		VamiApiClient vami = new VamiApiClient("https://127.0.0.1:9",
+				"u", "p", null, null);
+		vami.setCycleBudget(b);
+		T.check(vami.readField("access/ssh", "enabled") == VamiApiClient.FAILED,
+				"VAMI refused: FAILED (UNREADABLE)");
+		T.check(String.valueOf(vami.failureReason("access/ssh", "enabled"))
+				.contains("cycle ended early"), "VAMI reason says budget: "
+				+ vami.failureReason("access/ssh", "enabled"));
+	}
+
 	static void hungVCenterTripsBreaker() throws Exception {
 		try (FakeVCenter f = new FakeVCenter()) {
 			f.handler = r -> late(400, FakeVCenter.ok("RetrieveProperties", ""));
@@ -199,6 +253,24 @@ public final class Build96BudgetTest {
 		}
 	}
 
+	/** Pushes to {@code id} in pushes[from..]. */
+	static boolean pushedTo(AdapterHarness h, int from, String id) {
+		synchronized (h.suite.pushes) {
+			for (FakeSuiteApi.Push p : h.suite.pushes.subList(from,
+					h.suite.pushes.size())) {
+				if (p.resourceId.equals(id)) return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The budget is used up while host-11 is being read. The small kinds
+	 * (vCenter, switches, portgroups, clusters) ran first and are pushed;
+	 * host-11 is not pushed at all (review W2: no partial score); Host and
+	 * VM are held back with incomplete = 1; the next cycle starts with
+	 * host-11 (review B1) and is complete.
+	 */
 	static void adapterBudgetEndsCycle() throws Exception {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
 				"host-11", "esx02", "host-12", "esx03")) {
@@ -211,9 +283,6 @@ public final class Build96BudgetTest {
 					+ "300 s interval, the default collection interval"),
 					"budget line names its source");
 
-			// Cycle 2: the clock passes the budget during host-11's first
-			// read. host-11's remaining reads are refused (UNREADABLE, it
-			// is pushed flagged), and the loop stops before host-12.
 			int before = h.suite.pushes.size();
 			final boolean[] jumped = {false};
 			h.override = r -> {
@@ -227,29 +296,168 @@ public final class Build96BudgetTest {
 			Map<String, Double> r2 = h.lastRollup();
 			T.eq(1.0, r2.get(ComplianceRollup.INCOMPLETE_KEY),
 					"ended early: incomplete = 1");
-			for (String k : new String[] {"Host", "VM", "vCenter", "Cluster",
-					"vDS", "Portgroup", "All"}) {
-				T.check(!r2.containsKey(P + k + "|scored"),
-						k + " held back");
+			for (String k : new String[] {"Host", "VM", "All"}) {
+				T.check(!r2.containsKey(P + k + "|scored"), k + " held back");
 			}
-			T.check(h.logged("Cycle ended early before host esx03"),
+			T.check(r2.containsKey(P + "vCenter|scored"),
+					"the vCenter object ran before the hosts and is pushed");
+			T.check(h.logged("Cycle ended early while reading host esx02"),
 					"one WARN says where");
 			T.check(h.logged("ENDED EARLY"), "completion line says so");
-			boolean pushed12 = false;
-			synchronized (h.suite.pushes) {
-				for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
-						h.suite.pushes.size())) {
-					if (p.resourceId.equals("r-host-12")) pushed12 = true;
-				}
-			}
-			T.check(!pushed12, "host-12 not read or pushed");
+			T.check(pushedTo(h, before, "r-host-10"), "host-10 pushed");
+			T.check(!pushedTo(h, before, "r-host-11"),
+					"host-11, cut mid-read, not pushed (no partial score)");
+			T.check(!pushedTo(h, before, "r-host-12"), "host-12 not reached");
+			T.eq("host-10", h.holder.resume.cursor(
+					BenchmarkSelector.Kind.HOST), "resume after host-10");
 
 			h.override = null;
+			int before3 = h.suite.pushes.size();
 			h.cycle();
 			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
 					"next cycle complete");
 			T.eq(3.0, h.lastRollup().get(P + "Host|scored"),
-					"all three hosts scored again");
+					"all three hosts scored");
+			T.check(pushedTo(h, before3, "r-host-11"), "host-11 read first");
+			T.eq(null, h.holder.resume.cursor(BenchmarkSelector.Kind.HOST),
+					"a complete walk clears the cursor");
+		}
+	}
+
+	/**
+	 * Review B1: two consecutive budget-ended cycles together visit every
+	 * object. Each host costs 50 s of the 240 s budget, so a cycle reads
+	 * four of six hosts and is cut in the fifth; the next cycle starts
+	 * after the last host finished.
+	 */
+	static void twoCyclesVisitEverything() throws Exception {
+		String[] pairs = new String[12];
+		for (int i = 0; i < 6; i++) {
+			pairs[2 * i] = "host-" + (20 + i);
+			pairs[2 * i + 1] = "esx" + (20 + i);
+		}
+		try (AdapterHarness h = new AdapterHarness(pairs)) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			h.override = r -> {
+				if (r.body.contains("runtime.connectionState")) {
+					now.addAndGet(50L * 1_000_000_000L);
+				}
+				return null;
+			};
+			java.util.Set<String> pushed = new java.util.TreeSet<>();
+			for (int cycle = 1; cycle <= 2; cycle++) {
+				int before = h.suite.pushes.size();
+				h.cycle();
+				T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+						"cycle " + cycle + " ended early");
+				synchronized (h.suite.pushes) {
+					for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
+							h.suite.pushes.size())) {
+						if (p.resourceId.startsWith("r-host-")) {
+							pushed.add(p.resourceId);
+						}
+					}
+				}
+			}
+			T.eq(6, pushed.size(), "every host visited over two cycles: "
+					+ pushed);
+		}
+	}
+
+	/**
+	 * Review B1: a host whose hostd hangs (vCenter still says connected)
+	 * costs one timeout per cycle: its QueryOptions times out, then none of
+	 * its vim25 or esxcli reads is attempted; the next host is read
+	 * normally.
+	 */
+	static void hungHostCostsOneTimeout() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
+				"host-11", "esx02")) {
+			h.cycle();
+			h.client.setReadTimeoutMs(200);
+			h.client.setShortReadTimeoutMs(200);
+			final int[] late = {0};
+			h.override = r -> {
+				boolean hostTen = r.body.contains(">host-10<")
+						|| r.body.contains("EsxHostAdvSettings-host-10");
+				boolean relayed = r.action.endsWith("/QueryOptions")
+						|| r.action.endsWith("/ExecuteSoap")
+						|| r.action.endsWith("/RetrieveManagedMethodExecuter");
+				if (hostTen && relayed) {
+					late[0]++;
+					return late(1000, FakeVCenter.ok("QueryOptions", ""));
+				}
+				return null;
+			};
+			int reqBefore = h.vc.requests.size();
+			int before = h.suite.pushes.size();
+			h.cycle();
+			T.eq(1, late[0], "one host-relayed call to the hung host");
+			int laterHostTen = 0;
+			boolean afterQuery = false;
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req q : h.vc.requests.subList(reqBefore,
+						h.vc.requests.size())) {
+					if (q.action.endsWith("/QueryOptions")
+							&& q.body.contains("host-10")) {
+						afterQuery = true;
+						continue;
+					}
+					if (afterQuery && q.body.contains(">host-10<")) {
+						laterHostTen++;
+					}
+				}
+			}
+			T.eq(0, laterHostTen, "no read of host-10 after its timeout");
+			T.check(pushedTo(h, before, "r-host-11"),
+					"the next host is read and pushed");
+			Map<String, Double> h10 = new java.util.HashMap<>();
+			synchronized (h.suite.pushes) {
+				for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
+						h.suite.pushes.size())) {
+					if (p.stats != null && p.resourceId.equals("r-host-10")) {
+						h10.putAll(p.stats);
+					}
+				}
+			}
+			T.eq(1.0, h10.get(ComplianceDecisions.HAS_UNREADABLE),
+					"host-10 flagged not read");
+			T.check(!h10.containsKey("VCF-CF Compliance|score"),
+					"no score from nothing read");
+		}
+	}
+
+	/**
+	 * Review W2: a host whose full read scores 64.58 never shows 100 from a
+	 * partial read cut by the budget: the cut object is not pushed.
+	 */
+	static void noPartialScore() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			h.cycle();
+			Double full = h.suite.statsFor("r-host-10").get(
+					"VCF-CF Compliance|score");
+			T.check(full != null && full < 100.0,
+					"the full read fails some controls: " + full);
+			// The budget runs out after the advanced settings are read
+			// (passing reads only would follow).
+			h.override = r -> {
+				if (r.action.endsWith("/QueryOptions")
+						&& r.body.contains("EsxHostAdvSettings-host-10")) {
+					now.addAndGet(300L * 1_000_000_000L);
+				}
+				return null;
+			};
+			int before = h.suite.pushes.size();
+			h.cycle();
+			T.check(!pushedTo(h, before, "r-host-10"),
+					"not pushed: no partial score");
+			T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"Host held back, incomplete = 1");
+			T.eq(full, h.suite.statsFor("r-host-10").get(
+					"VCF-CF Compliance|score"), "its last score stays");
 		}
 	}
 

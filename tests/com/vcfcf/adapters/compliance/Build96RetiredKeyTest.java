@@ -7,9 +7,10 @@ import java.util.TreeSet;
 
 /**
  * Build 96, issue #42 (DEF-025): a control retired from an object (guide
- * version change, or no longer applicable) gets Compliant = -1 on every
- * cycle while it stays retired, not once, so an alert open on the key sees
- * the three non-failing samples it needs to cancel. A key the object never
+ * version change, or no longer applicable) gets Compliant = -1 on later
+ * cycles too, not once, so an alert open on the key sees the three
+ * non-failing samples it needs to cancel; review W1 caps it at 4 -1 pushes
+ * per key (the retirement included). A key the object never
  * had is still never created, and a lingering 1 outside the benchmark is
  * still left alone. Run from the repo root.
  */
@@ -17,6 +18,7 @@ public final class Build96RetiredKeyTest {
 
 	public static void main(String[] args) throws Exception {
 		decision();
+		cap();
 		repeatsEveryCycle();
 		System.out.println("Build96RetiredKeyTest: all assertions passed");
 	}
@@ -43,10 +45,30 @@ public final class Build96RetiredKeyTest {
 				new HashMap<>()).isEmpty(), "absent key: never created");
 	}
 
+	/** Review W1: 4 pushes per key, then none; a new retirement restarts. */
+	static void cap() {
+		RetiredKeyRepeats r = new RetiredKeyRepeats();
+		java.util.Set<String> none = new TreeSet<>();
+		java.util.Set<String> k = new TreeSet<>(java.util.Arrays.asList("k"));
+		T.eq(k, r.toPush("obj", k, none), "push 1: the retirement");
+		for (int i = 2; i <= 4; i++) {
+			T.eq(k, r.toPush("obj", none, k), "push " + i);
+		}
+		T.check(r.toPush("obj", none, k).isEmpty(), "push 5: capped");
+		T.check(r.toPush("obj", none, k).isEmpty(), "push 6: capped");
+		T.eq(k, r.toPush("obj2", none, k),
+				"another object counts on its own (or after a restart)");
+		// The key leaves the retired set (scored again), then retires again.
+		T.check(r.toPush("obj", none, none).isEmpty(), "not retired");
+		T.eq(k, r.toPush("obj", k, none), "a new retirement counts afresh");
+		T.eq(4, RetiredKeyRepeats.MAX_PUSHES, "the alert needs 3; 4 pushes");
+	}
+
 	/**
 	 * Through the adapter: a host on SCG 9.0 holds a 0 on a control that
 	 * only another guide version checks (its version changed). Cycle 1
-	 * sets it to -1; cycles 2 and 3 read -1 back and push -1 again.
+	 * sets it to -1; cycles 2 to 4 read -1 back and push -1 again; cycles
+	 * 5 and 6 push nothing for it (the cap).
 	 */
 	static void repeatsEveryCycle() throws Exception {
 		Map<String, BenchmarkProfile> all = new BenchmarkLoader().loadAll(".");
@@ -64,7 +86,7 @@ public final class Build96RetiredKeyTest {
 						+ "\"stat-list\":{\"stat\":[{\"statKey\":{\"key\":\""
 						+ key + "\"},\"data\":[" + stored[0] + "]}]}}]}";
 			};
-			for (int cycle = 1; cycle <= 3; cycle++) {
+			for (int cycle = 1; cycle <= 6; cycle++) {
 				int before = h.suite.pushes.size();
 				h.cycle();
 				Double pushed = null;
@@ -77,8 +99,8 @@ public final class Build96RetiredKeyTest {
 						}
 					}
 				}
-				T.eq(-1.0, pushed, "cycle " + cycle + ": " + id
-						+ " pushed -1");
+				T.eq(cycle <= 4 ? -1.0 : null, pushed, "cycle " + cycle + ": "
+						+ id + (cycle <= 4 ? " pushed -1" : " not pushed (cap)"));
 				stored[0] = -1.0;   // what VCF Ops now holds
 			}
 			T.check(h.logged("retired key(s) already at -1 pushed -1 again"),

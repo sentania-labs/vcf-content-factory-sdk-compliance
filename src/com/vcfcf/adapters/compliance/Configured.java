@@ -32,6 +32,11 @@ final class Configured<S, T> {
 	final T stitcher;
 	/** Benchmark applied to each object by this configuration's cycles. */
 	final LastBenchmarkMemory memory = new LastBenchmarkMemory();
+	// Build 96 (issue #16, review B1): where an early-ended cycle stopped,
+	// per kind, so the next one resumes after it.
+	final ResumeCursor resume = new ResumeCursor();
+	// Build 96 (issue #42, review W1): the capped -1 repeats per retired key.
+	final RetiredKeyRepeats retiredRepeats = new RetiredKeyRepeats();
 	private final AtomicReference<String> vcResourceId =
 			new AtomicReference<>();
 	private final AtomicBoolean zeroCustomBucket;

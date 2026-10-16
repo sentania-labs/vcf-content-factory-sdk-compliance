@@ -669,6 +669,71 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		return b != null && b.exhausted() != null;
 	}
 
+	/**
+	 * Build 96 (issue #16, review B1 and W2): one kind's walk this cycle.
+	 * {@link #order} starts after where the last early-ended cycle stopped
+	 * (ResumeCursor). {@link #next}, at the top of each object, ends the
+	 * walk when the budget or breaker is reached and records the last
+	 * object finished. {@link #abortObject}, after an object is evaluated
+	 * and before it is pushed or counted, drops that object when the limit
+	 * was reached while it was read: its reads after the limit were
+	 * refused, so a score over what was read before it would be a partial
+	 * one (a host at 64.58 could show 100 from five passing reads). It is
+	 * not pushed (its last values stay, like an object not visited), the
+	 * kind is held back, and the next cycle starts with it.
+	 * {@link #finish} clears the cursor when the whole kind was read.
+	 */
+	private final class KindWalk {
+		final BenchmarkSelector.Kind kind;
+		final ComplianceRollup rollup;
+		private String inFlight;
+		private String done;
+		private boolean ended;
+
+		KindWalk(BenchmarkSelector.Kind kind, ComplianceRollup rollup) {
+			this.kind = kind;
+			this.rollup = rollup;
+		}
+
+		<T> List<T> order(List<T> objects,
+				java.util.function.Function<T, String> id) {
+			return cycle.resume.order(kind, objects, id);
+		}
+
+		/** False when the walk must stop before {@code moid}. */
+		boolean next(String moid, String where) {
+			done = inFlight;   // the previous object finished
+			if (cycleOver(kind, rollup, where)) {
+				cycle.resume.stoppedAfter(kind, done);
+				ended = true;
+				return false;
+			}
+			inFlight = moid;
+			return true;
+		}
+
+		/** True when the object just read must be dropped and the walk end. */
+		boolean abortObject(String where) {
+			CycleBudget b = cycleBudget;
+			String why = b == null ? null : b.exhausted();
+			if (why == null) return false;
+			rollup.markIncomplete(kind);
+			cycle.resume.stoppedAfter(kind, done);
+			ended = true;
+			if (cycleEndedEarly == null) cycleEndedEarly = why;
+			logWarn("Cycle ended early while reading " + where + ": " + why
+					+ ". It is not pushed this cycle (its last values stay, "
+					+ "no partial score); " + kind.rollupName + " and every "
+					+ "kind not yet collected are held back (Rollup|"
+					+ "incomplete = 1). The next cycle starts with it.");
+			return true;
+		}
+
+		void finish() {
+			if (!ended) cycle.resume.completed(kind);
+		}
+	}
+
 	private CycleMetrics.Scope phase(CycleMetrics.Phase p) {
 		return CycleMetrics.scope(cycleMetrics, p);
 	}
@@ -904,13 +969,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		CycleStats cs = new CycleStats();
 		java.util.Set<String> seen = new java.util.HashSet<>();
 
-		java.util.Map<String, String> hostVersions;
-		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.HOSTS)) {
-			hostVersions = collectHosts(selector, rollup, cs, seen);
-		}
-		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.VMS)) {
-			collectVms(selector, hostVersions, rollup, cs, seen);
-		}
+		// Build 96 (issue #16, review B1): the small kinds first (the
+		// vCenter object, switches, portgroups, clusters), then hosts and
+		// VMs, so a cycle that ends early on its budget never starves them;
+		// hosts and VMs resume where an early-ended cycle stopped
+		// (ResumeCursor). VMs still follow hosts (they use the host
+		// versions). No kind's score depends on the order.
 		ComplianceStitcher.HostEntry vcEntry;
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.VCENTER)) {
 			vcEntry = collectVCenter(selector, vcVersion, rollup, cs, seen);
@@ -919,6 +983,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			collectDvs(selector, vcVersion, rollup, cs, seen);
 			collectDvpg(selector, vcVersion, rollup, cs, seen);
 			collectClusters(selector, vcVersion, rollup, cs, seen);
+		}
+		java.util.Map<String, String> hostVersions;
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.HOSTS)) {
+			hostVersions = collectHosts(selector, rollup, cs, seen);
+		}
+		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.VMS)) {
+			collectVms(selector, hostVersions, rollup, cs, seen);
 		}
 
 		// Forget applied-profile history for objects no longer in inventory,
@@ -1518,10 +1589,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * created, and a missed or failed cleanup is retried next cycle. If a
 	 * bulk read fails, that batch is skipped this cycle (logged), with no
 	 * fallback. Build 96 (issue #42): a cleaned key, read back at -1, is
-	 * pushed -1 again every cycle while the control stays retired
-	 * ({@link ComplianceDecisions#heldNotEvaluatedControls}), so an alert
-	 * open on it sees its cancel cycles (before, it got one -1 and stayed
-	 * open).
+	 * pushed -1 again on later cycles while the control stays retired
+	 * ({@link ComplianceDecisions#heldNotEvaluatedControls}), up to 4 -1
+	 * pushes per key in all (review W1, {@link RetiredKeyRepeats}), so an
+	 * alert open on it sees its 3 cancel cycles (before, it got one -1 and
+	 * stayed open). The budget is checked before every batch.
 	 */
 	private void cleanStaleControls(CycleStats cs) throws InterruptedException {
 		if (cycle.stitcher == null || pendingCleanup.isEmpty()) return;
@@ -1547,6 +1619,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			for (int i = 0; i < objs.size(); i += CLEANUP_BATCH) {
 				stop.check("per-control cleanup of " + e.getKey().rollupName
 						+ " objects " + i + "+");
+				if (budgetExhausted()) {
+					// Build 96 (review W1): the cleanup's reads and pushes
+					// count against the budget too; the rest is retried
+					// next cycle.
+					logInfo("Stale-control cleanup stopped at "
+							+ e.getKey().rollupName + " object " + i + ": the "
+							+ "cycle time budget was reached; retried next "
+							+ "cycle");
+					pendingCleanup.clear();
+					return;
+				}
 				cleanBatch(e.getKey(), objs.subList(i,
 						Math.min(objs.size(), i + CLEANUP_BATCH)),
 						bundled.values(), cs);
@@ -1626,16 +1709,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.Set<String> stale = ComplianceDecisions.staleControls(
 					plan, objLatest);
 			// Build 96 (issue #42, DEF-025): a key already retired to -1
-			// gets -1 again every cycle while the control stays retired
+			// gets -1 again on later cycles while the control stays retired
 			// (guide version change, or no longer applicable), so its
 			// symptom sees the cancel cycles an open alert needs. Same
 			// properties and stats call as the retirement itself.
-			java.util.Set<String> held =
+			// Review W1: capped at RetiredKeyRepeats.MAX_PUSHES (4) -1
+			// pushes per key, the retirement included; the alert needs 3.
+			java.util.Set<String> heldAll =
 					ComplianceDecisions.heldNotEvaluatedControls(plan,
 							objLatest);
-			if (stale.isEmpty() && held.isEmpty()) continue;
-			java.util.Set<String> ids = new java.util.TreeSet<>(stale);
-			ids.addAll(held);
+			java.util.Set<String> ids = cycle.retiredRepeats.toPush(
+					p.resourceId, stale, heldAll);
+			java.util.Set<String> held = new java.util.TreeSet<>(ids);
+			held.removeAll(stale);
+			if (ids.isEmpty()) continue;
 			cycle.stitcher.pushProperties(p.resourceId,
 					ComplianceDecisions.orphanProps(ids, p.profileName,
 							cycleOverrides.skipped,
@@ -1741,11 +1828,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.HOST,
 				"HostSystem", rollup);
 		Shadow shadow = new Shadow("Host", "HostSystem", bulkShadow);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.HOST, rollup);
+		hosts = walk.order(hosts, h -> h.moid);   // build 96 (review B1)
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			stop.check("host " + hostInfo.name);
-			if (cycleOver(BenchmarkSelector.Kind.HOST, rollup,
-					"host " + hostInfo.name)) {
+			if (!walk.next(hostInfo.moid, "host " + hostInfo.name)) {
 				break;   // build 96 (issue #16)
 			}
 			beginObject(BenchmarkSelector.Kind.HOST);
@@ -1870,6 +1958,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					cr = mergeResults(advCr, vimCr);
 				}
 			}
+			if (walk.abortObject("host " + hostName)) {
+				break;   // build 96 (review W2): no partial score
+			}
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
@@ -1935,6 +2026,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " with no VCF Ops resource); per-host "
 				+ "scores at DEBUG, at INFO for hosts with unreadable "
 				+ "controls");
+		if (pushable) walk.finish();
 		runShadow(shadow);
 		return hostVersions;
 	}
@@ -2066,10 +2158,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		boolean pushable = kindPushable(BenchmarkSelector.Kind.VM,
 				"VirtualMachine", rollup);
 		Shadow shadow = new Shadow("VM", "VirtualMachine", bulkShadow);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VM, rollup);
+		vms = walk.order(vms, v -> v.moid);   // build 96 (review B1)
 
 		for (VSphereClient.VmInfo vm : vms) {
 			stop.check("VM " + vm.name);
-			if (cycleOver(BenchmarkSelector.Kind.VM, rollup, "VM " + vm.name)) {
+			if (!walk.next(vm.moid, "VM " + vm.name)) {
 				break;   // build 96 (issue #16)
 			}
 			beginObject(BenchmarkSelector.Kind.VM);
@@ -2140,6 +2234,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ControlEvaluator.ComplianceResult vimCr =
 					evaluateVimForResource(vm.moRef, vmControls, vm.name);
 			ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vimCr);
+			if (walk.abortObject("VM " + vm.name)) {
+				break;   // build 96 (review W2): no partial score
+			}
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
@@ -2154,6 +2251,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		logInfo("VM compliance: " + cs.vms + " VMs seen, "
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
 				+ "of scope; named at DEBUG)");
+		if (pushable) walk.finish();
 		runShadow(shadow);
 	}
 
@@ -2274,6 +2372,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ cr.passCount + " pass, " + cr.failCount + " fail, "
 				+ cr.unreadableCount + " unreadable, "
 				+ cr.totalCount + " total)");
+		if (budgetExhausted()) {
+			// Build 96 (review W2): the limit was reached while the vCenter
+			// was read; no partial score. Not pushed, held back.
+			rollup.markIncomplete(BenchmarkSelector.Kind.VCENTER);
+			if (cycleEndedEarly == null) cycleEndedEarly = cycleBudget.exhausted();
+			logWarn("Cycle ended early while reading the vCenter object: it "
+					+ "is not pushed this cycle (its last values stay, no "
+					+ "partial score); vCenter held back (Rollup|incomplete = "
+					+ "1)");
+			return he;
+		}
 
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER, d.bucket,
@@ -2317,19 +2426,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type,
 				bulkShadow);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VDS, rollup);
+		switches = walk.order(switches, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
-			if (cycleOver(BenchmarkSelector.Kind.VDS, rollup,
-					"vDS " + dvs.name)) {
+			if (!walk.next(dvs.moid, "vDS " + dvs.name)) {
 				break;   // build 96 (issue #16)
 			}
 			cs.dvs++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchDvs(dvs.name,
 					dvs.moid);
-			collectVimObject(BenchmarkSelector.Kind.VDS, dvs.moRef, dvs.name,
-					dvs.moid, he, selector, vcVersion, rollup, cs, seen,
-					shadow);
+			if (collectVimObject(BenchmarkSelector.Kind.VDS, dvs.moRef,
+					dvs.name, dvs.moid, he, selector, vcVersion, rollup, cs,
+					seen, shadow, walk)) {
+				break;   // build 96 (review W2)
+			}
 		}
+		walk.finish();
 		runShadow(shadow);
 	}
 
@@ -2360,19 +2473,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type,
 				bulkShadow);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.PORTGROUP, rollup);
+		pgs = walk.order(pgs, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
-			if (cycleOver(BenchmarkSelector.Kind.PORTGROUP, rollup,
-					"portgroup " + pg.name)) {
+			if (!walk.next(pg.moid, "portgroup " + pg.name)) {
 				break;   // build 96 (issue #16)
 			}
 			cs.dvpg++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchDvpg(pg.name,
 					pg.moid);
-			collectVimObject(BenchmarkSelector.Kind.PORTGROUP, pg.moRef,
+			if (collectVimObject(BenchmarkSelector.Kind.PORTGROUP, pg.moRef,
 					pg.name, pg.moid, he, selector, vcVersion, rollup, cs,
-					seen, shadow);
+					seen, shadow, walk)) {
+				break;   // build 96 (review W2)
+			}
 		}
+		walk.finish();
 		runShadow(shadow);
 	}
 
@@ -2411,19 +2528,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type,
 				bulkShadow);
+		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.CLUSTER, rollup);
+		clusters = walk.order(clusters, o -> o.moid);   // build 96 (review B1)
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);
-			if (cycleOver(BenchmarkSelector.Kind.CLUSTER, rollup,
-					"cluster " + cluster.name)) {
+			if (!walk.next(cluster.moid, "cluster " + cluster.name)) {
 				break;   // build 96 (issue #16)
 			}
 			cs.clusters++;
 			ComplianceStitcher.HostEntry he = cycle.stitcher.matchCluster(
 					cluster.name, cluster.moid);
-			collectVimObject(BenchmarkSelector.Kind.CLUSTER, cluster.moRef,
-					cluster.name, cluster.moid, he, selector, vcVersion,
-					rollup, cs, seen, shadow);
+			if (collectVimObject(BenchmarkSelector.Kind.CLUSTER,
+					cluster.moRef, cluster.name, cluster.moid, he, selector,
+					vcVersion, rollup, cs, seen, shadow, walk)) {
+				break;   // build 96 (review W2)
+			}
 		}
+		walk.finish();
 		runShadow(shadow);
 	}
 
@@ -2436,16 +2557,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * nothing could be pushed to it). A FAILED read (vim properties, or the
 	 * cluster vSAN probe) folds every evaluable control to UNREADABLE.
 	 */
-	private void collectVimObject(BenchmarkSelector.Kind kind,
+	private boolean collectVimObject(BenchmarkSelector.Kind kind,
 			VSphereClient.MoRef moRef, String name, String moid,
 			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
-			java.util.Set<String> seen, Shadow shadow) {
+			java.util.Set<String> seen, Shadow shadow, KindWalk walk) {
 		beginObject(kind);
 		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
 		if (he == null) {
 			rollup.recordUnmatched(kind, name, moid);
-			return;
+			return false;
 		}
 		String resourceId = he.resourceId;
 
@@ -2453,11 +2574,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				BenchmarkSelector.governingVersion(kind, vcVersion, null));
 		if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
 			recordVersionUnreadable(kind, name, d, resourceId, rollup, cs);
-			return;
+			return false;
 		}
 		if (d.outcome == ComplianceDecisions.Outcome.NO_BENCHMARK) {
 			recordNoBenchmark(kind, name, moid, d, resourceId, rollup, cs);
-			return;
+			return false;
 		}
 		java.util.List<BenchmarkProfile.Control> controls =
 				ComplianceDecisions.sliceFor(d.profile, kind);
@@ -2485,6 +2606,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cr = unreadableVimResult(controls, name);
 			noteUnreadable(name, lastObjectFailure, cr.unreadableCount);
 		}
+		if (walk.abortObject(kind.rollupName + " " + name)) {
+			return true;   // build 96 (review W2): no partial score
+		}
 		cs.unreadable += cr.unreadableCount;
 		rollup.recordEvaluated(kind, d.bucket, cr.totalCount, cr.failCount,
 				cr.unreadableCount, cr.score);
@@ -2492,6 +2616,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		pushOrProfileName(resourceId, cr, d.profileName, skip);
 		afterPush(kind, moid, d, resourceId, cs,
 				ComplianceDecisions.pushedIds(cr), skip);
+		return false;
 	}
 
 	/**
@@ -2698,6 +2823,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				cycle.account.baseUrl(), cycle.account.username,
 				cycle.account.password, sslContextFor(cycle.account.vcenterHost),
 				this::logWarn);
+		client.setCycleBudget(cycleBudget);   // build 96 (review N10)
 		try {
 			java.util.Map<String, Object> values = new java.util.HashMap<>();
 			for (BenchmarkProfile.Control c : controls) {

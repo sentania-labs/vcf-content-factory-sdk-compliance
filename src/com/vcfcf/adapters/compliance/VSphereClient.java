@@ -464,7 +464,37 @@ public final class VSphereClient {
 	 */
 	public void beginCycle() {
 		loginFailure = null;
+		hungHosts.clear();
 		EsxcliSoapClient.beginCycleOn(esxcli);
+	}
+
+	// Build 96 (issue #16, review B1): hosts whose host-relayed call (the
+	// advanced-settings QueryOptions, or an esxcli command) timed out this
+	// cycle, with the first reason. Their remaining reads are skipped
+	// (UNREADABLE) for the rest of the cycle, so a host whose hostd hangs
+	// costs one timeout, not one per read. Cleared by beginCycle.
+	private final Map<String, String> hungHosts =
+			new java.util.concurrent.ConcurrentHashMap<>();
+
+	private void markHostHung(String hostMoid, String reason) {
+		if (hostMoid == null) return;
+		hungHosts.putIfAbsent(hostMoid, reason);
+		EsxcliSoapClient c = esxcli;
+		if (c != null) c.markUnreachable(hostMoid, reason);
+	}
+
+	/**
+	 * Build 96 (review B1): why this host's reads are skipped for the rest
+	 * of the cycle (a host-relayed call to it timed out), or null.
+	 */
+	String hostHungReason(String hostMoid) {
+		if (hostMoid == null) return null;
+		String r = hungHosts.get(hostMoid);
+		if (r != null) return r;
+		EsxcliSoapClient c = esxcli;
+		String u = c == null ? null : c.unreachableReason(hostMoid);
+		return u != null && u.startsWith("SocketTimeoutException")
+				? "esxcli " + u : null;
 	}
 
 	/**
@@ -726,6 +756,11 @@ public final class VSphereClient {
 	public Map<String, String> getAdvancedSettings(MoRef hostRef)
 			throws Exception {
 		ensureSession();
+		String hung = hostHungReason(hostRef.value);
+		if (hung != null) {
+			throw new VimOptions.ReadFault("host not answering: " + hung
+					+ "; skipped for the rest of this cycle");
+		}
 		MoRef optMgr = getMoRefProperty(hostRef,
 				"configManager.advancedOption");
 		if (optMgr == null) {
@@ -734,7 +769,16 @@ public final class VSphereClient {
 					+ "advanced-settings channel is unreadable (host likely "
 					+ "disconnected / not responding)");
 		}
-		return queryOptions(optMgr);
+		try {
+			return queryOptions(optMgr);
+		} catch (java.net.SocketTimeoutException e) {
+			// Build 96 (issue #16, review B1): QueryOptions is relayed to
+			// the host; a timeout means its hostd is not answering, and
+			// every other read of it would wait out its own timeout.
+			markHostHung(hostRef.value, "QueryOptions timed out ("
+					+ e.getMessage() + ")");
+			throw e;
+		}
 	}
 
 	/**
@@ -931,6 +975,18 @@ public final class VSphereClient {
 			Object value;
 			readFailure = null;
 			lastFault = null;
+			String hung = "HostSystem".equals(moRef.type)
+					? hostHungReason(moRef.value) : null;
+			if (hung != null) {
+				// Build 96 (review B1): no call to a host that stopped
+				// answering this cycle; UNREADABLE, never a value.
+				synchronized (lastReasons) {
+					lastReasons.put(c.parameter, "host-not-answering: " + hung
+							+ " (host skipped for the rest of this cycle)");
+				}
+				result.put(c.parameter, UNREADABLE);
+				continue;
+			}
 			try {
 				value = readByRecipe(new SoapSource(moRef), recipe.trim());
 			} catch (Exception e) {
@@ -1070,6 +1126,15 @@ public final class VSphereClient {
 			} else {
 				value = esxcli.readField(hostMoid, namespaceCommand, fieldSpec);
 			}
+		}
+		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)
+				&& esxcli.refusedByBudget(hostMoid, namespaceCommand)) {
+			// Build 96 (review N2): refused by the cycle budget, not a
+			// host fault.
+			readFailure = "esxcli-budget-reached: " + namespaceCommand
+					+ " (the cycle time budget or timeout breaker was "
+					+ "reached; call not made)";
+			return null;
 		}
 		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
 			// Build 86: a host whose esxcli request (made through vCenter)

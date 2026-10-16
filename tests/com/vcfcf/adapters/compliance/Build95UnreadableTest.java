@@ -323,7 +323,7 @@ public final class Build95UnreadableTest {
 			{"for (VSphereClient.VmInfo vm : vms) {", "getVmExtraConfig"},
 			{"private ComplianceStitcher.HostEntry collectVCenter(",
 				"getVCenterAdvancedSettings"},
-			{"private void collectVimObject(", "readAndEvaluateVim"},
+			{"private boolean collectVimObject(", "readAndEvaluateVim"},
 		};
 		for (String[] l : loops) {
 			int at = ca.indexOf(l[0]);

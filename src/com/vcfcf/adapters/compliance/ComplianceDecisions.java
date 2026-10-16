@@ -594,9 +594,10 @@ public final class ComplianceDecisions {
 	 * in VCF Ops is already -1. {@link #staleControls} sets a lingering 0
 	 * (or 1) to -1 once; the per-control symptom needs its cancel cycles
 	 * of fresh non-triggering samples before an open alert cancels, so a
-	 * single -1 left the alert open (the shape of issue #41). The key keeps
-	 * getting -1 every cycle while the control stays retired on the object,
-	 * like a Skip in force. A key the object never had is absent from
+	 * single -1 left the alert open (the shape of issue #41). The adapter
+	 * pushes -1 again on later cycles while the control stays retired, up
+	 * to {@link RetiredKeyRepeats#MAX_PUSHES} pushes per key in all
+	 * (review W1; the alert needs 3 fresh samples). A key the object never had is absent from
 	 * {@code latest} and is never created; {@code latest} null (the read
 	 * failed) means nothing this cycle. Never a score change: a -1 key is
 	 * outside every score and count.
