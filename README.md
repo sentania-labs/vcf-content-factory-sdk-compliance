@@ -67,9 +67,14 @@ about 80% of the account's collection interval (240 s at the default 5
 minutes), and it also stops after 5 vCenter calls in a row time out.
 When a cycle stops early, what was not finished keeps its last values,
 "Compliance data not collected" fires on the vCenter, and the next cycle
-carries on from where it stopped, so every object is still read every
-few cycles. If it keeps happening on a large vCenter, lengthen the
-account's collection interval (see docs/installing.md).
+carries on from where it stopped, through the remaining object kinds,
+before starting over. So every object is read again within a bounded
+number of cycles (about the time a full walk takes divided by the
+cycle's budget, plus one). A host that stops answering costs one timeout
+each time it is visited, and an object that never fits in a cycle is
+pushed flagged as not read on its second try so the walk moves past it.
+If cycles keep ending early on a large vCenter, lengthen the account's
+collection interval (see docs/installing.md).
 
 ## The dashboards
 

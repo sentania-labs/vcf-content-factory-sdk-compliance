@@ -140,8 +140,13 @@ account's collection interval and stops after 5 vCenter calls in a row
 time out (build 96). A cycle that ends early logs "Cycle ended early"
 and ends its collection-complete line with "ENDED EARLY", raises
 "Compliance data not collected (vCenter)", and the next cycle continues
-from where it stopped, so on a large vCenter every object is still read
-every two or three cycles. If it happens every cycle and the vCenter
+from where it stopped, through the remaining object kinds, before
+starting over. Every object is read again within a bounded number of
+cycles (about the time a full walk takes divided by the cycle's budget,
+plus one). A host that stops answering costs one timeout each time it is
+visited, and an object that does not fit in a cycle is pushed flagged as
+not read on its second try and the walk moves past it. If it happens
+every cycle and the vCenter
 answers normally (no timeouts in the log), the walk is longer than the
 interval allows: edit the account and lengthen its collection interval
 (for example to 10 or 15 minutes). A host named in "host not answering"

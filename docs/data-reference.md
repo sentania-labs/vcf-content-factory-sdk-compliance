@@ -231,7 +231,9 @@ VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when rollup ke
                                                (held one cycle; empty again is accepted);
                                                or (build 96, #16) the cycle ended early on
                                                its time budget or timeout breaker (the kinds
-                                               not finished are held back); or (build 93)
+                                               not finished are held back), or read only
+                                               the rest of a kind after such a cycle; or
+                                               (build 93)
                                                the cycle could not reach vCenter at all (the
                                                only key pushed then)
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
@@ -457,7 +459,12 @@ the cycle did not visit: when a kind's listing failed (that kind is held
 back) or vCenter could not be reached at all, those objects keep the
 flag from their last visit, so they stay off (or on) the list as they
 were. The same holds for the kinds a cycle did not finish because it
-ended early on its time budget or timeout breaker (build 96). All these
+ended early on its time budget or timeout breaker (build 96); the next
+cycles carry on from there, so every object is visited again within a
+bounded number of cycles (about the full walk time divided by the
+budget, plus one; a host that stops answering costs one timeout per
+visit, and an object that never fits is pushed flagged on its second
+try). If every cycle ends early, lengthen the collection interval. All these
 cases set `Rollup|incomplete` = 1 on the vCenter, which
 raises "Compliance data not collected (vCenter)"; an unreachable vCenter
 also leaves the ComplianceWorld resource in collection status down (no

@@ -382,9 +382,12 @@ collection continues; compliance is never failed over a stitch error.
   cycle also ends after 5 vCenter calls in a row time out with no answer
   between them (a vCenter that accepts connections but does not answer);
   the appliance (VAMI) and esxcli calls count too.
-  - **Order.** The small kinds go first (the vCenter object, distributed
-    switches, portgroups, clusters), then hosts, then VMs, so a cycle
-    that ends early never starves them.
+  - **Order.** The kinds run in a fixed round: the vCenter object,
+    distributed switches, portgroups, clusters, hosts, VMs. A cycle that
+    ended early is followed by one that starts in the kind it stopped
+    in, carries on through the kinds after it, and wraps round to the
+    ones before it, so no kind (VMs behind a long host walk, say) waits
+    for good.
   - **When a limit is reached**, no more vCenter calls are made. The
     object being read is not pushed at all (no partial score: its last
     values stay, as for an object not visited), the kind being collected
@@ -394,16 +397,26 @@ collection continues; compliance is never failed over a stitch error.
     cycle's values, the rollup is still pushed, and one WARN says where
     and why ("Cycle ended early ..."); the collection-complete line ends
     with "ENDED EARLY". The stale-key cleanup and the bulk shadow stop.
-  - **Resume.** The next cycle starts each host, VM, switch, portgroup
-    and cluster walk after the last object the early-ended cycle
-    finished, and goes round to the top, so consecutive early-ended
-    cycles together read every object. A cycle that reads a whole kind
-    starts it from the top next time.
-  - **A host that stops answering costs one timeout.** When a host's
-    advanced-settings read or an esxcli command (both relayed by vCenter
-    to the host) times out, the rest of that host's reads are skipped for
-    the cycle (UNREADABLE, reason "host not answering"), so one hung hostd
-    cannot use up the budget.
+    An object is cut only when a call was refused while it was read; one
+    whose reads all finished before the deadline is pushed in full.
+  - **Resume.** In the kind it stopped in, the next cycle reads only the
+    objects after the last one finished; reaching the end of that kind
+    finishes it for this pass and the walk goes on to the next kind (a
+    cycle that reads only such a tail holds the kind back, because it is
+    not a whole-kind read). A pass over every object therefore spreads
+    over consecutive cycles, and every object is read again within a
+    bounded number of cycles: about the time a full walk takes divided by
+    the budget, plus one.
+  - **An object that never fits costs at most two cycles.** An object
+    cut by the limit is retried first the next cycle; cut a second time
+    in a row, it is pushed with what was read (the rest UNREADABLE, Not
+    Read = 1, the kind held back) and the walk moves past it.
+  - **A host that stops answering costs one timeout per visit.** When a
+    host's advanced-settings read or an esxcli command (both relayed by
+    vCenter to the host) times out, the rest of that host's reads are
+    skipped for the cycle (UNREADABLE, reason "host not answering") and
+    it is pushed flagged. The mark lasts one cycle, so the host costs one
+    timeout each time the walk reaches it.
   - **If every cycle ends early** on a vCenter that answers normally, its
     walk is longer than the interval allows: lengthen the account's
     collection interval (docs/installing.md).
