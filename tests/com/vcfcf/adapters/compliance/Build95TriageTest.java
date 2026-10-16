@@ -263,9 +263,11 @@ public final class Build95TriageTest {
 		T.check(ComplianceDecisions.cycleEndLine(false, null, 9, null)
 				.startsWith("ComplianceAdapter cycle failed after 9 ms"),
 				"other failures unchanged");
-		CycleMetrics cm = new CycleMetrics();
-		T.check(ComplianceDecisions.cycleEndLine(false, "x", 1, cm.summary())
-				.endsWith(cm.summary()), "carries CycleMetrics.summary()");
+		// Build 96: one summary() call; two straddling a millisecond
+		// boundary differ in the "other" phase time (a flake).
+		String summary = new CycleMetrics().summary();
+		T.check(ComplianceDecisions.cycleEndLine(false, "x", 1, summary)
+				.endsWith(summary), "carries CycleMetrics.summary()");
 		// Wiring (the adapter needs the SDK): one end line from the
 		// finally, with the summary when abandoned.
 		String cw = OverridesTest.body(ca, "private void collectWorld(");
