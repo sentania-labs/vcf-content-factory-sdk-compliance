@@ -171,7 +171,7 @@ public final class ComplianceDecisionsTest {
 				hostIds, manyKeys, ComplianceDecisions.URL_BUDGET);
 		assertCoverage(hostPaths, hostIds, manyKeys);
 		for (String path : hostPaths) {
-			T.check(path.startsWith("/api/resources/stats/latest?resourceId="),
+			T.check(path.startsWith("/api/resources/stats/latest?maxSamples=5&resourceId="),
 					"endpoint");
 			T.check(path.contains("VCF-CF%20Compliance%7Cesx."), "encoded");
 		}

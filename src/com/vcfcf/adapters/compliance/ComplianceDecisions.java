@@ -856,12 +856,23 @@ public final class ComplianceDecisions {
 	 * pathological single key longer than the budget still yields a request.
 	 * Deterministic order.
 	 */
+	/**
+	 * Build 96: samples per key in the stale-key read-back: enough to see
+	 * every -1 the capped repeat pushes (one per cycle at most).
+	 */
+	public static final int LATEST_SAMPLES = RetiredKeyRepeats.MAX_PUSHES + 1;
+
 	public static java.util.List<String> latestCompliantPaths(
 			java.util.List<String> resourceIds, Set<String> controlIds,
 			int urlBudget) {
 		java.util.List<String> paths = new java.util.ArrayList<>();
 		if (resourceIds.isEmpty() || controlIds.isEmpty()) return paths;
-		String base = "/api/resources/stats/latest?";
+		// Build 96 (Codex P2 on PR #57): the last LATEST_SAMPLES samples
+		// (with their timestamps), so the capped -1 repeats can be counted
+		// only once they show as landed. The latest value is taken at the
+		// newest timestamp, whatever order the samples come in.
+		String base = "/api/resources/stats/latest?maxSamples="
+				+ LATEST_SAMPLES + "&";
 		java.util.List<String> keyChunks = new java.util.ArrayList<>();
 		StringBuilder chunk = new StringBuilder();
 		int keyBudget = Math.max(1, urlBudget / 2);
@@ -965,6 +976,12 @@ public final class ComplianceDecisions {
 		public final Set<String> ids;
 		public final Map<String, Double> stats;
 		public final Map<String, String> props;
+		/**
+		 * Build 96 (Codex P2 on PR #57): the timestamp the object's push
+		 * must carry when retired-key repeats ride it (null: the caller's
+		 * own), so the read-back can match the landed samples exactly.
+		 */
+		public final Long pushTimestamp;
 
 		SkipPush(Set<String> ids, String overridesFile) {
 			this.ids = java.util.Collections.unmodifiableSet(ids);
@@ -972,13 +989,15 @@ public final class ComplianceDecisions {
 					orphanStats(ids));
 			this.props = java.util.Collections.unmodifiableMap(
 					orphanProps(ids, null, ids, overridesFile));
+			this.pushTimestamp = null;
 		}
 
 		private SkipPush(Set<String> ids, Map<String, Double> stats,
-				Map<String, String> props) {
+				Map<String, String> props, Long pushTimestamp) {
 			this.ids = java.util.Collections.unmodifiableSet(ids);
 			this.stats = java.util.Collections.unmodifiableMap(stats);
 			this.props = java.util.Collections.unmodifiableMap(props);
+			this.pushTimestamp = pushTimestamp;
 		}
 
 		/**
@@ -989,7 +1008,7 @@ public final class ComplianceDecisions {
 		 * may be null.
 		 */
 		public static SkipPush withRetired(SkipPush skip, Set<String> retired,
-				String appliedName) {
+				String appliedName, long pushTimestamp) {
 			if (retired == null || retired.isEmpty()) return skip;
 			Set<String> ids = new TreeSet<>(retired);
 			Map<String, Double> stats = new LinkedHashMap<>(orphanStats(retired));
@@ -1000,7 +1019,7 @@ public final class ComplianceDecisions {
 				stats.putAll(skip.stats);
 				props.putAll(skip.props);
 			}
-			return new SkipPush(ids, stats, props);
+			return new SkipPush(ids, stats, props, pushTimestamp);
 		}
 
 		public boolean isEmpty() {
@@ -1060,8 +1079,10 @@ public final class ComplianceDecisions {
 			s = new LinkedHashMap<>(stats);
 			s.putAll(skip.stats);
 		}
-		sink.pushProperties(resourceId, p, timestamp);
-		sink.pushStats(resourceId, s, timestamp);
+		long ts = skip != null && skip.pushTimestamp != null
+				? skip.pushTimestamp : timestamp;
+		sink.pushProperties(resourceId, p, ts);
+		sink.pushStats(resourceId, s, ts);
 	}
 
 	// ----- overrides file status (build 90) --------------------------------

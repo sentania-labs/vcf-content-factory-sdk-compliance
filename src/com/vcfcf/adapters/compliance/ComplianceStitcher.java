@@ -531,10 +531,23 @@ public final class ComplianceStitcher
 		public final int valuesReturned;
 		/** Failure reason, null on success. */
 		public final String error;
+		/**
+		 * Build 96 (Codex P2 on PR #57): resourceId -> (control id ->
+		 * the timestamps of the samples returned), so a push can be
+		 * confirmed as landed; null when failed.
+		 */
+		public final Map<String, Map<String, java.util.Set<Long>>> times;
 
 		LatestRead(Map<String, Map<String, Double>> values, int requests,
 				int valuesReturned, String error) {
+			this(values, null, requests, valuesReturned, error);
+		}
+
+		LatestRead(Map<String, Map<String, Double>> values,
+				Map<String, Map<String, java.util.Set<Long>>> times, int requests,
+				int valuesReturned, String error) {
 			this.values = values;
+			this.times = times;
 			this.requests = requests;
 			this.valuesReturned = valuesReturned;
 			this.error = error;
@@ -564,7 +577,11 @@ public final class ComplianceStitcher
 	public LatestRead latestCompliant(List<String> resourceIds,
 			java.util.Set<String> controlIds) {
 		Map<String, Map<String, Double>> out = new HashMap<>();
-		for (String rid : resourceIds) out.put(rid, new HashMap<>());
+		Map<String, Map<String, java.util.Set<Long>>> times = new HashMap<>();
+		for (String rid : resourceIds) {
+			out.put(rid, new HashMap<>());
+			times.put(rid, new HashMap<>());
+		}
 		int requests = 0;
 		int returned = 0;
 		for (String path : ComplianceDecisions.latestCompliantPaths(
@@ -598,10 +615,32 @@ public final class ComplianceStitcher
 									|| data.size() == 0) {
 								continue;
 							}
-							Double d = numeric(data.get(data.size() - 1));
+							// Build 96 (Codex P2 on PR #57): up to
+							// LATEST_SAMPLES samples. The latest value is the
+							// one at the newest timestamp (any order); with
+							// no timestamps, the last one, as before. Every
+							// sample time is kept, to confirm pushes landed.
+							int at = data.size() - 1;
+							SimpleJson tss = st.get("timestamps");
+							java.util.Set<Long> seenTs = new java.util.HashSet<>();
+							if (tss != null && tss.isList()
+									&& tss.size() == data.size()) {
+								long newest = Long.MIN_VALUE;
+								for (int x = 0; x < tss.size(); x++) {
+									Double t = numeric(tss.get(x));
+									if (t == null) continue;
+									seenTs.add(t.longValue());
+									if (t.longValue() >= newest) {
+										newest = t.longValue();
+										at = x;
+									}
+								}
+							}
+							Double d = numeric(data.get(at));
 							if (d != null) {
 								into.put(cid, d);
 								returned++;
+								times.get(rid).put(cid, seenTs);
 							}
 						}
 					}
@@ -616,7 +655,7 @@ public final class ComplianceStitcher
 						e.getClass().getSimpleName() + ": " + e.getMessage());
 			}
 		}
-		return new LatestRead(out, requests, returned, null);
+		return new LatestRead(out, times, requests, returned, null);
 	}
 
 	private static Double numeric(SimpleJson node) {

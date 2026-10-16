@@ -38,6 +38,7 @@ public final class Build96BudgetTest {
 		shortTimeoutForCheapCalls();
 		refusedOnceExhausted();
 		esxcliAndVamiRefusals();
+		reloginRetryChecked();
 		hungVCenterTripsBreaker();
 		adapterBudgetEndsCycle();
 		twoCyclesVisitEverything();
@@ -242,6 +243,35 @@ public final class Build96BudgetTest {
 		T.check(String.valueOf(vami.failureReason("access/ssh", "enabled"))
 				.contains("cycle ended early"), "VAMI reason says budget: "
 				+ vami.failureReason("access/ssh", "enabled"));
+	}
+
+	/**
+	 * Codex P2 on PR #57: a mid-cycle re-login (NotAuthenticated) that uses
+	 * up the budget leaves the retry of the original call refused, so it
+	 * cannot add a full connect and read timeout past the budget.
+	 */
+	static void reloginRetryChecked() throws Exception {
+		try (FakeVCenter f = new FakeVCenter()) {
+			f.handler = r -> FakeVCenter.ok("RetrieveProperties", "");
+			VSphereClient c = f.client();
+			c.ensureConnected();
+			// The clock passes the budget once the second Login is sent.
+			CycleBudget b = new CycleBudget(1000, 5,
+					() -> f.count("Login") >= 2 ? 10_000_000_000L : 0L);
+			c.setCycleBudget(b);
+			f.expireSessions();
+			try {
+				c.getHostConnectionState(
+						new VSphereClient.MoRef("HostSystem", "host-1"));
+				throw new AssertionError("the retry must be refused");
+			} catch (CycleBudget.Exhausted e) {
+				// refused before it was sent
+			}
+			T.eq(2, f.count("Login"), "the re-login happened");
+			T.eq(1, f.count("RetrieveProperties"),
+					"the original call only; the retry was not sent");
+			T.check(b.refusals() >= 1, "counted as a refusal");
+		}
 	}
 
 	static void hungVCenterTripsBreaker() throws Exception {

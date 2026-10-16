@@ -9,8 +9,9 @@ import java.util.TreeSet;
  * Build 96, issue #42 (DEF-025): a control retired from an object (guide
  * version change, or no longer applicable) gets Compliant = -1 on later
  * cycles too, not once, so an alert open on the key sees the three
- * non-failing samples it needs to cancel; review W1 caps it at 4 -1 pushes
- * per key (the retirement included). A key the object never
+ * non-failing samples it needs to cancel; review W1 caps it at 4 -1 samples
+ * per key (the retirement included), counted only once a read-back shows
+ * them landed (Codex P2 on PR #57). A key the object never
  * had is still never created, and a lingering 1 outside the benchmark is
  * still left alone. Run from the repo root.
  */
@@ -19,8 +20,10 @@ public final class Build96RetiredKeyTest {
 	public static void main(String[] args) throws Exception {
 		decision();
 		cap();
+		failedPushDoesNotConsume();
 		repeatsEveryCycle();
 		repeatsWhenEveryCycleEndsEarly();
+		failedPushThroughAdapter();
 		System.out.println("Build96RetiredKeyTest: all assertions passed");
 	}
 
@@ -51,51 +54,130 @@ public final class Build96RetiredKeyTest {
 		RetiredKeyRepeats r = new RetiredKeyRepeats();
 		java.util.Set<String> none = new TreeSet<>();
 		java.util.Set<String> k = new TreeSet<>(java.util.Arrays.asList("k"));
-		// Cleanup read-back: the retirement is push 1.
+		long ts = 300_000L;
+		// Cycle 1: the cleanup read-back retires the key (pending).
 		r.beginCycle();
-		T.eq(k, r.toPush("obj", k, none, false), "push 1: the retirement");
-		// Peer review item 4: the repeats ride the object's own push.
-		for (int i = 2; i <= 4; i++) {
+		T.eq(k, r.toPush("obj", k, none, false, null, ts), "the retirement");
+		// Cycles 2 to 4: the repeat rides the object push; the same cycle's
+		// read-back shows it landed and counts it.
+		for (int c = 2; c <= 4; c++) {
 			r.beginCycle();
-			T.eq(k, r.fold("obj", none), "push " + i + " in the object push");
-			T.check(r.toPush("obj", none, k, false).isEmpty(),
-					"cleanup does not push it again the same cycle");
+			long pushTs = (ts += 300_000L);
+			T.eq(k, r.fold("obj", none, pushTs), "cycle " + c + ": folded");
+			java.util.Set<Long> landed = new java.util.HashSet<>();
+			for (long x = 300_000L; x <= pushTs; x += 300_000L) landed.add(x);
+			Map<String, Set<Long>> tm = new HashMap<>();
+			tm.put("k", landed);
+			T.check(r.toPush("obj", none, k, false, tm, ts + 1).isEmpty(),
+					"cleanup does not push it again");
 		}
+		T.eq(4, r.confirmed("obj", "k"), "4 samples landed");
 		r.beginCycle();
-		T.check(r.fold("obj", none).isEmpty(), "push 5: capped");
-		T.check(r.toPush("obj", none, k, false).isEmpty(), "cleanup: capped");
-		T.check(r.fold("obj2", none).isEmpty(),
-				"an object with no known retired key: nothing folded");
-		// A held key found by a read-back after a restart, not folded this
-		// cycle: the cleanup pushes it, then the object push carries it.
-		T.eq(k, r.toPush("obj2", none, k, false), "after a restart: cleanup");
-		r.beginCycle();
-		T.eq(k, r.fold("obj2", none), "then the object push");
+		T.check(r.fold("obj", none, ts += 300_000L).isEmpty(), "capped");
 		// A live key (pushed with a value) is never folded.
-		r.beginCycle();
-		T.check(r.fold("obj2", k).isEmpty(), "live: not folded");
+		RetiredKeyRepeats l = new RetiredKeyRepeats();
+		l.beginCycle();
+		l.toPush("o", none, k, false, null, 1);
+		l.beginCycle();
+		T.check(l.fold("o", k, 2).isEmpty(), "live: not folded");
 		// Peer review item 6: a read-back with nothing for the object
 		// changes nothing.
-		T.check(r.toPush("obj2", none, none, true).isEmpty(), "empty read");
-		r.beginCycle();
-		T.eq(k, r.fold("obj2", none), "count kept through an empty read");
+		T.check(l.toPush("o", none, none, true, null, 3).isEmpty(),
+				"empty read");
+		T.eq(1, l.size(), "count kept through an empty read");
 		// The key leaves the retired set (read back neither 0/1 nor -1).
-		T.check(r.toPush("obj", none, none, false).isEmpty(), "not retired");
-		r.beginCycle();
-		T.check(r.fold("obj", none).isEmpty(), "forgotten");
-		T.eq(k, r.toPush("obj", k, none, false), "a new retirement afresh");
-		T.eq(4, RetiredKeyRepeats.MAX_PUSHES, "the alert needs 3; 4 pushes");
+		T.check(r.toPush("obj", none, none, false, null, 5).isEmpty(),
+				"not retired");
+		T.eq(0, r.size(), "forgotten");
+		T.eq(4, RetiredKeyRepeats.MAX_PUSHES, "the alert needs 3; 4 samples");
 
-		// Review N1-r2: objects that leave inventory are forgotten, with
-		// the same seen set and held-back rule as the benchmark memory.
+		// Review N1-r2: objects that leave inventory are forgotten.
 		RetiredKeyRepeats t = new RetiredKeyRepeats();
-		t.toPush("HOST|host-1", k, none, false);
-		t.toPush("HOST|host-2", k, none, false);
-		t.toPush("VM|vm-1", k, none, false);
+		t.toPush("HOST|host-1", k, none, false, null, 1);
+		t.toPush("HOST|host-2", k, none, false, null, 1);
+		t.toPush("VM|vm-1", k, none, false, null, 1);
 		T.eq(3, t.size(), "three objects counted");
 		t.retain(new TreeSet<>(java.util.Arrays.asList("HOST|host-1")),
 				java.util.EnumSet.of(BenchmarkSelector.Kind.VM));
 		T.eq(2, t.size(), "host-2 left inventory: forgotten; VM held back: kept");
+	}
+
+	/**
+	 * Codex P2 on PR #57: a push that fails (the framework logs and
+	 * swallows it) does not consume an attempt: it is counted only when a
+	 * read-back shows it landed, and a pending push a later cycle's
+	 * read-back does not show is dropped.
+	 */
+	static void failedPushDoesNotConsume() {
+		RetiredKeyRepeats r = new RetiredKeyRepeats();
+		java.util.Set<String> none = new TreeSet<>();
+		java.util.Set<String> k = new TreeSet<>(java.util.Arrays.asList("k"));
+		r.beginCycle();
+		r.toPush("obj", k, none, false, null, 300000L);          // retirement
+		r.beginCycle();
+		T.eq(k, r.fold("obj", none, 600000L), "cycle 2: folded");
+		// The read-back shows the retirement, not the cycle-2 fold: that
+		// push failed (or has not landed yet). One cycle is 300,000 ms.
+		r.toPush("obj", none, k, false, times("k", 3000L, 300000L), 750000L);
+		T.eq(1, r.confirmed("obj", "k"), "only the retirement counted");
+		r.beginCycle();
+		T.eq(k, r.fold("obj", none, 900000L), "cycle 3: folded again");
+		r.toPush("obj", none, k, false, times("k", 3000L, 300000L, 900000L), 1050000L);
+		T.eq(2, r.confirmed("obj", "k"),
+				"the cycle-3 push landed and counts; the cycle-2 push never "
+				+ "showed and is dropped, uncounted");
+		for (int c = 4; c <= 6; c++) {
+			r.beginCycle();
+			long t = c * 300000L;
+			Set<String> f = r.fold("obj", none, t);
+			if (c <= 5) {
+				T.eq(k, f, "cycle " + c + ": still owed");
+				r.toPush("obj", none, k, false, times("k", 300000L, 900000L, t),
+						t + 150000L);
+			} else {
+				T.check(f.isEmpty(), "cycle 6: 4 landed, capped");
+			}
+		}
+		T.eq(4, r.confirmed("obj", "k"), "4 landed in all");
+	}
+
+	/** The read-back's sample times for one key. */
+	static Map<String, Set<Long>> times(String id, long... ts) {
+		Map<String, Set<Long>> m = new HashMap<>();
+		Set<Long> set = new java.util.HashSet<>();
+		for (long t : ts) set.add(t);
+		m.put(id, set);
+		return m;
+	}
+
+	/**
+	 * Codex P2 on PR #57, through the adapter: the push of one cycle fails;
+	 * the -1 samples that land on the key still reach 4 (the failed one
+	 * does not count), then stop.
+	 */
+	static void failedPushThroughAdapter() throws Exception {
+		Map<String, BenchmarkProfile> all = new BenchmarkLoader().loadAll(".");
+		final String id = ComplianceDecisions.candidateControlIds(
+				BenchmarkSelector.Kind.HOST, all.get("VMware_SCG_9.0"),
+				all.values()).iterator().next();
+		final String key = "VCF-CF Compliance|" + id + "|Compliant";
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			h.suite.seed("r-host-10", key, 0.0, 1L);
+			int landed = 0;
+			int attempts = 0;
+			for (int cycle = 1; cycle <= 8; cycle++) {
+				h.suite.failPushes = cycle == 2;
+				int before = h.suite.pushes.size();
+				h.cycle();
+				if (lastPushed(h, before, key) != null) {
+					attempts++;
+					if (cycle != 2) landed++;
+				}
+			}
+			h.suite.failPushes = false;
+			T.eq(4, landed, "4 -1 samples landed, the failed push not counted");
+			T.eq(5, attempts, "one more attempt for the failed one");
+		}
 	}
 
 	/**
@@ -113,13 +195,8 @@ public final class Build96RetiredKeyTest {
 		final String id = retired.iterator().next();
 		final String key = "VCF-CF Compliance|" + id + "|Compliant";
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
-			final double[] stored = {0.0};
-			h.suite.answer = p -> {
-				if (!p.contains("/stats/latest")) return null;
-				return "{\"values\":[{\"resourceId\":\"r-host-10\","
-						+ "\"stat-list\":{\"stat\":[{\"statKey\":{\"key\":\""
-						+ key + "\"},\"data\":[" + stored[0] + "]}]}}]}";
-			};
+			// What VCF Ops holds: a lingering 0, then what lands.
+			h.suite.seed("r-host-10", key, 0.0, 1L);
 			for (int cycle = 1; cycle <= 6; cycle++) {
 				int before = h.suite.pushes.size();
 				h.cycle();
@@ -135,7 +212,6 @@ public final class Build96RetiredKeyTest {
 				}
 				T.eq(cycle <= 4 ? -1.0 : null, pushed, "cycle " + cycle + ": "
 						+ id + (cycle <= 4 ? " pushed -1" : " not pushed (cap)"));
-				stored[0] = -1.0;   // what VCF Ops now holds
 			}
 			T.check(h.logged("retired key(s) already at -1 pushed -1 again"),
 					"cleanup line counts the repeats");
@@ -159,17 +235,11 @@ public final class Build96RetiredKeyTest {
 			java.util.concurrent.atomic.AtomicLong now =
 					new java.util.concurrent.atomic.AtomicLong(0);
 			h.adapter.budgetClock = now::get;
-			final double[] stored = {0.0};
-			h.suite.answer = p -> {
-				if (!p.contains("/stats/latest")) return null;
-				return "{\"values\":[{\"resourceId\":\"r-host-10\","
-						+ "\"stat-list\":{\"stat\":[{\"statKey\":{\"key\":\""
-						+ key + "\"},\"data\":[" + stored[0] + "]}]}}]}";
-			};
+			// What VCF Ops holds: a lingering 0, then what lands.
+			h.suite.seed("r-host-10", key, 0.0, 1L);
 			// Cycle 1, a complete cycle: the cleanup retires the key.
 			h.cycle();
 			T.eq(-1.0, lastPushed(h, 0, key), "cycle 1: retired (push 1)");
-			stored[0] = -1.0;
 			// Every later cycle: the budget runs out on host-10's last read,
 			// so host-10 is pushed in full, host-11 is not reached and the
 			// end-of-cycle cleanup is skipped.

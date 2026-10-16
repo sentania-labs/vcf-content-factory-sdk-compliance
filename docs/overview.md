@@ -480,8 +480,10 @@ collection continues; compliance is never failed over a stitch error.
   repeats ride the object's own per-cycle push, as a Skip does, so they
   are made whenever the object is visited, even on a cycle whose cleanup
   is cut; a cleanup cut by the cycle budget is carried to a later cycle
-  (see the cycle limit above). The count is kept in memory, so after a restart a
-  retired key gets at most 4 more. Since build 76 the same read-back also covers
+  (see the cycle limit above). A -1 counts only once the read-back
+  (which asks for each key's last 5 samples) shows it landed, so a push
+  that failed is made again. The count is kept in memory, so after a
+  restart a retired key gets at most 4 more. Since build 76 the same read-back also covers
   controls that ARE in the object's SCG but were not evaluated this cycle
   because they do not apply (for example vSAN controls on a cluster where
   vSAN is not enabled): any 0 or 1 left on them is set to -1, so an old

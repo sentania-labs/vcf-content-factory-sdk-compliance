@@ -2333,6 +2333,17 @@ public final class VSphereClient {
 			} finally {
 				reloggingIn = false;
 			}
+			// Build 96 (Codex P2 on PR #57): the re-login may have used up
+			// the budget; the retry is checked like any new call, so it
+			// cannot add a full connect and read timeout past it.
+			if (b != null) {
+				try {
+					b.check();
+				} catch (CycleBudget.Exhausted e) {
+					lastFault = e.getMessage();
+					throw e;
+				}
+			}
 			d = postOnce(soapBody, soapAction, authenticated,
 					CONNECT_TIMEOUT_MS, readMs);
 		}

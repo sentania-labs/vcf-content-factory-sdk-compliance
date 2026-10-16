@@ -1714,10 +1714,14 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.Set<String> live = new java.util.HashSet<>(
 				ComplianceDecisions.pushedIds(cr));
 		if (skip != null) live.addAll(skip.ids);
+		// Codex P2 on PR #57: recorded as pending at this time, which the
+		// object's push then carries exactly, and counted only when a
+		// read-back returns a sample with it.
+		long ts = System.currentTimeMillis();
 		java.util.Set<String> due = cycle.retiredRepeats.fold(
-				LastBenchmarkMemory.key(kind, moid), live);
+				LastBenchmarkMemory.key(kind, moid), live, ts);
 		return ComplianceDecisions.SkipPush.withRetired(skip, due,
-				d.profileName);
+				d.profileName, ts);
 	}
 
 	/**
@@ -2006,7 +2010,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 							objLatest);
 			java.util.Set<String> ids = cycle.retiredRepeats.toPush(
 					p.objectKey, stale, heldAll,
-					objLatest == null || objLatest.isEmpty());
+					objLatest == null || objLatest.isEmpty(),
+					read.times == null ? null : read.times.get(p.resourceId),
+					ts);
 			java.util.Set<String> held = new java.util.TreeSet<>(ids);
 			held.removeAll(stale);
 			if (ids.isEmpty()) continue;
