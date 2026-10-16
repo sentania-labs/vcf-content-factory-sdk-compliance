@@ -42,6 +42,15 @@ final class AdapterHarness implements AutoCloseable {
 
 	/** host moid -> name; every host is ESX 9.0.0 and connected. */
 	final Map<String, String> hosts = new LinkedHashMap<>();
+	/** Build 96 (review B1-r2): VM moid -> {name, host moid}; none by default. */
+	final Map<String, String[]> vms = new LinkedHashMap<>();
+
+	/** Add a VM on {@code hostMoid} and list it in VCF Ops too. */
+	AdapterHarness vm(String moid, String name, String hostMoid) {
+		vms.put(moid, new String[] {name, hostMoid});
+		listResources();
+		return this;
+	}
 	/** A test's answer first; null falls through to the inventory. */
 	volatile Function<FakeVCenter.Req, FakeVCenter.Resp> override;
 
@@ -72,6 +81,13 @@ final class AdapterHarness implements AutoCloseable {
 		}
 		suite.bodies.put("resourceKind=HostSystem&", FakeSuiteApi.page(
 				rows.size(), rows.toArray(new String[0])));
+		List<String> vmRows = new ArrayList<>();
+		for (Map.Entry<String, String[]> v : vms.entrySet()) {
+			vmRows.add(FakeSuiteApi.row("r-" + v.getKey(), v.getValue()[0],
+					v.getKey(), VC_UUID));
+		}
+		suite.bodies.put("resourceKind=VirtualMachine&", FakeSuiteApi.page(
+				vmRows.size(), vmRows.toArray(new String[0])));
 		suite.bodies.put("resourceKind=VMwareAdapter+Instance&",
 				"{\"pageInfo\":{\"totalCount\":1},\"resourceList\":[{"
 				+ "\"identifier\":\"" + VC_RESOURCE + "\",\"resourceKey\":{"
@@ -165,12 +181,26 @@ final class AdapterHarness implements AutoCloseable {
 								"<val>" + h.getValue() + "</val>")));
 			}
 		}
+		if ("VirtualMachine".equals(type)) {
+			for (Map.Entry<String, String[]> v : vms.entrySet()) {
+				b.append(FakeVCenter.objectContent("returnval",
+						"VirtualMachine", v.getKey(), FakeVCenter.vals(
+								"name", "<val>" + v.getValue()[0] + "</val>",
+								"runtime.host", "<val type=\"HostSystem\">"
+										+ v.getValue()[1] + "</val>",
+								"config.guestId", "<val>otherGuest64</val>")));
+			}
+		}
 		return FakeVCenter.ok("RetrieveProperties", b.toString());
 	}
 
 	private FakeVCenter.Resp property(String[] obj, String path) {
 		String moid = obj == null ? "" : obj[1];
 		Map<String, String> v = FakeVCenter.vals();
+		if (vms.containsKey(moid) && path.equals("config.extraConfig")) {
+			v = FakeVCenter.vals(path, "<val xsi:type=\"ArrayOfOptionValue\">"
+					+ "</val>");
+		}
 		if (hosts.containsKey(moid)) {
 			switch (path) {
 				case "summary.config.product.version":

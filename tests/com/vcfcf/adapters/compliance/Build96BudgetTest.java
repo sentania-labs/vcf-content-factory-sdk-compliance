@@ -40,6 +40,9 @@ public final class Build96BudgetTest {
 		hungVCenterTripsBreaker();
 		adapterBudgetEndsCycle();
 		twoCyclesVisitEverything();
+		vmsNotStarved();
+		objectLongerThanBudget();
+		deadlineAfterReadsDoesNotDrop();
 		hungHostCostsOneTimeout();
 		noPartialScore();
 		adapterBreakerEndsCycle();
@@ -311,16 +314,31 @@ public final class Build96BudgetTest {
 			T.eq("host-10", h.holder.resume.cursor(
 					BenchmarkSelector.Kind.HOST), "resume after host-10");
 
+			T.eq(BenchmarkSelector.Kind.HOST, h.holder.resume.startKind(),
+					"the next cycle starts at the hosts");
+
+			// Cycle 3 resumes the host walk with host-11 (the tail of the
+			// pass: Host still held back, since it is not a whole-kind
+			// read), then VMs and round to the small kinds.
 			h.override = null;
 			int before3 = h.suite.pushes.size();
 			h.cycle();
+			T.check(pushedTo(h, before3, "r-host-11"), "host-11 read");
+			T.check(pushedTo(h, before3, "r-host-12"), "host-12 read");
+			T.check(!pushedTo(h, before3, "r-host-10"),
+					"host-10, read earlier in this pass, is not read again");
+			T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"a resumed tail holds Host back");
+			T.eq(null, h.holder.resume.cursor(BenchmarkSelector.Kind.HOST),
+					"the pass reached the end of the hosts");
+			T.eq(null, h.holder.resume.startKind(), "and the round");
+
+			// Cycle 4: a full pass again, complete.
+			h.cycle();
 			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
-					"next cycle complete");
+					"full pass: complete");
 			T.eq(3.0, h.lastRollup().get(P + "Host|scored"),
 					"all three hosts scored");
-			T.check(pushedTo(h, before3, "r-host-11"), "host-11 read first");
-			T.eq(null, h.holder.resume.cursor(BenchmarkSelector.Kind.HOST),
-					"a complete walk clears the cursor");
 		}
 	}
 
@@ -362,6 +380,145 @@ public final class Build96BudgetTest {
 			}
 			T.eq(6, pushed.size(), "every host visited over two cycles: "
 					+ pushed);
+		}
+	}
+
+	/**
+	 * Review B1-r2 (a): the host walk alone overruns the budget (4 hosts at
+	 * 100 s each, 240 s budget) and the vCenter object costs 150 s, and
+	 * every VM is still read within 3 cycles, because the next cycle
+	 * carries on from the hosts into the VMs instead of starting again at
+	 * the small kinds. (Restarting at the top each cycle, the vCenter's
+	 * 150 s plus one host fill every cycle and the VMs wait about 8.)
+	 */
+	static void vmsNotStarved() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
+				"host-11", "esx02", "host-12", "esx03", "host-13", "esx04")) {
+			h.vm("vm-1", "app01", "host-10").vm("vm-2", "app02", "host-11")
+					.vm("vm-3", "app03", "host-12");
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			h.override = r -> {
+				if (r.body.contains("runtime.connectionState")) {
+					now.addAndGet(100L * 1_000_000_000L);
+				} else if (r.body.contains(">VpxSettings<")) {
+					now.addAndGet(150L * 1_000_000_000L);
+				} else if (r.body.contains("config.extraConfig")) {
+					now.addAndGet(10L * 1_000_000_000L);
+				}
+				return null;
+			};
+			java.util.Set<String> vmsPushed = new java.util.TreeSet<>();
+			for (int cycle = 1; cycle <= 3; cycle++) {
+				int before = h.suite.pushes.size();
+				h.cycle();
+				synchronized (h.suite.pushes) {
+					for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
+							h.suite.pushes.size())) {
+						if (p.resourceId.startsWith("r-vm-")) {
+							vmsPushed.add(p.resourceId);
+						}
+					}
+				}
+			}
+			T.eq("[r-vm-1, r-vm-2, r-vm-3]", vmsPushed.toString(),
+					"every VM read within 3 cycles");
+		}
+	}
+
+	/**
+	 * Review B1-r2 (b): one object takes longer than the whole budget. It
+	 * is dropped once (cycle 1), pushed flagged with what was read on the
+	 * second consecutive drop (cycle 2: Not Read = 1, Host held back), and
+	 * the walk moves past it (cycle 3 reads the next host).
+	 */
+	static void objectLongerThanBudget() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
+				"host-11", "esx02")) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			h.override = r -> {
+				if (r.body.contains("runtime.connectionState")
+						&& r.body.contains(">host-10<")) {
+					now.addAndGet(300L * 1_000_000_000L);
+				}
+				return null;
+			};
+			int b1 = h.suite.pushes.size();
+			h.cycle();
+			T.check(!pushedTo(h, b1, "r-host-10"), "cycle 1: dropped");
+			T.check(!pushedTo(h, b1, "r-host-11"), "cycle 1: not reached");
+
+			int b2 = h.suite.pushes.size();
+			h.cycle();
+			Map<String, Double> h10 = new java.util.HashMap<>();
+			synchronized (h.suite.pushes) {
+				for (FakeSuiteApi.Push p : h.suite.pushes.subList(b2,
+						h.suite.pushes.size())) {
+					if (p.stats != null && p.resourceId.equals("r-host-10")) {
+						h10.putAll(p.stats);
+					}
+				}
+			}
+			T.eq(1.0, h10.get(ComplianceDecisions.HAS_UNREADABLE),
+					"cycle 2: pushed flagged (Not Read = 1)");
+			T.eq(1.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"cycle 2: Host held back");
+			T.check(h.logged("pushed now with what was read"),
+					"the WARN says so");
+
+			int b3 = h.suite.pushes.size();
+			h.cycle();
+			T.check(pushedTo(h, b3, "r-host-11"),
+					"cycle 3: the walk moved past host-10");
+		}
+	}
+
+	/**
+	 * Review N2-r2: the deadline passes during an object's last read (no
+	 * call refused while it was read): it is pushed in full, and the walk
+	 * stops before the next object.
+	 */
+	static void deadlineAfterReadsDoesNotDrop() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
+				"host-11", "esx02")) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			int r0 = h.vc.requests.size();
+			h.cycle();
+			int n = 0;
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req q : h.vc.requests.subList(r0,
+						h.vc.requests.size())) {
+					if (q.body.contains("host-10")) n++;
+				}
+			}
+			Double full = h.suite.statsFor("r-host-10").get(
+					"VCF-CF Compliance|score");
+			final int last = n;
+			final int[] seenCalls = {0};
+			h.override = r -> {
+				if (r.body.contains("host-10") && ++seenCalls[0] == last) {
+					now.addAndGet(300L * 1_000_000_000L);
+				}
+				return null;
+			};
+			int before = h.suite.pushes.size();
+			h.cycle();
+			T.check(pushedTo(h, before, "r-host-10"),
+					"read in full before the deadline: pushed");
+			Map<String, Double> h10 = new java.util.HashMap<>();
+			synchronized (h.suite.pushes) {
+				for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
+						h.suite.pushes.size())) {
+					if (p.stats != null && p.resourceId.equals("r-host-10")) {
+						h10.putAll(p.stats);
+					}
+				}
+			}
+			T.eq(full, h10.get("VCF-CF Compliance|score"), "its full score");
+			T.check(!pushedTo(h, before, "r-host-11"),
+					"the walk stops before the next host");
 		}
 	}
 

@@ -62,6 +62,19 @@ public final class Build96RetiredKeyTest {
 		T.check(r.toPush("obj", none, none).isEmpty(), "not retired");
 		T.eq(k, r.toPush("obj", k, none), "a new retirement counts afresh");
 		T.eq(4, RetiredKeyRepeats.MAX_PUSHES, "the alert needs 3; 4 pushes");
+
+		// Review N1-r2: objects that leave inventory are forgotten, with
+		// the same seen set and held-back rule as the benchmark memory.
+		RetiredKeyRepeats t = new RetiredKeyRepeats();
+		t.toPush("HOST|host-1", k, none);
+		t.toPush("HOST|host-2", k, none);
+		t.toPush("VM|vm-1", k, none);
+		T.eq(3, t.size(), "three objects counted");
+		t.retain(new TreeSet<>(java.util.Arrays.asList("HOST|host-1")),
+				java.util.EnumSet.of(BenchmarkSelector.Kind.VM));
+		T.eq(2, t.size(), "host-2 left inventory: forgotten; VM held back: kept");
+		T.check(t.toPush("HOST|host-2", none, k).equals(k),
+				"a forgotten object counts afresh");
 	}
 
 	/**

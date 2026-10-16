@@ -13,16 +13,18 @@ import java.util.TreeSet;
  * enough; an unbounded repeat would cost two Suite API calls per object
  * per cycle for good. In memory, one per instance configuration: after a
  * restart a held key gets at most {@link #MAX_PUSHES} more, which is
- * harmless. An object's entries are dropped for keys that are no longer
- * retired, so a later retirement counts from the start. SDK-free.
+ * harmless. Keyed by the object's {@link LastBenchmarkMemory#key} (kind and
+ * MOID). An object's entries are dropped for keys that are no longer
+ * retired, so a later retirement counts from the start, and (review N1-r2)
+ * objects that leave inventory are dropped by {@link #retain}, with the
+ * same seen set as the benchmark memory. SDK-free.
  */
 final class RetiredKeyRepeats {
 
 	/** -1 pushes per retired key, the retirement included. */
 	static final int MAX_PUSHES = 4;
 
-	private final Map<String, Map<String, Integer>> byResource =
-			new HashMap<>();
+	private final Map<String, Map<String, Integer>> byObject = new HashMap<>();
 
 	/**
 	 * The keys to push -1 on this cycle for one object: every key retired
@@ -30,9 +32,9 @@ final class RetiredKeyRepeats {
 	 * at -1 ({@code held}) that has had fewer than {@link #MAX_PUSHES}.
 	 * Records the pushes.
 	 */
-	synchronized Set<String> toPush(String resourceId, Set<String> stale,
+	synchronized Set<String> toPush(String objectKey, Set<String> stale,
 			Set<String> held) {
-		Map<String, Integer> prev = byResource.get(resourceId);
+		Map<String, Integer> prev = byObject.get(objectKey);
 		Map<String, Integer> next = new HashMap<>();
 		Set<String> out = new TreeSet<>();
 		for (String id : stale) {
@@ -49,10 +51,34 @@ final class RetiredKeyRepeats {
 			next.put(id, n);
 		}
 		if (next.isEmpty()) {
-			byResource.remove(resourceId);
+			byObject.remove(objectKey);
 		} else {
-			byResource.put(resourceId, next);
+			byObject.put(objectKey, next);
 		}
 		return out;
+	}
+
+	/**
+	 * Review N1-r2: forget the objects not seen this cycle, except those of
+	 * a kind held back (not listed in full), exactly as
+	 * {@link LastBenchmarkMemory#retain} does.
+	 */
+	synchronized void retain(Set<String> seenKeys,
+			Set<BenchmarkSelector.Kind> heldBackKinds) {
+		byObject.keySet().removeIf(k -> !seenKeys.contains(k)
+				&& !heldBack(k, heldBackKinds));
+	}
+
+	private static boolean heldBack(String key,
+			Set<BenchmarkSelector.Kind> heldBackKinds) {
+		if (heldBackKinds == null) return false;
+		for (BenchmarkSelector.Kind kind : heldBackKinds) {
+			if (key.startsWith(kind.name() + "|")) return true;
+		}
+		return false;
+	}
+
+	synchronized int size() {
+		return byObject.size();
 	}
 }

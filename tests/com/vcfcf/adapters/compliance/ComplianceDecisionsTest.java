@@ -447,9 +447,9 @@ public final class ComplianceDecisionsTest {
 				"vsphere.getVCenterAdvancedSettings()",
 				"rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER");
 
-		String vim = body(ca, "private boolean collectVimObject(");
+		String vim = body(ca, "private int collectVimObject(");
 		inOrder(vim, "collectVimObject",
-				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return false; }",
+				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return KindWalk.CONTINUE; }",
 				"decide(selector, kind, moid",
 				"rollup.recordEvaluated(kind");
 		noReadBefore(vim, "collectVimObject", "rollup.recordUnmatched(kind");

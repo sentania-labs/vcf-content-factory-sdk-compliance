@@ -2303,9 +2303,9 @@ public final class VSphereClient {
 			boolean authenticated, int readMs) throws Exception {
 		CycleBudget b = budget;
 		if (b != null) {
-			String why = b.exhausted();
-			if (why != null) {
-				CycleBudget.Exhausted e = new CycleBudget.Exhausted(why);
+			try {
+				b.check();   // counts the refusal (review N2-r2)
+			} catch (CycleBudget.Exhausted e) {
 				lastFault = e.getMessage();
 				throw e;
 			}

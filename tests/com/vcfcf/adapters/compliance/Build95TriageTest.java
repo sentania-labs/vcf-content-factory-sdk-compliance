@@ -154,15 +154,20 @@ public final class Build95TriageTest {
 				"rollup, BenchmarkSelector.Kind.HOST,",
 				"if (hosts == null) { return hostVersions; }");
 		// The cycle still runs every other kind after collectHosts returns.
-		// Build 96 (review B1): the small kinds run first, then hosts, then
-		// VMs (Build96OrchestrationTest runs the cycle itself).
+		// Build 96 (review B1-r2): the kinds run in the fixed round
+		// (ResumeCursor.ROUND), starting where the last early-ended cycle
+		// stopped (Build96OrchestrationTest and Build96BudgetTest run it).
 		OverridesTest.inOrder(OverridesTest.body(ca,
 				"private void collectWorldCycle("), "collectWorldCycle",
-				"vcEntry = collectVCenter(selector, vcVersion, rollup, cs, seen);",
+				"for (BenchmarkSelector.Kind k : cycle.resume.round()) {",
+				"collectVCenter(selector, vcVersion, rollup,",
 				"collectDvs(", "collectDvpg(", "collectClusters(",
 				"hostVersions = collectHosts(selector, rollup, cs, seen);",
 				"collectVms(selector, hostVersions, rollup, cs, seen);",
+				"cycle.resume.startAt(cycleEndedIn);",
 				"pushRollup(vcEntry, rollup);");
+		T.eq("[VCENTER, VDS, PORTGROUP, CLUSTER, HOST, VM]",
+				ResumeCursor.ROUND.toString(), "the round");
 
 		// What the rollup then pushes: Host, All and Benchmark held back,
 		// the other kinds pushed, incomplete = 1.

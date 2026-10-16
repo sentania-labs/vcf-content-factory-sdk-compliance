@@ -110,6 +110,7 @@ public final class CycleBudget {
 	private final long startNs;
 	private int consecutiveTimeouts;
 	private int timeouts;
+	private int refusals;
 	private String endedBecause;
 
 	public CycleBudget(long budgetMs, int breakerLimit, LongSupplier nanoClock) {
@@ -161,9 +162,27 @@ public final class CycleBudget {
 		return endedBecause;
 	}
 
-	/** Throws {@link Exhausted} when the cycle must end. */
+	/**
+	 * Throws {@link Exhausted} when the cycle must end, and counts the
+	 * refusal ({@link #refusals}). Every client calls this before a call.
+	 */
 	public void check() throws Exhausted {
 		String why = exhausted();
-		if (why != null) throw new Exhausted(why);
+		if (why != null) {
+			synchronized (this) {
+				refusals++;
+			}
+			throw new Exhausted(why);
+		}
+	}
+
+	/**
+	 * Build 96 (review N2-r2): calls refused so far this cycle. The adapter
+	 * compares it before and after an object: an object is cut only when a
+	 * call was actually refused while it was read, not when the deadline
+	 * merely passed after its last read.
+	 */
+	public synchronized int refusals() {
+		return refusals;
 	}
 }
