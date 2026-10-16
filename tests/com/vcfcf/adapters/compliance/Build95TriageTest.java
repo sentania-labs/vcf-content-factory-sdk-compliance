@@ -154,13 +154,20 @@ public final class Build95TriageTest {
 				"rollup, BenchmarkSelector.Kind.HOST,",
 				"if (hosts == null) { return hostVersions; }");
 		// The cycle still runs every other kind after collectHosts returns.
+		// Build 96 (review B1-r2): the kinds run in the fixed round
+		// (ResumeCursor.ROUND), starting where the last early-ended cycle
+		// stopped (Build96OrchestrationTest and Build96BudgetTest run it).
 		OverridesTest.inOrder(OverridesTest.body(ca,
 				"private void collectWorldCycle("), "collectWorldCycle",
+				"for (BenchmarkSelector.Kind k : cycle.resume.round()) {",
+				"collectVCenter(selector, vcVersion, rollup,",
+				"collectDvs(", "collectDvpg(", "collectClusters(",
 				"hostVersions = collectHosts(selector, rollup, cs, seen);",
 				"collectVms(selector, hostVersions, rollup, cs, seen);",
-				"vcEntry = collectVCenter(selector, vcVersion, rollup, cs, seen);",
-				"collectDvs(", "collectDvpg(", "collectClusters(",
+				"cycle.resume.startAt(cycleEndedIn);",
 				"pushRollup(vcEntry, rollup);");
+		T.eq("[VCENTER, VDS, PORTGROUP, CLUSTER, HOST, VM]",
+				ResumeCursor.ROUND.toString(), "the round");
 
 		// What the rollup then pushes: Host, All and Benchmark held back,
 		// the other kinds pushed, incomplete = 1.
@@ -263,9 +270,11 @@ public final class Build95TriageTest {
 		T.check(ComplianceDecisions.cycleEndLine(false, null, 9, null)
 				.startsWith("ComplianceAdapter cycle failed after 9 ms"),
 				"other failures unchanged");
-		CycleMetrics cm = new CycleMetrics();
-		T.check(ComplianceDecisions.cycleEndLine(false, "x", 1, cm.summary())
-				.endsWith(cm.summary()), "carries CycleMetrics.summary()");
+		// Build 96: one summary() call; two straddling a millisecond
+		// boundary differ in the "other" phase time (a flake).
+		String summary = new CycleMetrics().summary();
+		T.check(ComplianceDecisions.cycleEndLine(false, "x", 1, summary)
+				.endsWith(summary), "carries CycleMetrics.summary()");
 		// Wiring (the adapter needs the SDK): one end line from the
 		// finally, with the summary when abandoned.
 		String cw = OverridesTest.body(ca, "private void collectWorld(");

@@ -1,0 +1,8 @@
+<ExecuteSoapResponse xmlns="urn:vim25">
+ <returnval>
+  <fault>
+   <faultMsg>Unknown command or namespace system settings encryption get</faultMsg>
+   <faultDetail>vim.EsxCLI.CLIFault</faultDetail>
+  </fault>
+ </returnval>
+</ExecuteSoapResponse>

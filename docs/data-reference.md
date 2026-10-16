@@ -102,7 +102,12 @@ Build 90: for a control whose expected value comes from the overrides
 file, Expected reads `<value> (site override)` and a read Actual reads
 `<actual>, expected <value> (site override)`. A skipped control's
 Actual reads `(skipped by override file <name>)` and its Compliant reads
--1, pushed every cycle while the Skip is in force (build 92).
+-1, pushed every cycle while the Skip is in force (build 92). Build 96
+(issue #42): a control no longer in the applied benchmark (after a guide
+version change) or no longer applicable gets -1 again on later cycles
+once its key reads -1, up to 4 -1 pushes per key in all (enough for the
+alert's 3 cancel cycles), carried in the object's own push; a key the
+object never had is never created.
 
 Actual values you can see:
 
@@ -219,11 +224,20 @@ VCF-CF Compliance|Rollup|<K>|unmatched        not for All (build 88): objects vC
                                                with no matching VCF Ops resource, so not
                                                scored and in no other key; 0 when none
 VCF-CF Compliance|Rollup|VM|skipped_pods      vSphere Pod VMs skipped (build 88); 0 when none
-VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when an inventory listing
-                                               (vCenter's, or VCF Ops' resource list for a
-                                               kind) failed and rollup keys were held back,
-                                               or (build 93) the cycle could not reach
-                                               vCenter at all (the only key pushed then)
+VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when rollup keys were held
+                                               back because an inventory listing (vCenter's,
+                                               or VCF Ops' resource list for a kind) failed;
+                                               or (build 96, #52) VCF Ops' list for a kind
+                                               came back empty after a list with objects
+                                               (held one cycle; empty again is accepted);
+                                               or (build 96, #16) the cycle ended early on
+                                               its time budget or timeout breaker (the kinds
+                                               not finished are held back; a later cycle
+                                               that finishes them and the round clears it);
+                                               or
+                                               (build 93)
+                                               the cycle could not reach vCenter at all (the
+                                               only key pushed then)
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
 ```
@@ -270,7 +284,14 @@ For the vCenter kind the count is always 0 when pushed: the rollup lives
 on the vCenter object, so an unmatched vCenter pushes no rollup at all.
 If VCF Ops' resource list for a kind cannot be read in a cycle, the kind
 is not scored and is held back like a failed vCenter listing
-(`Rollup|incomplete` = 1) rather than reported as all unmatched.
+(`Rollup|incomplete` = 1) rather than reported as all unmatched. Since
+build 96 (issue #52) the same happens, for one cycle, when the list comes
+back valid but empty for a kind whose last complete list had objects; an
+empty list the next cycle is accepted. So when the last object of a kind
+is genuinely removed (the last distributed switch deleted, say), "Compliance
+data not collected (vCenter)" fires for one cycle and then clears. The
+first cycle after a collector restart or an instance edit has no earlier
+list to compare with and accepts an empty list at once.
 
 **vSphere Pods are out of scope (build 88).** A VM whose guest id starts
 with `crx` (`crxPod1Guest`, guest "VMware CRX Pod 1 (64-bit)", and any
@@ -439,7 +460,14 @@ visited on its last cycle was fully read. It says nothing about objects
 the cycle did not visit: when a kind's listing failed (that kind is held
 back) or vCenter could not be reached at all, those objects keep the
 flag from their last visit, so they stay off (or on) the list as they
-were. Both cases set `Rollup|incomplete` = 1 on the vCenter, which
+were. The same holds for the kinds a cycle did not finish because it
+ended early on its time budget or timeout breaker (build 96); the next
+cycles carry on from there, so every object is visited again within a
+bounded number of cycles (about the full walk time divided by the
+budget, plus one; a host that stops answering costs one timeout per
+visit, and an object that never fits is marked Not Read on its second
+try, with the reason "cut by cycle budget twice" and no score). If every cycle ends early, lengthen the collection interval. All these
+cases set `Rollup|incomplete` = 1 on the vCenter, which
 raises "Compliance data not collected (vCenter)"; an unreachable vCenter
 also leaves the ComplianceWorld resource in collection status down (no
 connection) or error (login or certificate), and the adapter log names

@@ -1,0 +1,9 @@
+<QueryOptionsResponse xmlns="urn:vim25">
+ <returnval><key>UserVars.ESXiShellTimeOut</key><value xsi:type="xsd:long">900</value></returnval>
+ <returnval><key>Security.AccountLockFailures</key><value xsi:type="xsd:int">5</value></returnval>
+ <returnval><key>Mem.ShareForceSalting</key><value xsi:type="xsd:int">2</value></returnval>
+ <returnval><key>Net.BlockGuestBPDU</key><value xsi:type="xsd:boolean">true</value></returnval>
+ <returnval><key>Config.HostAgent.plugins.solo.enableMob</key><value xsi:type="xsd:boolean">false</value></returnval>
+ <returnval><key>Syslog.global.logHost</key><value xsi:type="xsd:string"></value></returnval>
+ <returnval><key>UserVars.SuppressShellWarning</key></returnval>
+</QueryOptionsResponse>

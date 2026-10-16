@@ -1133,7 +1133,9 @@ public final class OverridesTest {
 		inOrder(clean, "cleanBatch",
 				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
 						+ "bundled, cycleOverrides.skipped);",
-				"ComplianceDecisions.orphanProps(stale, p.profileName, "
+				// Build 96 (issue #42): the retired and the re-pushed keys
+				// go out together.
+				"ComplianceDecisions.orphanProps(ids, p.profileName, "
 						+ "cycleOverrides.skipped, cycle.account.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its
@@ -1177,9 +1179,10 @@ public final class OverridesTest {
 		T.check(!ca.contains("skip.props") && !ca.contains("skip.stats"),
 				"the skip maps are read only inside pushObject");
 		String code = stripComments(ca);
-		T.eq(4, count(code, "stitcher.pushProperties("),
+		// Build 96 (peer review item 2): plus the cut-twice markers push.
+		T.eq(5, count(code, "stitcher.pushProperties("),
 				"direct stitcher.pushProperties calls in ComplianceAdapter");
-		T.eq(5, count(code, "stitcher.pushStats("),
+		T.eq(6, count(code, "stitcher.pushStats("),
 				"direct stitcher.pushStats calls in ComplianceAdapter");
 		// Both branches carry the skip: on the profile-name-only path
 		// (non-vSAN cluster) a dropped skip means no -1 is ever pushed
@@ -1188,20 +1191,20 @@ public final class OverridesTest {
 				"pushOrProfileName",
 				"pushComplianceViaClient(resourceId, cr, profileName, skip);",
 				"pushProfileNamePropertyOnly(resourceId, profileName, skip);");
-		for (String[] site : new String[][] {
-				{"HOST", "pushComplianceViaClient(resourceId, cr, "
-						+ "d.profileName, skip);"},
-				{"VM", "pushComplianceViaClient(resourceId, cr, "
-						+ "d.profileName, skip);"},
-				{"VCENTER", "pushComplianceViaClient(resourceId, cr, "
-						+ "d.profileName, skip);"}}) {
-			inOrder(ca, site[0], "skipInForce(BenchmarkSelector.Kind."
-					+ site[0] + ", d);", site[1], "ComplianceDecisions"
-					+ ".pushedIds(cr), skip);");
+		// Build 96 (issue #42, peer review item 4): the object's push also
+		// carries its retired keys' -1 repeats (withRetiredRepeats); the
+		// cleanup's live set (afterPush) gets the plain skip only.
+		for (String site : new String[] {"HOST", "VM", "VCENTER"}) {
+			inOrder(ca, site, "skipInForce(BenchmarkSelector.Kind."
+					+ site + ", d);",
+					"pushComplianceViaClient(resourceId, cr, d.profileName,",
+					"withRetiredRepeats(skip, BenchmarkSelector.Kind." + site,
+					"ComplianceDecisions.pushedIds(cr), skip);");
 		}
 		inOrder(ca, "dvs/dvpg/cluster",
 				"ComplianceDecisions.SkipPush skip = skipInForce(kind, d);",
-				"pushOrProfileName(resourceId, cr, d.profileName, skip);",
+				"pushOrProfileName(resourceId, cr, d.profileName,",
+				"withRetiredRepeats(skip, kind, moid, d, cr));",
 				"ComplianceDecisions.pushedIds(cr), skip);");
 		inOrder(body(ca, "private BenchmarkSelector buildSelector("),
 				"buildSelector unadjusted",

@@ -99,7 +99,7 @@ public final class ComplianceDecisions {
 		public final BenchmarkProfile profile;     // SCORE only
 		public final String profileName;           // pushed as profile_name
 		public final String bucket;                // rollup benchmark bucket
-		public final boolean reusedPrevious;       // SCORE via last cycle's benchmark
+		public final boolean reusedPrevious;       // SCORE via the last benchmark applied
 
 		Decision(Outcome outcome, BenchmarkProfile profile, String profileName,
 				String bucket, boolean reusedPrevious) {
@@ -384,6 +384,28 @@ public final class ComplianceDecisions {
 	public static final String VERSION_UNREADABLE_CONTROLS =
 			"(not known: the benchmark depends on the version)";
 
+	/**
+	 * Build 96 (issue #16, peer review item 2): an object cut by the cycle
+	 * budget two cycles in a row. Only the markers are pushed:
+	 * has_unreadable = 1 (Not Read) and the reason; no score, no counters,
+	 * no per-control value, so nothing from a partial read is shown (its
+	 * last values stay). The walk then moves past it.
+	 */
+	public static Map<String, Double> cutTwiceStats() {
+		Map<String, Double> stats = new LinkedHashMap<>();
+		stats.put(HAS_UNREADABLE, 1.0);
+		return stats;
+	}
+
+	/** Build 96: the reason text of an object cut twice. */
+	public static final String CUT_TWICE_REASON = "cut by cycle budget twice";
+
+	public static Map<String, String> cutTwiceProps() {
+		return unreadableProps(CUT_TWICE_REASON + " (not read in full on two "
+				+ "cycles in a row; the values shown are from its last full "
+				+ "read)", "(not known: " + CUT_TWICE_REASON + ")");
+	}
+
 	private static Map<String, Double> zeroCounters() {
 		Map<String, Double> stats = new LinkedHashMap<>();
 		stats.put(K + "pass_count", 0.0);
@@ -587,8 +609,47 @@ public final class ComplianceDecisions {
 		return out;
 	}
 
-	/** Build 88 (review W2): what to do after one /api/resources page. */
-	public enum ResourcePage { COMPLETE, NEXT_PAGE, INCOMPLETE }
+	/**
+	 * Build 96 (issue #42, DEF-025): the retired controls to push -1 again
+	 * this cycle on one object: every control of {@code plan} (outside the
+	 * object's benchmark, or in it but not applicable) whose latest value
+	 * in VCF Ops is already -1. {@link #staleControls} sets a lingering 0
+	 * (or 1) to -1 once; the per-control symptom needs its cancel cycles
+	 * of fresh non-triggering samples before an open alert cancels, so a
+	 * single -1 left the alert open (the shape of issue #41). The adapter
+	 * pushes -1 again on later cycles while the control stays retired, up
+	 * to {@link RetiredKeyRepeats#MAX_PUSHES} pushes per key in all
+	 * (review W1; the alert needs 3 fresh samples). A key the object never had is absent from
+	 * {@code latest} and is never created; {@code latest} null (the read
+	 * failed) means nothing this cycle. Never a score change: a -1 key is
+	 * outside every score and count.
+	 */
+	public static Set<String> heldNotEvaluatedControls(CleanupPlan plan,
+			Map<String, Double> latest) {
+		Set<String> out = new TreeSet<>();
+		if (latest == null || plan == null) return out;
+		for (Map.Entry<String, Double> e : latest.entrySet()) {
+			Double v = e.getValue();
+			if (v == null
+					|| v != ComplianceAdapterConstants.COMPLIANT_NOT_EVALUATED) {
+				continue;
+			}
+			String id = e.getKey();
+			if (plan.zeroOrOne.contains(id) || plan.zeroOnly.contains(id)) {
+				out.add(id);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Build 88 (review W2): what to do after one /api/resources page.
+	 * Build 96 (issue #52): {@link #EMPTY_UNCONFIRMED}, a valid but empty
+	 * list for a kind whose last complete list had objects; held back like
+	 * {@link #INCOMPLETE} for one cycle (see {@link #resourcePageOutcome(
+	 * boolean, Long, int, int, int, int, boolean)}).
+	 */
+	public enum ResourcePage { COMPLETE, NEXT_PAGE, INCOMPLETE, EMPTY_UNCONFIRMED }
 
 	/** Build 88 (review W2): page size requested from /api/resources. */
 	public static final int RESOURCE_PAGE_SIZE = 10000;
@@ -624,6 +685,37 @@ public final class ComplianceDecisions {
 			return ResourcePage.INCOMPLETE;   // short, and no way to finish
 		}
 		return ResourcePage.NEXT_PAGE;
+	}
+
+	/**
+	 * Build 96 (issue #52): {@link #resourcePageOutcome(boolean, Long, int,
+	 * int, int)} with the kind's history. A list that reads as complete with
+	 * no rows (a 200 with an empty {@code resourceList} and a total of 0, or
+	 * no list and a total of 0) is not taken as "no objects of this kind"
+	 * when the kind's last complete list had objects: every object would
+	 * then count as unmatched, the kind's numbers would drop to 0, and
+	 * {@code Rollup|incomplete} would stay 0. It is
+	 * {@link ResourcePage#EMPTY_UNCONFIRMED} instead, which the caller holds
+	 * back like {@link ResourcePage#INCOMPLETE} (Rollup|incomplete = 1, the
+	 * kind's keys keep their values). The next cycle's empty list is then
+	 * accepted: a kind empty two cycles in a row is genuinely empty (its
+	 * last objects were removed).
+	 *
+	 * @param previousCount rows in the kind's last complete list (0 when
+	 *                      none was read since the instance was configured)
+	 * @param emptyHeldBack the kind's previous read was an
+	 *                      {@code EMPTY_UNCONFIRMED} empty list
+	 */
+	public static ResourcePage resourcePageOutcome(boolean hasList,
+			Long totalCount, int collected, int rowsThisPage, int pageIndex,
+			int previousCount, boolean emptyHeldBack) {
+		ResourcePage r = resourcePageOutcome(hasList, totalCount, collected,
+				rowsThisPage, pageIndex);
+		if (r == ResourcePage.COMPLETE && collected == 0 && previousCount > 0
+				&& !emptyHeldBack) {
+			return ResourcePage.EMPTY_UNCONFIRMED;
+		}
+		return r;
 	}
 
 	/**
@@ -764,12 +856,23 @@ public final class ComplianceDecisions {
 	 * pathological single key longer than the budget still yields a request.
 	 * Deterministic order.
 	 */
+	/**
+	 * Build 96: samples per key in the stale-key read-back: enough to see
+	 * every -1 the capped repeat pushes (one per cycle at most).
+	 */
+	public static final int LATEST_SAMPLES = RetiredKeyRepeats.MAX_PUSHES + 1;
+
 	public static java.util.List<String> latestCompliantPaths(
 			java.util.List<String> resourceIds, Set<String> controlIds,
 			int urlBudget) {
 		java.util.List<String> paths = new java.util.ArrayList<>();
 		if (resourceIds.isEmpty() || controlIds.isEmpty()) return paths;
-		String base = "/api/resources/stats/latest?";
+		// Build 96 (Codex P2 on PR #57): the last LATEST_SAMPLES samples
+		// (with their timestamps), so the capped -1 repeats can be counted
+		// only once they show as landed. The latest value is taken at the
+		// newest timestamp, whatever order the samples come in.
+		String base = "/api/resources/stats/latest?maxSamples="
+				+ LATEST_SAMPLES + "&";
 		java.util.List<String> keyChunks = new java.util.ArrayList<>();
 		StringBuilder chunk = new StringBuilder();
 		int keyBudget = Math.max(1, urlBudget / 2);
@@ -873,6 +976,12 @@ public final class ComplianceDecisions {
 		public final Set<String> ids;
 		public final Map<String, Double> stats;
 		public final Map<String, String> props;
+		/**
+		 * Build 96 (Codex P2 on PR #57): the timestamp the object's push
+		 * must carry when retired-key repeats ride it (null: the caller's
+		 * own), so the read-back can match the landed samples exactly.
+		 */
+		public final Long pushTimestamp;
 
 		SkipPush(Set<String> ids, String overridesFile) {
 			this.ids = java.util.Collections.unmodifiableSet(ids);
@@ -880,6 +989,37 @@ public final class ComplianceDecisions {
 					orphanStats(ids));
 			this.props = java.util.Collections.unmodifiableMap(
 					orphanProps(ids, null, ids, overridesFile));
+			this.pushTimestamp = null;
+		}
+
+		private SkipPush(Set<String> ids, Map<String, Double> stats,
+				Map<String, String> props, Long pushTimestamp) {
+			this.ids = java.util.Collections.unmodifiableSet(ids);
+			this.stats = java.util.Collections.unmodifiableMap(stats);
+			this.props = java.util.Collections.unmodifiableMap(props);
+			this.pushTimestamp = pushTimestamp;
+		}
+
+		/**
+		 * Build 96 (issue #42, peer review item 4): this Skip payload plus
+		 * -1 and the "(not in applied benchmark: ...)" Actual for the
+		 * retired keys whose repeat rides the object's push this cycle
+		 * ({@code retired}; none of them is live or skipped). {@code skip}
+		 * may be null.
+		 */
+		public static SkipPush withRetired(SkipPush skip, Set<String> retired,
+				String appliedName, long pushTimestamp) {
+			if (retired == null || retired.isEmpty()) return skip;
+			Set<String> ids = new TreeSet<>(retired);
+			Map<String, Double> stats = new LinkedHashMap<>(orphanStats(retired));
+			Map<String, String> props = new LinkedHashMap<>(
+					orphanProps(retired, appliedName));
+			if (skip != null) {
+				ids.addAll(skip.ids);
+				stats.putAll(skip.stats);
+				props.putAll(skip.props);
+			}
+			return new SkipPush(ids, stats, props, pushTimestamp);
 		}
 
 		public boolean isEmpty() {
@@ -939,8 +1079,10 @@ public final class ComplianceDecisions {
 			s = new LinkedHashMap<>(stats);
 			s.putAll(skip.stats);
 		}
-		sink.pushProperties(resourceId, p, timestamp);
-		sink.pushStats(resourceId, s, timestamp);
+		long ts = skip != null && skip.pushTimestamp != null
+				? skip.pushTimestamp : timestamp;
+		sink.pushProperties(resourceId, p, ts);
+		sink.pushStats(resourceId, s, ts);
 	}
 
 	// ----- overrides file status (build 90) --------------------------------

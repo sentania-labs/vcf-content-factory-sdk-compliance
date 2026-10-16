@@ -146,6 +146,45 @@ public final class VSphereClient {
 	private static final int READ_TIMEOUT_MS = 120000;
 
 	/**
+	 * Build 96 (issue #16): the read timeout of the cheap calls, the
+	 * once-per-cycle CurrentTime keepalive and the single scalar or MoRef
+	 * property reads (a name, a connection state, a product version, a
+	 * host's OptionManager or a VM's host). A healthy vCenter answers them
+	 * in milliseconds; a hung one now costs 30 s each, not 120 s. Bulk,
+	 * listing and option-list calls keep {@link #READ_TIMEOUT_MS}.
+	 */
+	static final int SHORT_READ_TIMEOUT_MS = 30000;
+
+	/** Build 96 (issue #16): this cycle's limits; null for none. */
+	private volatile CycleBudget budget;
+
+	/**
+	 * Build 96 (issue #16): the cycle's budget and breaker (null: none).
+	 * While set, every call is counted (a timeout, or an answer), and once
+	 * the limit is reached no new call is made: it throws
+	 * {@link CycleBudget.Exhausted}, so what it was reading is UNREADABLE.
+	 * Passed on to the esxcli client. The Logout of a released client is
+	 * never refused.
+	 */
+	public void setCycleBudget(CycleBudget b) {
+		this.budget = b;
+		EsxcliSoapClient c = esxcli;
+		if (c != null) c.setCycleBudget(b);
+	}
+
+	private volatile int shortReadTimeoutMs = SHORT_READ_TIMEOUT_MS;
+
+	/** Test seam (build 96): a shorter timeout for the cheap calls. */
+	void setShortReadTimeoutMs(int ms) {
+		this.shortReadTimeoutMs = ms;
+	}
+
+	/** The read timeout of a cheap call (never longer than a normal one). */
+	private int shortReadTimeoutMs() {
+		return Math.min(shortReadTimeoutMs, readTimeoutMs);
+	}
+
+	/**
 	 * Build 95 (issue #24): the most bytes of one SOAP response read into
 	 * memory. The largest legitimate responses are bulk pages (50 VMs with
 	 * their extraConfig and device lists, or 10 hosts with their whole
@@ -352,6 +391,7 @@ public final class VSphereClient {
 		EsxcliSoapClient prev = esxcli != null ? esxcli : retiredEsxcli;
 		fresh.carryUnreachableFrom(prev);
 		fresh.setMetrics(metrics);
+		fresh.setCycleBudget(budget);
 		this.esxcli = fresh;
 		this.retiredEsxcli = null;
 
@@ -424,7 +464,40 @@ public final class VSphereClient {
 	 */
 	public void beginCycle() {
 		loginFailure = null;
+		hungHosts.clear();
 		EsxcliSoapClient.beginCycleOn(esxcli);
+	}
+
+	// Build 96 (issue #16, review B1, peer review item 1): hosts whose
+	// host-relayed call (the advanced-settings QueryOptions, or an esxcli
+	// command) timed out this cycle, with the first reason. Their remaining
+	// HOST-RELAYED reads (QueryOptions and esxcli) are skipped (UNREADABLE)
+	// for the rest of the cycle, so a host whose hostd hangs costs one
+	// timeout, not one per read. Property reads vCenter answers from its
+	// own inventory (RetrieveProperties on the HostSystem) go on exactly as
+	// in build 95. Cleared by beginCycle.
+	private final Map<String, String> hungHosts =
+			new java.util.concurrent.ConcurrentHashMap<>();
+
+	private void markHostHung(String hostMoid, String reason) {
+		if (hostMoid == null) return;
+		hungHosts.putIfAbsent(hostMoid, reason);
+		EsxcliSoapClient c = esxcli;
+		if (c != null) c.markUnreachable(hostMoid, reason);
+	}
+
+	/**
+	 * Build 96 (review B1): why this host's reads are skipped for the rest
+	 * of the cycle (a host-relayed call to it timed out), or null.
+	 */
+	String hostHungReason(String hostMoid) {
+		if (hostMoid == null) return null;
+		String r = hungHosts.get(hostMoid);
+		if (r != null) return r;
+		EsxcliSoapClient c = esxcli;
+		String u = c == null ? null : c.unreachableReason(hostMoid);
+		return u != null && u.startsWith("SocketTimeoutException")
+				? "esxcli " + u : null;
 	}
 
 	/**
@@ -462,7 +535,8 @@ public final class VSphereClient {
 					"<CurrentTime xmlns=\"urn:vim25\">"
 					+ "<_this type=\"ServiceInstance\">ServiceInstance</_this>"
 					+ "</CurrentTime>";
-			Document resp = post(body, "urn:vim25/CurrentTime", true);
+			Document resp = post(body, "urn:vim25/CurrentTime", true,
+					shortReadTimeoutMs());
 			if (resp == null
 					|| firstByLocalName(resp.getDocumentElement(),
 							"returnval") == null) {
@@ -685,6 +759,11 @@ public final class VSphereClient {
 	public Map<String, String> getAdvancedSettings(MoRef hostRef)
 			throws Exception {
 		ensureSession();
+		String hung = hostHungReason(hostRef.value);
+		if (hung != null) {
+			throw new VimOptions.ReadFault("host not answering: " + hung
+					+ "; skipped for the rest of this cycle");
+		}
 		MoRef optMgr = getMoRefProperty(hostRef,
 				"configManager.advancedOption");
 		if (optMgr == null) {
@@ -693,7 +772,16 @@ public final class VSphereClient {
 					+ "advanced-settings channel is unreadable (host likely "
 					+ "disconnected / not responding)");
 		}
-		return queryOptions(optMgr);
+		try {
+			return queryOptions(optMgr);
+		} catch (java.net.SocketTimeoutException e) {
+			// Build 96 (issue #16, review B1): QueryOptions is relayed to
+			// the host; a timeout means its hostd is not answering, and
+			// every other read of it would wait out its own timeout.
+			markHostHung(hostRef.value, "QueryOptions timed out ("
+					+ e.getMessage() + ")");
+			throw e;
+		}
 	}
 
 	/**
@@ -1029,6 +1117,15 @@ public final class VSphereClient {
 			} else {
 				value = esxcli.readField(hostMoid, namespaceCommand, fieldSpec);
 			}
+		}
+		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)
+				&& esxcli.refusedByBudget(hostMoid, namespaceCommand)) {
+			// Build 96 (review N2): refused by the cycle budget, not a
+			// host fault.
+			readFailure = "esxcli-budget-reached: " + namespaceCommand
+					+ " (the cycle time budget or timeout breaker was "
+					+ "reached; call not made)";
+			return null;
 		}
 		if (EsxcliSoapClient.COMMAND_FAILED.equals(value)) {
 			// Build 86: a host whose esxcli request (made through vCenter)
@@ -1504,7 +1601,14 @@ public final class VSphereClient {
 	 */
 	private Element getRawPropertyElement(MoRef moRef, String propPath)
 			throws Exception {
-		Document resp = retrieveProperties(moRef.type, moRef.value, propPath);
+		return getRawPropertyElement(moRef, propPath, readTimeoutMs);
+	}
+
+	/** Build 96 (issue #16): with the read timeout of the call. */
+	private Element getRawPropertyElement(MoRef moRef, String propPath,
+			int readMs) throws Exception {
+		Document resp = retrieveProperties(moRef.type, moRef.value, propPath,
+				readMs);
 		if (resp == null) return null;
 		Element returnval = firstByLocalName(resp.getDocumentElement(),
 				"returnval");
@@ -1524,7 +1628,9 @@ public final class VSphereClient {
 	 */
 	private String getStringProperty(MoRef moRef, String propPath)
 			throws Exception {
-		Element val = getRawPropertyElement(moRef, propPath);
+		// Build 96 (issue #16): a scalar read, the short timeout.
+		Element val = getRawPropertyElement(moRef, propPath,
+				shortReadTimeoutMs());
 		if (val == null) return null;
 		String t = elementText(val);
 		return (t == null || t.isEmpty()) ? null : t;
@@ -1538,7 +1644,9 @@ public final class VSphereClient {
 	 */
 	private MoRef getMoRefProperty(MoRef moRef, String propPath)
 			throws Exception {
-		Element val = getRawPropertyElement(moRef, propPath);
+		// Build 96 (issue #16): a MoRef read, the short timeout.
+		Element val = getRawPropertyElement(moRef, propPath,
+				shortReadTimeoutMs());
 		if (val == null) return null;
 		String type = val.getAttribute("type");
 		String value = elementText(val);
@@ -1552,6 +1660,12 @@ public final class VSphereClient {
 	 */
 	private Document retrieveProperties(String type, String value,
 			String propPath) throws Exception {
+		return retrieveProperties(type, value, propPath, readTimeoutMs);
+	}
+
+	/** Build 96 (issue #16): with the read timeout of the call. */
+	private Document retrieveProperties(String type, String value,
+			String propPath, int readMs) throws Exception {
 		String body =
 				"<RetrieveProperties xmlns=\"urn:vim25\">"
 				+ "<_this type=\"PropertyCollector\">"
@@ -1568,7 +1682,7 @@ public final class VSphereClient {
 				+ "</objectSet>"
 				+ "</specSet>"
 				+ "</RetrieveProperties>";
-		return post(body, "urn:vim25/RetrieveProperties", true);
+		return post(body, "urn:vim25/RetrieveProperties", true, readMs);
 	}
 
 	// -----------------------------------------------------------------------
@@ -2168,7 +2282,27 @@ public final class VSphereClient {
 	 */
 	private Document post(String soapBody, String soapAction,
 			boolean authenticated) throws Exception {
-		Document d = postOnce(soapBody, soapAction, authenticated);
+		return post(soapBody, soapAction, authenticated, readTimeoutMs);
+	}
+
+	/**
+	 * Build 96 (issue #16): with the read timeout of the call, and refused
+	 * ({@link CycleBudget.Exhausted}) once the cycle's budget or breaker is
+	 * reached, before any connection is made.
+	 */
+	private Document post(String soapBody, String soapAction,
+			boolean authenticated, int readMs) throws Exception {
+		CycleBudget b = budget;
+		if (b != null) {
+			try {
+				b.check();   // counts the refusal (review N2-r2)
+			} catch (CycleBudget.Exhausted e) {
+				lastFault = e.getMessage();
+				throw e;
+			}
+		}
+		Document d = postOnce(soapBody, soapAction, authenticated,
+				CONNECT_TIMEOUT_MS, readMs);
 		if (d == null && authenticated && lastNotAuthenticated
 				&& !reloggingIn && !"urn:vim25/Logout".equals(soapAction)) {
 			// Build 95 (issue #17): with one keepalive per cycle, a session
@@ -2199,7 +2333,19 @@ public final class VSphereClient {
 			} finally {
 				reloggingIn = false;
 			}
-			d = postOnce(soapBody, soapAction, authenticated);
+			// Build 96 (Codex P2 on PR #57): the re-login may have used up
+			// the budget; the retry is checked like any new call, so it
+			// cannot add a full connect and read timeout past it.
+			if (b != null) {
+				try {
+					b.check();
+				} catch (CycleBudget.Exhausted e) {
+					lastFault = e.getMessage();
+					throw e;
+				}
+			}
+			d = postOnce(soapBody, soapAction, authenticated,
+					CONNECT_TIMEOUT_MS, readMs);
 		}
 		return d;
 	}
@@ -2242,12 +2388,6 @@ public final class VSphereClient {
 	 * reused; the JDK also retries a POST once on a kept-alive connection
 	 * the server has closed.
 	 */
-	private Document postOnce(String soapBody, String soapAction,
-			boolean authenticated) throws Exception {
-		return postOnce(soapBody, soapAction, authenticated,
-				CONNECT_TIMEOUT_MS, readTimeoutMs);
-	}
-
 	private Document postOnce(String soapBody, String soapAction,
 			boolean authenticated, int connectTimeoutMs, int readTimeoutMs)
 			throws Exception {
@@ -2325,8 +2465,18 @@ public final class VSphereClient {
 			if (body != null && body.exceeded()) {
 				return tooLarge(soapAction);
 			}
+			if (e instanceof java.net.SocketTimeoutException) {
+				// Build 96 (issue #16): one more timeout for the breaker.
+				CycleBudget b = budget;
+				if (b != null) b.timedOut();
+			}
 			throw e;
 		}
+		// Build 96 (issue #16): vCenter answered in full (a response, or a
+		// fault body); the breaker's run of timeouts is broken. A response
+		// that stalls mid-body is a timeout, not an answer.
+		CycleBudget answeredTo = budget;
+		if (answeredTo != null) answeredTo.answered();
 		if (body != null && body.exceeded()) {
 			conn.disconnect();   // the rest of the response was not read
 			return tooLarge(soapAction);

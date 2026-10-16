@@ -101,9 +101,19 @@ When you click **Validate Connection**:
    details (issuer, validity, thumbprint against what vCenter shows) and
    accept it. Validation then runs the connection test. The accepted
    certificate is stored on this account and trusted on every collection
-   cycle; nothing is copied to the collector.
+   cycle; nothing is copied to the collector. For a vCenter entered by
+   an IP address the dialog can appear even when the certificate chains
+   to a CA in the trust store (seen on devel, build 93). Accepting it
+   there does not fix the name mismatch: step 3 still fails with the
+   name message.
 3. **The connection test** logs in to the vCenter REST API and checks
-   the chain and the name. A vCenter entered by an IP or a name the
+   the chain and the name. Since build 96 it then logs in over vSphere
+   SOAP (vim25), which is what collection uses, and logs out again; a
+   SOAP login failure fails the test. It also checks whether the local
+   VCF Operations Suite API (which the results are pushed through)
+   answers from where the test ran, and only logs the result: a WARN
+   there does not fail the test, because the test can run on a different
+   node from collection. A vCenter entered by an IP or a name the
    certificate does not list fails here with the name message, even
    after you accept its certificate in step 2: edit the host and
    validate again.
@@ -124,6 +134,40 @@ vCenter only when the host you entered equals that vCenter's address in
 VCF Operations (its VCURL), or when an earlier cycle since the account
 was last edited found it; otherwise the collector log says the marker
 was not pushed. The next completed cycle sets it back to 0.
+
+**When every cycle ends early.** A cycle may take about 95% of the
+account's collection interval and stops after 5 vCenter calls in a row
+time out (build 96). A walk longer than 95% of the interval therefore
+ends early every cycle and keeps "Compliance data not collected
+(vCenter)" raised. A cycle that ends early logs "Cycle ended early"
+and ends its collection-complete line with "ENDED EARLY", raises
+"Compliance data not collected (vCenter)", and the next cycle continues
+from where it stopped, through the remaining object kinds, before
+starting over. Every object is read again within a bounded number of
+cycles (about the time a full walk takes divided by the cycle's budget,
+plus one). A host that stops answering costs one timeout each time it is
+visited, and an object that does not fit in a cycle is marked Not Read
+on its second try (only the marker and the reason "cut by cycle budget
+twice"; its last score stays) and the walk moves past it. If it happens
+every cycle and the vCenter
+answers normally (no timeouts in the log), the walk is longer than the
+interval allows: edit the account and lengthen its collection interval
+(for example to 10 or 15 minutes). A host whose advanced-settings read
+timed out ("host not answering" in its reasons) is a host whose hostd
+stopped answering; fix that host instead.
+
+**A host that does not resolve gives no marker and no alert.** If the
+vCenter host is mistyped (it does not resolve in DNS, or names no
+vCenter), Validate Connection fails with a connection error. An account
+saved that way anyway never reaches vCenter, and since its host is not
+any vCenter's address in VCF Operations, the adapter cannot find the
+vCenter object to mark: nothing is pushed and **Compliance data not
+collected** does not fire. The signs are the Compliance World resource's
+collection status (error: the unresolved name is not a refused
+connection, so it is not shown as down) and the collector log, which
+names the host
+and says the marker was not pushed. Check the host in the account first
+when an account shows no compliance data at all.
 
 > **Upgrade note (build 93):** see the build 93 steps under Upgrading:
 > record the settings before you upgrade, then Validate Connection each

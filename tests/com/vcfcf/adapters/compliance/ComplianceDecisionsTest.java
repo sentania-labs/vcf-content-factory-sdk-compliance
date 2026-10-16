@@ -30,7 +30,7 @@ public final class ComplianceDecisionsTest {
 				"readable unmapped version is no-benchmark even with history");
 		d = ComplianceDecisions.decide(auto, HOST, null, "VMware_SCG_8.0", all);
 		T.eq(ComplianceDecisions.Outcome.SCORE, d.outcome,
-				"unreadable version reuses last cycle's benchmark");
+				"unreadable version reuses the last benchmark applied");
 		T.check(d.reusedPrevious, "flagged as reused");
 		T.eq("VMware_SCG_8.0", d.profileName, "reused profile");
 		T.eq("SCG_8.0", d.bucket, "reused bucket");
@@ -171,7 +171,7 @@ public final class ComplianceDecisionsTest {
 				hostIds, manyKeys, ComplianceDecisions.URL_BUDGET);
 		assertCoverage(hostPaths, hostIds, manyKeys);
 		for (String path : hostPaths) {
-			T.check(path.startsWith("/api/resources/stats/latest?resourceId="),
+			T.check(path.startsWith("/api/resources/stats/latest?maxSamples=5&resourceId="),
 					"endpoint");
 			T.check(path.contains("VCF-CF%20Compliance%7Cesx."), "encoded");
 		}
@@ -447,9 +447,9 @@ public final class ComplianceDecisionsTest {
 				"vsphere.getVCenterAdvancedSettings()",
 				"rollup.recordEvaluated(BenchmarkSelector.Kind.VCENTER");
 
-		String vim = body(ca, "private void collectVimObject(");
+		String vim = body(ca, "private int collectVimObject(");
 		inOrder(vim, "collectVimObject",
-				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return; }",
+				"if (he == null) { rollup.recordUnmatched(kind, name, moid); return KindWalk.CONTINUE; }",
 				"decide(selector, kind, moid",
 				"rollup.recordEvaluated(kind");
 		noReadBefore(vim, "collectVimObject", "rollup.recordUnmatched(kind");
@@ -496,8 +496,14 @@ public final class ComplianceDecisionsTest {
 				"int rows = hasList ? list.size() : 0;",
 				"collected += rows;",
 				"SimpleJson total = parsed.path(\"pageInfo.totalCount\"); Long totalCount = total.isNull() ? null : total.asLong();",
-				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page);",
-				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); return out; }",
+				// Build 96 (issue #52): the kind's history goes in, and an
+				// unconfirmed empty list is held back like INCOMPLETE
+				// (Build96StitcherTest runs the loop itself).
+				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page, previousCount, heldEmpty);",
+				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); lastCompleteCount.put(resourceKind, collected);",
+				"return out; }",
+				"if (next == ComplianceDecisions.ResourcePage .EMPTY_UNCONFIRMED) { emptyHeldBack.add(resourceKind);",
+				"return out; }",
 				"if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {",
 				"return out; }");
 		// The failed mark is cleared in exactly one place: a complete list.

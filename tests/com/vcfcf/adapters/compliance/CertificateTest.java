@@ -281,9 +281,14 @@ public final class CertificateTest {
 		T.eq(0, OverridesTest.count(ca, "sslContextFor()")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor()"),
 				"no context without a host");
-		T.eq(4, OverridesTest.count(ca, "sslContextFor(")
+		// Build 96 (issue #26): Test Connection also logs in over SOAP,
+		// on the same dialled-host factory.
+		OverridesTest.inOrder(ca, "Test Connection SOAP client",
+				"testSoapLogin(new VSphereClient(testCfg.vcenterHost,",
+				"sslSocketFactoryFor(testCfg.vcenterHost),");
+		T.eq(5, OverridesTest.count(ca, "sslContextFor(")
 				+ OverridesTest.count(ca, "sslSocketFactoryFor(") - 2,
-				"call sites: SOAP, Test Connection, VAMI, and the "
+				"call sites: SOAP, Test Connection REST and SOAP, VAMI, and the "
 						+ "factory's own (the two declarations excluded)");
 		String vc = read(
 				"src/com/vcfcf/adapters/compliance/VCenterCertificates.java");

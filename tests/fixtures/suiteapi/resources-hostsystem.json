@@ -1,0 +1,33 @@
+{
+  "pageInfo": {"totalCount": 5, "page": 0, "pageSize": 10000},
+  "resourceList": [
+    {"identifier": "r-esx01",
+     "resourceKey": {"name": "esx01.lab.example", "adapterKindKey": "VMWARE", "resourceKindKey": "HostSystem",
+       "resourceIdentifiers": [
+         {"identifierType": {"name": "VMEntityName"}, "value": "esx01.lab.example"},
+         {"identifierType": {"name": "VMEntityObjectID"}, "value": "host-10"},
+         {"identifierType": {"name": "VMEntityVCID"}, "value": "uuid-1"}]}},
+    {"identifier": "r-esx02",
+     "resourceKey": {"name": "esx02", "adapterKindKey": "VMWARE", "resourceKindKey": "HostSystem",
+       "resourceIdentifiers": [
+         {"identifierType": {"name": "VMEntityName"}, "value": "esx02"},
+         {"identifierType": {"name": "VMEntityObjectID"}, "value": "host-11"},
+         {"identifierType": {"name": "VMEntityVCID"}, "value": "uuid-1"}]}},
+    {"identifier": "r-other-vc",
+     "resourceKey": {"name": "esx09.lab.example", "adapterKindKey": "VMWARE", "resourceKindKey": "HostSystem",
+       "resourceIdentifiers": [
+         {"identifierType": {"name": "VMEntityName"}, "value": "esx09.lab.example"},
+         {"identifierType": {"name": "VMEntityObjectID"}, "value": "host-10"},
+         {"identifierType": {"name": "VMEntityVCID"}, "value": "uuid-2"}]}},
+    {"identifier": "r-novcid",
+     "resourceKey": {"name": "esx05.lab.example", "adapterKindKey": "VMWARE", "resourceKindKey": "HostSystem",
+       "resourceIdentifiers": [
+         {"identifierType": {"name": "VMEntityName"}, "value": "esx05.lab.example"},
+         {"identifierType": {"name": "VMEntityObjectID"}, "value": "host-15"}]}},
+    {"resourceKey": {"name": "no-identifier", "adapterKindKey": "VMWARE", "resourceKindKey": "HostSystem",
+       "resourceIdentifiers": [
+         {"identifierType": {"name": "VMEntityName"}, "value": "esx06.lab.example"},
+         {"identifierType": {"name": "VMEntityObjectID"}, "value": "host-16"},
+         {"identifierType": {"name": "VMEntityVCID"}, "value": "uuid-1"}]}}
+  ]
+}

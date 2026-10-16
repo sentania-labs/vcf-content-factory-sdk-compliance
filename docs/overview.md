@@ -370,7 +370,76 @@ collection continues; compliance is never failed over a stitch error.
   vCenter walk. Nothing more is read or pushed that cycle (values already
   pushed stay), and one WARN says where it stopped ("ComplianceAdapter
   cycle abandoned after ...") followed by the cycle's timing so far.
-  There is no time limit on a cycle yet.
+
+- **A cycle has a time limit and a timeout breaker (build 96, issue
+  #16).** A cycle may take about 95% of the account's collection
+  interval (285 s at the default 5 minutes; the adapter reads the
+  interval from the platform, else the Compliance World resource, else
+  uses 5 minutes, clamps it to 60 s to 24 h, and logs one "Cycle limits:"
+  INFO line saying which). The limit is checked before each call and
+  does not cut a call in flight, so the worst case is the budget plus one
+  call (30 s connect plus 120 s read): 435 s on a 5 minute interval. A
+  walk that took up to 95% of the interval completed in build 95 and
+  still does; a longer one ends early every cycle and keeps the alert
+  raised, and the remedy is a longer collection interval. A
+  cycle also ends after 5 vCenter calls in a row time out with no answer
+  between them (a vCenter that accepts connections but does not answer);
+  the appliance (VAMI) and esxcli calls count too.
+  - **Order.** The kinds run in a fixed round: the vCenter object,
+    distributed switches, portgroups, clusters, hosts, VMs. A cycle that
+    ended early is followed by one that starts in the kind it stopped
+    in, carries on through the kinds after it, and wraps round to the
+    ones before it, so no kind (VMs behind a long host walk, say) waits
+    for good.
+  - **When a limit is reached**, no more vCenter calls are made. The
+    object being read is not pushed at all (no partial score: its last
+    values stay, as for an object not visited), the kind being collected
+    and every kind not yet started are held back (`Rollup|incomplete` =
+    1, which raises "Compliance data not collected (vCenter)"; their
+    Rollup keys keep their values), objects already pushed keep this
+    cycle's values, the rollup is still pushed, and one WARN says where
+    and why ("Cycle ended early ..."); the collection-complete line ends
+    with "ENDED EARLY". The bulk shadow stops. The stale-key cleanup runs
+    per kind, right after that kind's walk; when the budget stops it, the
+    rest is carried: a cycle that resumes the kind runs it first (those
+    objects lie before the resume point and are not visited again), and
+    otherwise it runs after the kind's next walk, except for objects that
+    walk visits again (their fresh entry replaces the carried one, so an
+    old plan never sets -1 on a key that became live). A version read
+    refused by the budget counts as a cut, not as "version unreadable".
+    An object is cut only when a call was refused while it was read; one
+    whose reads all finished before the deadline is pushed in full.
+  - **Resume.** In the kind it stopped in, the next cycle reads only the
+    objects after the last one finished; reaching the end of that kind
+    finishes it for this pass and the walk goes on to the next kind. The
+    kind's rollup is then pushed over every object of the kind (the part
+    read by the earlier cycles of the pass is carried and added), so a
+    cycle that finishes the round clears `Rollup|incomplete`; only a
+    cycle that ends early again keeps the kind held back. Each kind is
+    walked in MOID order. A pass over every object therefore spreads
+    over consecutive cycles, and every object is read again within a
+    bounded number of cycles: about the time a full walk takes divided by
+    the budget, plus one.
+  - **An object that never fits costs at most two cycles.** An object
+    cut by the limit is retried first the next cycle; cut a second time
+    in a row, only its markers are pushed (Not Read = 1 and the reason
+    "cut by cycle budget twice", no score: its last values stay), the
+    kind is held back, and the walk moves past it. The two cuts must be
+    on consecutive cycles.
+  - **A host that stops answering costs one timeout per visit.** When a
+    host's advanced-settings read or an esxcli command (both relayed by
+    vCenter to the host) times out, the rest of that host's host-relayed
+    reads (advanced settings and esxcli) are skipped for the cycle
+    (UNREADABLE, reason "host not answering"). Properties vCenter answers
+    from its own inventory are still read, as in build 95, so the host is
+    scored over what was read and flagged Not Read. The mark lasts one
+    cycle, so the host costs one timeout each time the walk reaches it.
+  - **If every cycle ends early** on a vCenter that answers normally, its
+    walk is longer than the interval allows: lengthen the account's
+    collection interval (docs/installing.md).
+  - The cheap calls (the keepalive and single-value reads such as a
+    name, a connection state or a version) wait 30 s for an answer, not
+    120 s.
 
 - **Bulk read shadow (build 95).** After each kind is scored, the adapter
   also reads that kind's objects in a few paged bulk calls, evaluates the
@@ -402,9 +471,19 @@ collection continues; compliance is never failed over a stitch error.
   (bulk `stats/latest` requests packed up to a URL-length limit: about 41
   requests for 5,000 VMs, 7 for 500 hosts on SCG 9.1), and sets only the ones
   still at 0 to -1 with an explanatory `Actual`, which cancels their
-  alerts. It never creates a key the object did not have and does not
-  touch a key already at -1 or 1, so after the first cleanup there is
-  nothing more to push. Since build 76 the same read-back also covers
+  alerts. It never creates a key the object did not have and leaves a
+  lingering 1 outside the SCG alone. Since build 96 (issue #42) a key it
+  finds already at -1 gets -1 again on later cycles while the control
+  stays out of the object's SCG, up to 4 -1 pushes per key in all: a
+  per-control alert cancels only after three fresh non-failing samples,
+  and one -1 used to leave it open after a guide version change. The
+  repeats ride the object's own per-cycle push, as a Skip does, so they
+  are made whenever the object is visited, even on a cycle whose cleanup
+  is cut; a cleanup cut by the cycle budget is carried to a later cycle
+  (see the cycle limit above). A -1 counts only once the read-back
+  (which asks for each key's last 5 samples) shows it landed, so a push
+  that failed is made again. The count is kept in memory, so after a
+  restart a retired key gets at most 4 more. Since build 76 the same read-back also covers
   controls that ARE in the object's SCG but were not evaluated this cycle
   because they do not apply (for example vSAN controls on a cluster where
   vSAN is not enabled): any 0 or 1 left on them is set to -1, so an old
@@ -412,7 +491,8 @@ collection continues; compliance is never failed over a stitch error.
   applies. If that read fails, the object is skipped for the
   cycle (logged) and retried next cycle. Every cycle the adapter log
   carries one "Stale-control cleanup read" line with the objects queried,
-  requests made, Compliant values returned and zeros cleaned, so a read
+  requests made, Compliant values returned, zeros cleaned and (build 96)
+  retired keys pushed -1 again, so a read
   that silently returns nothing can be told apart from "nothing stale". Objects whose version could not
   be read are not cleaned.
 

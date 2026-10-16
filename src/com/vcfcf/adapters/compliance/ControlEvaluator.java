@@ -78,13 +78,6 @@ public final class ControlEvaluator {
 	 * String, Object)}.
 	 */
 
-	public static ComplianceResult evaluateAdvancedSettings(
-			BenchmarkProfile profile,
-			Map<String, String> advancedSettings, String hostname) {
-		return evaluateControls(profile.hostControls(), advancedSettings,
-				hostname);
-	}
-
 	/**
 	 * Phase 2 entry point — score an arbitrary subset of profile
 	 * controls (typically pre-filtered by {@code resource_kind}) against

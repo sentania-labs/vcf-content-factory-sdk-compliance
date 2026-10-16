@@ -1,0 +1,14 @@
+<ExecuteSoapResponse xmlns="urn:vim25">
+ <returnval>
+  <response>&lt;obj versionId="5.0" xsi:type="ArrayOfDataObject"&gt;
+    &lt;DataObject xsi:type="VimEsxCLIsystemsshserverconfiglistSshServerConfig"&gt;
+      &lt;Key&gt;ciphers&lt;/Key&gt;
+      &lt;Value&gt;aes256-gcm@openssh.com,aes128-gcm@openssh.com&lt;/Value&gt;
+    &lt;/DataObject&gt;
+    &lt;DataObject xsi:type="VimEsxCLIsystemsshserverconfiglistSshServerConfig"&gt;
+      &lt;Key&gt;ignorerhosts&lt;/Key&gt;
+      &lt;Value&gt;yes&lt;/Value&gt;
+    &lt;/DataObject&gt;
+  &lt;/obj&gt;</response>
+ </returnval>
+</ExecuteSoapResponse>

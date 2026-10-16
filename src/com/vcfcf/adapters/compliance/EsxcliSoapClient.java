@@ -176,6 +176,19 @@ final class EsxcliSoapClient {
 		this.metrics = m;
 	}
 
+	// Build 96 (issue #16): this cycle's budget and breaker, null for none.
+	private volatile CycleBudget budget;
+
+	/**
+	 * Build 96 (issue #16): esxcli calls count toward the cycle's breaker
+	 * (a timeout, or an answer), and none is made once the limit is
+	 * reached ({@link CycleBudget.Exhausted}, an I/O failure: the host's
+	 * remaining esxcli controls are UNREADABLE for the cycle).
+	 */
+	void setCycleBudget(CycleBudget b) {
+		this.budget = b;
+	}
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
 		this.sdkUrl = sdkUrl;
@@ -230,6 +243,26 @@ final class EsxcliSoapClient {
 		executerByHost.clear();
 		unreachableHosts.clear();
 		unreachableReported.clear();
+		budgetRefused.clear();
+	}
+
+	// Build 96 (review N2): host|command keys whose call the cycle budget
+	// refused (not a host fault; the host is not marked unreachable).
+	private final Set<String> budgetRefused = new HashSet<>();
+
+	/** Build 96 (review N2): the command's call was refused by the budget. */
+	synchronized boolean refusedByBudget(String hostMoid,
+			String namespaceCommand) {
+		return budgetRefused.contains(hostMoid + "|" + namespaceCommand);
+	}
+
+	/**
+	 * Build 96 (issue #16, review B1): skip this host's esxcli commands for
+	 * the rest of the cycle, because a host-relayed vim25 call to it (its
+	 * advanced settings) timed out. The first reason is kept.
+	 */
+	synchronized void markUnreachable(String hostMoid, String reason) {
+		if (hostMoid != null) unreachableHosts.putIfAbsent(hostMoid, reason);
 	}
 
 	/**
@@ -425,6 +458,12 @@ final class EsxcliSoapClient {
 				} else {
 					result = transport.execute(executer, namespaceCommand);
 				}
+			} catch (CycleBudget.Exhausted e) {
+				// Build 96 (review N2): the cycle's budget or breaker was
+				// reached; no call was made. Not a host fault: the host is
+				// not marked unreachable, and the reason says "budget".
+				budgetRefused.add(cacheKey);
+				result = null;
 			} catch (java.io.IOException e) {
 				// Build 86: timeout / connect / I/O on the request to
 				// vCenter's /sdk for this host (vCenter or the host). The
@@ -646,6 +685,8 @@ final class EsxcliSoapClient {
 				+ "<soapenv:Body>" + soapBody + "</soapenv:Body>"
 				+ "</soapenv:Envelope>";
 
+		CycleBudget b = budget;
+		if (b != null) b.check();   // build 96 (issue #16)
 		CycleMetrics m = metrics;
 		if (m != null) m.soapCall();
 		URL url = new URL(sdkUrl);
@@ -698,8 +739,14 @@ final class EsxcliSoapClient {
 			// call (no disconnect); a failed one is dropped, never reused.
 			conn.disconnect();
 			if (body != null && body.exceeded()) return null;
+			if (b != null && e instanceof java.net.SocketTimeoutException) {
+				b.timedOut();   // build 96 (issue #16)
+			}
 			throw e;
 		}
+		// Build 96 (issue #16): answered in full; the breaker's run of
+		// timeouts is broken.
+		if (b != null) b.answered();
 		if (body != null && body.exceeded()) {
 			// Build 95 (issue #24): over the cap: the call failed (the
 			// command's controls are UNREADABLE), never a partial read.

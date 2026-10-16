@@ -1,0 +1,12 @@
+<RetrievePropertiesResponse xmlns="urn:vim25">
+ <returnval>
+  <obj type="VirtualMachine">vm-42</obj>
+  <missingSet>
+   <path>config.extraConfig</path>
+   <fault>
+    <fault xsi:type="NoPermission"><object type="VirtualMachine">vm-42</object><privilegeId>System.Read</privilegeId></fault>
+    <localizedMessage>Permission to perform this operation was denied.</localizedMessage>
+   </fault>
+  </missingSet>
+ </returnval>
+</RetrievePropertiesResponse>

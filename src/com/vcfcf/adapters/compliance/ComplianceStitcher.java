@@ -1,8 +1,6 @@
 package com.vcfcf.adapters.compliance;
 
-import com.integrien.alive.common.adapter3.Logger;
 import com.vcfcf.adapter.json.SimpleJson;
-import com.vcfcf.adapter.stitch.SuiteApiStitcher;
 
 import java.util.HashMap;
 import java.util.List;
@@ -10,19 +8,25 @@ import java.util.Map;
 
 /**
  * v2 compliance stitcher — resolves foreign VMWARE resource UUIDs via the
- * framework {@link SuiteApiStitcher} facade and pushes per-control / rollup
+ * framework {@code SuiteApiStitcher} facade and pushes per-control / rollup
  * data onto them.
+ *
+ * <p>Build 96 (issue #27): the class carries no SDK or framework type
+ * except {@link SimpleJson}. The Suite API calls go through {@link SuiteApi}
+ * (the adapter adapts its {@code SuiteApiStitcher}) and the logging through
+ * {@link VSphereClient.Log} (the adapter adapts its platform logger), so the
+ * class compiles and runs in ci/run_java_tests.sh against a fake.
  *
  * <p><b>v1 → v2 change.</b> v1 held an aria-ops-core {@code SuiteAPIClient}
  * (injected on {@code UnlicensedAdapter}) and used the
  * {@code com.vmware.ops.api.model.resource.ResourceDto} model + heavy
  * reflection to resolve resources and invoke {@code addProperties}/{@code
  * addStats}. v2 has no aria-ops-core and no {@code com.vmware.ops.*} on the
- * classpath: all transport goes through the ambient {@link SuiteApiStitcher},
+ * classpath: all transport goes through the ambient {@code SuiteApiStitcher},
  * which acquires/releases a Suite API token per call as {@code
  * maintenanceAdmin}. Resource resolution is now a plain authenticated
  * {@code GET /api/resources?...} parsed with {@link SimpleJson}; pushes go
- * through {@link SuiteApiStitcher#pushProperties}/{@link
+ * through {@code SuiteApiStitcher#pushProperties}/{@code
  * SuiteApiStitcher#pushStats}.
  *
  * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
@@ -65,8 +69,32 @@ import java.util.Map;
 public final class ComplianceStitcher
 		implements ComplianceDecisions.PushSink {
 
-	private final SuiteApiStitcher stitcher;
-	private final Logger logger;
+	/**
+	 * Build 96 (issue #27): the three Suite API calls this class makes, so
+	 * it needs no framework type. The adapter passes its
+	 * {@code SuiteApiStitcher}; tests pass a fake. Same contract as the
+	 * framework methods: {@link #get} throws on a failed read, the pushes
+	 * log and swallow their own failures.
+	 */
+	public interface SuiteApi {
+		String get(String path) throws java.io.IOException,
+				InterruptedException;
+		void pushProperties(String resourceId, Map<String, String> properties,
+				long timestamp);
+		void pushStats(String resourceId, Map<String, Double> stats,
+				long timestamp);
+	}
+
+	/** Build 96: a log that drops everything (no platform logger). */
+	private static final VSphereClient.Log NO_LOG = new VSphereClient.Log() {
+		@Override public void info(String m) {}
+		@Override public void debug(String m) {}
+		@Override public void warn(String m) {}
+		@Override public boolean isDebugEnabled() { return false; }
+	};
+
+	private final SuiteApi stitcher;
+	private final VSphereClient.Log logger;
 
 	// Per-VMWARE-resource-kind name/moid lookup tables.
 	private final Map<String, Map<String, HostEntry>> resourcesByName =
@@ -86,11 +114,27 @@ public final class ComplianceStitcher
 	// unscoped matcher — single-vCenter safe).
 	private volatile String owningVcUuid;
 
-	// Build 88: resource kinds whose /api/resources read failed on the last
-	// load (exception or unparseable body). Distinct from "0 results": the
-	// adapter holds that kind's rollup back instead of reporting every
-	// object as unmatched.
+	// Build 88: resource kinds whose /api/resources read did not end in a
+	// complete list on the last load: an exception (HTTP error, timeout,
+	// interrupt), an unparseable body, a page with no resourceList (unless
+	// it reports a total of 0), a list short of its pageInfo.totalCount (an
+	// empty page or the page cap), and since build 96 (issue #52) an empty
+	// list for a kind whose last complete list had objects
+	// (EMPTY_UNCONFIRMED, accepted the next cycle if still empty). Distinct
+	// from "0 results": the adapter holds that kind's rollup back
+	// (Rollup|incomplete = 1) instead of reporting every object as
+	// unmatched.
 	private final java.util.Set<String> failedLoads =
+			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+	// Build 96 (issue #52): rows in each kind's last complete list, and the
+	// kinds whose last read was an empty list held back as unconfirmed. Kept
+	// for the life of this stitcher (one instance configuration); a new
+	// configuration starts with no history, so its first empty list is
+	// accepted.
+	private final Map<String, Integer> lastCompleteCount =
+			java.util.Collections.synchronizedMap(new HashMap<>());
+	private final java.util.Set<String> emptyHeldBack =
 			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
 	// Build 95 (issue #17): this cycle's measurement, null for none. Every
@@ -107,9 +151,9 @@ public final class ComplianceStitcher
 		if (m != null) m.suiteCall();
 	}
 
-	public ComplianceStitcher(SuiteApiStitcher stitcher, Logger logger) {
+	public ComplianceStitcher(SuiteApi stitcher, VSphereClient.Log logger) {
 		this.stitcher = stitcher;
-		this.logger = logger;
+		this.logger = logger != null ? logger : NO_LOG;
 	}
 
 	/**
@@ -287,11 +331,23 @@ public final class ComplianceStitcher
 	 * {@link ComplianceDecisions#MAX_RESOURCE_PAGES} reached). Since build 88
 	 * an object missing from this list leaves the rollup, so a short list
 	 * must hold the kind back rather than pass as complete.
+	 *
+	 * <p>Build 96 (issue #52): an empty but valid list for a kind whose
+	 * last complete list had objects is held back too, once
+	 * ({@link ComplianceDecisions.ResourcePage#EMPTY_UNCONFIRMED}); the
+	 * next cycle's empty list is accepted as genuinely empty. An interrupt
+	 * during the read keeps the thread's interrupt flag, so the adapter's
+	 * stop check ends the cycle.
 	 */
 	private List<SimpleJson> fetchResources(String resourceKind) {
 		java.util.List<SimpleJson> out = new java.util.ArrayList<>();
 		// Build 88: failed until the whole list is read.
 		failedLoads.add(resourceKind);
+		// Build 96 (issue #52): the kind's history; the unconfirmed-empty
+		// mark lasts one read only.
+		Integer prev = lastCompleteCount.get(resourceKind);
+		int previousCount = prev == null ? 0 : prev;
+		boolean heldEmpty = emptyHeldBack.remove(resourceKind);
 		try {
 			String enc = java.net.URLEncoder.encode(resourceKind, "UTF-8");
 			int collected = 0;
@@ -321,9 +377,30 @@ public final class ComplianceStitcher
 				Long totalCount = total.isNull() ? null : total.asLong();
 				ComplianceDecisions.ResourcePage next =
 						ComplianceDecisions.resourcePageOutcome(hasList,
-								totalCount, collected, rows, page);
+								totalCount, collected, rows, page,
+								previousCount, heldEmpty);
 				if (next == ComplianceDecisions.ResourcePage.COMPLETE) {
 					failedLoads.remove(resourceKind);
+					lastCompleteCount.put(resourceKind, collected);
+					if (heldEmpty && collected == 0) {
+						logger.warn("ComplianceStitcher: fetchResources("
+								+ resourceKind + ") empty again (pageInfo."
+								+ "totalCount " + totalCount + "); accepted as "
+								+ "genuinely empty after one held-back cycle "
+								+ "(the last complete list had "
+								+ previousCount + ")");
+					}
+					return out;
+				}
+				if (next == ComplianceDecisions.ResourcePage
+						.EMPTY_UNCONFIRMED) {
+					emptyHeldBack.add(resourceKind);
+					logger.warn("ComplianceStitcher: fetchResources("
+							+ resourceKind + ") returned an empty list "
+							+ "(pageInfo.totalCount " + totalCount + ") but "
+							+ "the last complete list had " + previousCount
+							+ "; this kind is held back this cycle, and an "
+							+ "empty list next cycle is accepted as empty");
 					return out;
 				}
 				if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {
@@ -337,6 +414,10 @@ public final class ComplianceStitcher
 				}
 			}
 		} catch (Exception e) {
+			if (e instanceof InterruptedException) {
+				// Build 96: keep the interrupt for the adapter's stop check.
+				Thread.currentThread().interrupt();
+			}
 			logger.warn("ComplianceStitcher: fetchResources(" + resourceKind
 					+ ") failed: " + e.getClass().getName()
 					+ ": " + e.getMessage());
@@ -450,10 +531,23 @@ public final class ComplianceStitcher
 		public final int valuesReturned;
 		/** Failure reason, null on success. */
 		public final String error;
+		/**
+		 * Build 96 (Codex P2 on PR #57): resourceId -> (control id ->
+		 * the timestamps of the samples returned), so a push can be
+		 * confirmed as landed; null when failed.
+		 */
+		public final Map<String, Map<String, java.util.Set<Long>>> times;
 
 		LatestRead(Map<String, Map<String, Double>> values, int requests,
 				int valuesReturned, String error) {
+			this(values, null, requests, valuesReturned, error);
+		}
+
+		LatestRead(Map<String, Map<String, Double>> values,
+				Map<String, Map<String, java.util.Set<Long>>> times, int requests,
+				int valuesReturned, String error) {
 			this.values = values;
+			this.times = times;
 			this.requests = requests;
 			this.valuesReturned = valuesReturned;
 			this.error = error;
@@ -483,7 +577,11 @@ public final class ComplianceStitcher
 	public LatestRead latestCompliant(List<String> resourceIds,
 			java.util.Set<String> controlIds) {
 		Map<String, Map<String, Double>> out = new HashMap<>();
-		for (String rid : resourceIds) out.put(rid, new HashMap<>());
+		Map<String, Map<String, java.util.Set<Long>>> times = new HashMap<>();
+		for (String rid : resourceIds) {
+			out.put(rid, new HashMap<>());
+			times.put(rid, new HashMap<>());
+		}
 		int requests = 0;
 		int returned = 0;
 		for (String path : ComplianceDecisions.latestCompliantPaths(
@@ -517,21 +615,47 @@ public final class ComplianceStitcher
 									|| data.size() == 0) {
 								continue;
 							}
-							Double d = numeric(data.get(data.size() - 1));
+							// Build 96 (Codex P2 on PR #57): up to
+							// LATEST_SAMPLES samples. The latest value is the
+							// one at the newest timestamp (any order); with
+							// no timestamps, the last one, as before. Every
+							// sample time is kept, to confirm pushes landed.
+							int at = data.size() - 1;
+							SimpleJson tss = st.get("timestamps");
+							java.util.Set<Long> seenTs = new java.util.HashSet<>();
+							if (tss != null && tss.isList()
+									&& tss.size() == data.size()) {
+								long newest = Long.MIN_VALUE;
+								for (int x = 0; x < tss.size(); x++) {
+									Double t = numeric(tss.get(x));
+									if (t == null) continue;
+									seenTs.add(t.longValue());
+									if (t.longValue() >= newest) {
+										newest = t.longValue();
+										at = x;
+									}
+								}
+							}
+							Double d = numeric(data.get(at));
 							if (d != null) {
 								into.put(cid, d);
 								returned++;
+								times.get(rid).put(cid, seenTs);
 							}
 						}
 					}
 				}
 				requests++;
 			} catch (Exception e) {
+				if (e instanceof InterruptedException) {
+					// Build 96: keep the interrupt for the stop check.
+					Thread.currentThread().interrupt();
+				}
 				return new LatestRead(null, requests, returned,
 						e.getClass().getSimpleName() + ": " + e.getMessage());
 			}
 		}
-		return new LatestRead(out, requests, returned, null);
+		return new LatestRead(out, times, requests, returned, null);
 	}
 
 	private static Double numeric(SimpleJson node) {

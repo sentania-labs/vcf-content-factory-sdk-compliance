@@ -32,6 +32,16 @@ final class Configured<S, T> {
 	final T stitcher;
 	/** Benchmark applied to each object by this configuration's cycles. */
 	final LastBenchmarkMemory memory = new LastBenchmarkMemory();
+	// Build 96 (issue #16, review B1): where an early-ended cycle stopped,
+	// per kind, so the next one resumes after it.
+	final ResumeCursor resume = new ResumeCursor();
+	// Build 96 (issue #42, review W1): the capped -1 repeats per retired key.
+	final RetiredKeyRepeats retiredRepeats = new RetiredKeyRepeats();
+	// Build 96 (peer review item 4): stale-key cleanup entries a cycle that
+	// ended early could not run, for the start of the next cycle (the
+	// adapter's own PendingCleanup type, held as Object here).
+	final java.util.List<Object> deferredCleanup =
+			java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 	private final AtomicReference<String> vcResourceId =
 			new AtomicReference<>();
 	private final AtomicBoolean zeroCustomBucket;
