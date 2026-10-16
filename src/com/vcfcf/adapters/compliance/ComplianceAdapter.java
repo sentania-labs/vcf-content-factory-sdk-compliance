@@ -356,18 +356,93 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						vcenterHost) + " (" + e.getClass().getSimpleName()
 						+ ")");
 			}
+			int count = 0;
 			try {
 				SimpleJson hosts = testApi.listHosts();
-				int count = 0;
 				if (!hosts.isNull() && hosts.isList()) {
 					count = hosts.asList().size();
 				}
-				logInfo("Test OK: connected to " + testCfg.vcenterHost
-						+ ", " + count + " host(s) visible");
 			} finally {
 				testApi.logout();
 			}
+			// Build 96 (issue #26): collection reads vCenter over vSphere
+			// SOAP (vim25), not REST, so a REST login alone could pass the
+			// test before a cycle that reads nothing. RetrieveServiceContent
+			// and Login, then Logout.
+			testSoapLogin(new VSphereClient(testCfg.vcenterHost,
+					testCfg.username, testCfg.password,
+					sslSocketFactoryFor(testCfg.vcenterHost),
+					clientLog(componentLogger(VSphereClient.class))),
+					testCfg.vcenterHost);
+			// Build 96 (issue #26): the local Suite API the results are
+			// pushed through. Reported, never failing the test: Test
+			// Connection may run on a different node from collection.
+			testSuiteApi();
+			logInfo("Test OK: connected to " + testCfg.vcenterHost
+					+ " (REST and vSphere SOAP), " + count
+					+ " host(s) visible");
 		};
+	}
+
+	/**
+	 * Build 96 (issue #26): the vSphere SOAP login collection uses
+	 * (RetrieveServiceContent, then Login), then Logout. A failure fails
+	 * Test Connection with the certificate guidance when it is a
+	 * certificate problem, else with the SOAP error.
+	 */
+	private void testSoapLogin(VSphereClient soap, String vcenterHost)
+			throws Exception {
+		try {
+			soap.connect();
+		} catch (Exception e) {
+			VCenterCertificates.Failure f = VCenterCertificates.classify(e);
+			if (f != null) {
+				logWarn("Test Connection: vCenter certificate problem on the "
+						+ "vSphere SOAP connection (" + f + "): " + e, e);
+				throw new Exception(VCenterCertificates.message(f,
+						vcenterHost) + " ("
+						+ e.getClass().getSimpleName() + ")");
+			}
+			throw new Exception("The vCenter REST login worked, but the "
+					+ "vSphere SOAP (vim25) login that collection uses failed: "
+					+ e.getMessage());
+		} finally {
+			soap.disconnect();
+		}
+	}
+
+	/**
+	 * Build 96 (issue #26): whether the local VCF Operations Suite API (the
+	 * ambient maintenance credential) answers from where Test Connection
+	 * runs. Logged only: INFO when it answers, WARN when not.
+	 */
+	private void testSuiteApi() {
+		SuiteApiStitcher sas = null;
+		try {
+			sas = SuiteApiStitcher.create(this,
+					componentLogger(SuiteApiStitcher.class));
+			sas.get("/api/versions/current");
+			logInfo("Test Connection: the local VCF Operations Suite API "
+					+ "answered (compliance values can be pushed from here)");
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		} catch (Exception e) {
+			logWarn("Test Connection: the local VCF Operations Suite API did "
+					+ "not answer from where this test ran ("
+					+ e.getClass().getSimpleName() + ": " + e.getMessage()
+					+ "). Compliance values are pushed through it; if "
+					+ "collection logs the same, nothing will be pushed. The "
+					+ "test still passes, because it can run on a different "
+					+ "node from collection.");
+		} finally {
+			if (sas != null) {
+				try {
+					sas.discard();
+				} catch (RuntimeException ignored) {
+					// releasing the token is best effort
+				}
+			}
+		}
 	}
 
 	/**

@@ -103,7 +103,13 @@ When you click **Validate Connection**:
    certificate is stored on this account and trusted on every collection
    cycle; nothing is copied to the collector.
 3. **The connection test** logs in to the vCenter REST API and checks
-   the chain and the name. A vCenter entered by an IP or a name the
+   the chain and the name. Since build 96 it then logs in over vSphere
+   SOAP (vim25), which is what collection uses, and logs out again; a
+   SOAP login failure fails the test. It also checks whether the local
+   VCF Operations Suite API (which the results are pushed through)
+   answers from where the test ran, and only logs the result: a WARN
+   there does not fail the test, because the test can run on a different
+   node from collection. A vCenter entered by an IP or a name the
    certificate does not list fails here with the name message, even
    after you accept its certificate in step 2: edit the host and
    validate again.
