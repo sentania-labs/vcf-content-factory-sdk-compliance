@@ -1076,8 +1076,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// (it resolves the vCenter object the rollup goes to, with no
 		// vCenter call once the limit is reached).
 		cycle.retiredRepeats.beginCycle();
-		// Peer review item 4: last cycle's unfinished cleanup first.
-		runDeferredCleanup(cs);
+		// Peer review item 4, round 4 nit 2: the carried cleanup of the kind
+		// this cycle resumes, first.
+		runCarriedForStartKind(cs);
 		ComplianceStitcher.HostEntry vcEntry = null;
 		java.util.Map<String, String> hostVersions =
 				new java.util.HashMap<>();
@@ -1121,6 +1122,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					}
 					break;
 			}
+			// Build 96 (round 4 nit 2): the kind's cleanup right after its
+			// walk, inside the budget.
+			cleanKind(k, cs);
 		}
 		cycle.resume.startAt(cycleEndedIn);
 		if (!cycleDropped) cycle.resume.clearDropped();
@@ -1140,7 +1144,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ "(not evaluated) on " + cs.skipPushedObjects
 					+ " object(s) this cycle");
 		}
-		cleanStaleControls(cs);
+		logCleanupSummary(cs);
 		if (cycleReasons.total() > 0) {
 			// Build 74: why controls were unreadable, once per cycle (the
 			// per-control detail is at DEBUG).
@@ -1778,22 +1782,21 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * alert open on it sees its 3 cancel cycles (before, it got one -1 and
 	 * stayed open). The budget is checked before every batch.
 	 */
-	private void cleanStaleControls(CycleStats cs) throws InterruptedException {
-		if (cycle.stitcher == null || pendingCleanup.isEmpty()) return;
+	private void cleanStaleControls(java.util.List<PendingCleanup> entries,
+			CycleStats cs) throws InterruptedException {
+		if (cycle.stitcher == null || entries.isEmpty()) return;
+		cs.cleanupRan = true;
 		if (budgetExhausted()) {
 			// Build 96 (issue #16, peer review item 4): over budget; the
-			// cleanup (VCF Ops reads and pushes only) is carried to the
-			// start of the next cycle, before its walk.
-			deferCleanup(pendingCleanup, 0);
-			logInfo("Stale-control cleanup skipped this cycle: the cycle "
-					+ "ended early; carried to the start of the next cycle");
+			// cleanup (VCF Ops reads and pushes only) is carried over.
+			carryCleanup(entries, 0, cs);
 			return;
 		}
 		java.util.Map<String, BenchmarkProfile> bundled = bundledForCleanup();
 		if (bundled == null) return;
 		java.util.Map<BenchmarkSelector.Kind, java.util.List<PendingCleanup>>
 				byKind = new java.util.EnumMap<>(BenchmarkSelector.Kind.class);
-		for (PendingCleanup p : pendingCleanup) {
+		for (PendingCleanup p : entries) {
 			byKind.computeIfAbsent(p.kind, k -> new java.util.ArrayList<>())
 					.add(p);
 		}
@@ -1811,12 +1814,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				if (budgetExhausted()) {
 					// Build 96 (review W1, peer review item 4): the
 					// cleanup's reads and pushes count against the budget;
-					// the rest is carried to the start of the next cycle.
-					deferCleanup(ordered, done);
-					logInfo("Stale-control cleanup stopped at "
-							+ e.getKey().rollupName + " object " + i + ": the "
-							+ "cycle time budget was reached; the rest is "
-							+ "carried to the start of the next cycle");
+					// the rest is carried over.
+					carryCleanup(ordered, done, cs);
 					return;
 				}
 				done += Math.min(CLEANUP_BATCH, objs.size() - i);
@@ -1825,10 +1824,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						bundled.values(), cs);
 			}
 		}
-		pendingCleanup.clear();
-		// Build 60 (review W1): one line per cycle with what the read
-		// returned, so a read that silently returns nothing is visible and
-		// not mistaken for "nothing stale".
+	}
+
+	/**
+	 * Build 60 (review W1): one line per cycle with what the cleanup read
+	 * returned, so a read that silently returns nothing is visible and not
+	 * mistaken for "nothing stale". Build 96: the cleanup now runs per kind
+	 * (after each kind's walk) and for carried entries, so the line sums
+	 * them all.
+	 */
+	private void logCleanupSummary(CycleStats cs) {
+		if (!cs.cleanupRan) return;
 		logInfo("Stale-control cleanup read: " + cs.cleanupQueried
 				+ " object(s) with candidate controls queried in "
 				+ cs.cleanupRequests + " request(s); " + cs.cleanupValues
@@ -1836,7 +1842,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " stale 0(s) set to -1 on " + cs.cleanedObjects
 				+ " object(s); " + cs.heldKeys + " retired key(s) already at "
 				+ "-1 pushed -1 again on " + cs.heldObjects + " object(s); "
-				+ cs.cleanupSkipped + " object(s) skipped (read failed)");
+				+ cs.cleanupSkipped + " object(s) skipped (read failed); "
+				+ cs.cleanupCarried + " object(s) carried to the next cycle "
+				+ "(budget); " + cs.carriedSuperseded + " carried object(s) "
+				+ "superseded by this cycle's visit");
 		if (cs.cleanupSkipped > 0) {
 			logWarn("Stale-control cleanup skipped for " + cs.cleanupSkipped
 					+ " object(s) this cycle (latest-value read failed); "
@@ -1850,32 +1859,89 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * Build 96 (peer review item 4): keep the cleanup entries from
-	 * {@code from} on for the start of the next cycle (in the configured
-	 * holder), and clear this cycle's list. The retirements they find (a
-	 * lingering 0 or 1 set to -1) then happen within one cycle of the
-	 * object's visit even when every cycle ends early; the repeats ride
-	 * the objects' own pushes.
+	 * {@code from} on for a later cycle (in the configured holder). The
+	 * retirements they find (a lingering 0 or 1 set to -1) still happen
+	 * when every cycle ends early; the repeats ride the objects' own
+	 * pushes.
 	 */
-	private void deferCleanup(java.util.List<PendingCleanup> all, int from) {
-		cycle.deferredCleanup.clear();
-		cycle.deferredCleanup.addAll(all.subList(from, all.size()));
-		pendingCleanup.clear();
+	private void carryCleanup(java.util.List<PendingCleanup> all, int from,
+			CycleStats cs) {
+		java.util.List<PendingCleanup> rest = all.subList(from, all.size());
+		cycle.deferredCleanup.addAll(rest);
+		cs.cleanupCarried += rest.size();
+		if (!cs.cleanupSkipLogged) {
+			cs.cleanupSkipLogged = true;
+			logInfo("Stale-control cleanup skipped this cycle for the rest: "
+					+ "the cycle time budget was reached; carried to the "
+					+ "next cycle");
+		}
+	}
+
+	/** Build 96: take the carried entries of {@code kind} (null: none). */
+	private java.util.List<PendingCleanup> takeCarried(
+			BenchmarkSelector.Kind kind) {
+		java.util.List<PendingCleanup> out = new java.util.ArrayList<>();
+		synchronized (cycle.deferredCleanup) {
+			java.util.Iterator<Object> it = cycle.deferredCleanup.iterator();
+			while (it.hasNext()) {
+				PendingCleanup p = (PendingCleanup) it.next();
+				if (p.kind == kind) {
+					out.add(p);
+					it.remove();
+				}
+			}
+		}
+		return out;
 	}
 
 	/**
-	 * Build 96 (peer review item 4): the cleanup a cycle that ended early
-	 * carried over, run at the start of this cycle, before the walk (the
-	 * budget is checked before every batch, as at the end).
+	 * Build 96 (peer review item 4, round 4 nit 2): at the start of a cycle
+	 * that resumes a kind, the carried cleanup of that kind runs before the
+	 * walk. Those objects lie before the resume point, so this cycle does
+	 * not visit them again and their plan (last cycle's benchmark) still
+	 * holds. Carried entries of the other kinds wait for their kind's walk
+	 * ({@link #cleanKind}).
 	 */
-	private void runDeferredCleanup(CycleStats cs) throws InterruptedException {
-		if (cycle.deferredCleanup.isEmpty()) return;
-		java.util.List<PendingCleanup> carried = new java.util.ArrayList<>();
-		for (Object o : cycle.deferredCleanup) carried.add((PendingCleanup) o);
-		cycle.deferredCleanup.clear();
+	private void runCarriedForStartKind(CycleStats cs)
+			throws InterruptedException {
+		BenchmarkSelector.Kind k = cycle.resume.startKind();
+		if (k == null) return;
+		java.util.List<PendingCleanup> carried = takeCarried(k);
+		if (carried.isEmpty()) return;
 		logInfo("Stale-control cleanup carried from the last cycle: "
-				+ carried.size() + " object(s)");
-		pendingCleanup.addAll(carried);
-		cleanStaleControls(cs);
+				+ carried.size() + " " + k.rollupName + " object(s)");
+		cleanStaleControls(carried, cs);
+	}
+
+	/**
+	 * Build 96 (round 4 nit 2): after a kind's walk, its cleanup: this
+	 * cycle's entries of the kind, plus the entries carried from an earlier
+	 * cycle for objects this cycle did NOT visit. A carried entry whose
+	 * object was queued again this cycle is dropped: the fresh entry (with
+	 * this cycle's benchmark) replaces it, so a key that became live under
+	 * a new benchmark never gets a -1 from the old plan.
+	 */
+	private void cleanKind(BenchmarkSelector.Kind kind, CycleStats cs)
+			throws InterruptedException {
+		java.util.List<PendingCleanup> mine = new java.util.ArrayList<>();
+		java.util.Set<String> queued = new java.util.HashSet<>();
+		java.util.Iterator<PendingCleanup> it = pendingCleanup.iterator();
+		while (it.hasNext()) {
+			PendingCleanup p = it.next();
+			if (p.kind == kind) {
+				mine.add(p);
+				queued.add(p.resourceId);
+				it.remove();
+			}
+		}
+		for (PendingCleanup c : takeCarried(kind)) {
+			if (queued.contains(c.resourceId)) {
+				cs.carriedSuperseded++;
+			} else {
+				mine.add(c);
+			}
+		}
+		cleanStaleControls(mine, cs);
 	}
 
 	private void cleanBatch(BenchmarkSelector.Kind kind,
@@ -2093,6 +2159,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					BenchmarkSelector.governingVersion(
 							BenchmarkSelector.Kind.HOST, null, version));
 			if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+				// Round 4 nit 3: a version read refused by the budget is a
+				// cut, not "version unreadable".
+				int cut = walk.afterRead("host " + hostName);
+				if (cut == KindWalk.DROP) break;
+				if (cut == KindWalk.PUSH_THEN_STOP) {
+					pushCutTwice(BenchmarkSelector.Kind.HOST, d, resourceId,
+							rollup);
+					break;
+				}
 				recordVersionUnreadable(BenchmarkSelector.Kind.HOST, hostName,
 						d, resourceId, rollup, cs);
 				continue;
@@ -2430,6 +2505,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					BenchmarkSelector.governingVersion(
 							BenchmarkSelector.Kind.VM, null, hostVersion));
 			if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+				// Round 4 nit 3: a version read refused by the budget is a
+				// cut, not "version unreadable".
+				int cut = walk.afterRead("VM " + vm.name);
+				if (cut == KindWalk.DROP) break;
+				if (cut == KindWalk.PUSH_THEN_STOP) {
+					pushCutTwice(BenchmarkSelector.Kind.VM, d, resourceId,
+							rollup);
+					break;
+				}
 				recordVersionUnreadable(BenchmarkSelector.Kind.VM, vm.name, d,
 						resourceId, rollup, cs);
 				continue;
@@ -2570,6 +2654,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				BenchmarkSelector.governingVersion(
 						BenchmarkSelector.Kind.VCENTER, vcVersion, null));
 		if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+			// Round 4 nit 3: a version read refused by the budget is a cut.
+			int cut = walk.afterRead("the vCenter object");
+			if (cut == KindWalk.PUSH_THEN_STOP) {
+				pushCutTwice(BenchmarkSelector.Kind.VCENTER, d, resourceId,
+						rollup);
+			}
+			if (cut != KindWalk.CONTINUE) return he;
 			recordVersionUnreadable(BenchmarkSelector.Kind.VCENTER,
 					resourceName, d, resourceId, rollup, cs);
 			return he;
@@ -2814,6 +2905,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		ComplianceDecisions.Decision d = decide(selector, kind, moid,
 				BenchmarkSelector.governingVersion(kind, vcVersion, null));
 		if (d.outcome == ComplianceDecisions.Outcome.VERSION_UNREADABLE) {
+			// Round 4 nit 3: a version read refused by the budget is a cut.
+			int cut = walk.afterRead(kind.rollupName + " " + name);
+			if (cut == KindWalk.PUSH_THEN_STOP) {
+				pushCutTwice(kind, d, resourceId, rollup);
+			}
+			if (cut != KindWalk.CONTINUE) return cut;
 			recordVersionUnreadable(kind, name, d, resourceId, rollup, cs);
 			return KindWalk.CONTINUE;
 		}
@@ -3211,6 +3308,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
 		int heldObjects; int heldKeys;
+		int cleanupCarried; int carriedSuperseded;
+		boolean cleanupRan; boolean cleanupSkipLogged;
 		int cleanupQueried; int cleanupRequests; int cleanupValues;
 		int skipPushedObjects; int skipPushedKeys;
 	}

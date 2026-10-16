@@ -44,6 +44,8 @@ public final class Build96BudgetTest {
 		vmsNotStarved();
 		objectLongerThanBudget();
 		dropsMustBeConsecutive();
+		versionReadCutIsACut();
+		carriedEntrySupersededByVisit();
 		deadlineAfterReadsDoesNotDrop();
 		hungHostCostsOneTimeout();
 		noPartialScore();
@@ -540,6 +542,102 @@ public final class Build96BudgetTest {
 			h.cycle();   // cycle N+5: a first drop again
 			T.check(!pushedTo(h, b, "r-host-10"),
 					"cycle N+5: dropped (a first drop), not pushed as a second");
+		}
+	}
+
+	/**
+	 * Round 4 nit 3: a host whose version read is refused by the budget
+	 * (the fallback read after an empty first one) is a cut, not "version
+	 * unreadable": dropped the first time (nothing pushed), then the
+	 * cut-twice markers; never the version-unreadable reason.
+	 */
+	static void versionReadCutIsACut() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			h.override = r -> {
+				if (r.body.contains(">host-10<") && r.body.contains(
+						"<pathSet>summary.config.product.version</pathSet>")) {
+					now.addAndGet(400L * 1_000_000_000L);
+					String[] o = FakeVCenter.obj(r.body);
+					return FakeVCenter.ok("RetrieveProperties",
+							FakeVCenter.objectContent("returnval", o[0], o[1],
+									FakeVCenter.vals()));
+				}
+				return null;
+			};
+			for (int cycle = 1; cycle <= 2; cycle++) {
+				int before = h.suite.pushes.size();
+				h.cycle();
+				String reason = null;
+				synchronized (h.suite.pushes) {
+					for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
+							h.suite.pushes.size())) {
+						if (p.props != null && p.resourceId.equals("r-host-10")
+								&& p.props.containsKey(
+										ComplianceDecisions.UNREADABLE_REASON)) {
+							reason = p.props.get(
+									ComplianceDecisions.UNREADABLE_REASON);
+						}
+					}
+				}
+				if (cycle == 1) {
+					T.eq(null, reason, "cycle 1: dropped, nothing pushed");
+				} else {
+					T.check(reason != null && reason.startsWith(
+							ComplianceDecisions.CUT_TWICE_REASON),
+							"cycle 2: the cut reason, not version unreadable: "
+							+ reason);
+				}
+			}
+			T.check(!h.logged("nothing collected: only has_unreadable=1"),
+					"never reported version unreadable");
+		}
+	}
+
+	/**
+	 * Round 4 nit 2: the VM walk finishes just as the budget runs out, so
+	 * the VM cleanup is carried; the next cycle (a full pass) visits the VM
+	 * again, so the carried entry is dropped (superseded by the fresh one)
+	 * and never runs with the old plan.
+	 */
+	static void carriedEntrySupersededByVisit() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
+			h.vm("vm-1", "app01", "host-10");
+			AtomicLong now = new AtomicLong(0);
+			h.adapter.budgetClock = now::get;
+			int r0 = h.vc.requests.size();
+			h.cycle();
+			int n = 0;
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req q : h.vc.requests.subList(r0,
+						h.vc.requests.size())) {
+					if (q.body.contains(">vm-1<")) n++;
+				}
+			}
+			final int last = n;
+			final int[] calls = {0};
+			final boolean[] armed = {true};
+			h.override = r -> {
+				if (armed[0] && r.body.contains(">vm-1<")
+						&& ++calls[0] == last) {
+					now.addAndGet(400L * 1_000_000_000L);
+				}
+				return null;
+			};
+			h.cycle();   // the VM walk finishes, its cleanup is carried
+			T.check(h.logged("0 carried object(s) superseded")
+					&& h.logged("1 object(s) carried to the next cycle"),
+					"VM cleanup carried");
+			T.eq(null, h.holder.resume.startKind(),
+					"the round completed: the next cycle is a full pass");
+			armed[0] = false;
+			h.adapter.testLog.clear();
+			h.cycle();   // the VM is visited again: carried entry dropped
+			T.check(h.logged("1 carried object(s) superseded by this cycle's "
+					+ "visit"), "the carried entry is superseded");
+			T.check(!h.logged("Stale-control cleanup carried from the last "
+					+ "cycle"), "not run at the start of the cycle");
 		}
 	}
 

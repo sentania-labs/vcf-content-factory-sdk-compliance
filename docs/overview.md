@@ -399,9 +399,14 @@ collection continues; compliance is never failed over a stitch error.
     Rollup keys keep their values), objects already pushed keep this
     cycle's values, the rollup is still pushed, and one WARN says where
     and why ("Cycle ended early ..."); the collection-complete line ends
-    with "ENDED EARLY". The bulk shadow stops; the stale-key cleanup
-    stops and its remaining objects are carried to the start of the next
-    cycle.
+    with "ENDED EARLY". The bulk shadow stops. The stale-key cleanup runs
+    per kind, right after that kind's walk; when the budget stops it, the
+    rest is carried: a cycle that resumes the kind runs it first (those
+    objects lie before the resume point and are not visited again), and
+    otherwise it runs after the kind's next walk, except for objects that
+    walk visits again (their fresh entry replaces the carried one, so an
+    old plan never sets -1 on a key that became live). A version read
+    refused by the budget counts as a cut, not as "version unreadable".
     An object is cut only when a call was refused while it was read; one
     whose reads all finished before the deadline is pushed in full.
   - **Resume.** In the kind it stopped in, the next cycle reads only the
@@ -474,8 +479,8 @@ collection continues; compliance is never failed over a stitch error.
   and one -1 used to leave it open after a guide version change. The
   repeats ride the object's own per-cycle push, as a Skip does, so they
   are made whenever the object is visited, even on a cycle whose cleanup
-  is cut; a cleanup cut by the cycle budget is carried to the start of
-  the next cycle. The count is kept in memory, so after a restart a
+  is cut; a cleanup cut by the cycle budget is carried to a later cycle
+  (see the cycle limit above). The count is kept in memory, so after a restart a
   retired key gets at most 4 more. Since build 76 the same read-back also covers
   controls that ARE in the object's SCG but were not evaluated this cycle
   because they do not apply (for example vSAN controls on a cluster where
