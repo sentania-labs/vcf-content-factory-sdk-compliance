@@ -101,7 +101,11 @@ When you click **Validate Connection**:
    details (issuer, validity, thumbprint against what vCenter shows) and
    accept it. Validation then runs the connection test. The accepted
    certificate is stored on this account and trusted on every collection
-   cycle; nothing is copied to the collector.
+   cycle; nothing is copied to the collector. For a vCenter entered by
+   an IP address the dialog can appear even when the certificate chains
+   to a CA in the trust store (seen on devel, build 93). Accepting it
+   there does not fix the name mismatch: step 3 still fails with the
+   name message.
 3. **The connection test** logs in to the vCenter REST API and checks
    the chain and the name. Since build 96 it then logs in over vSphere
    SOAP (vim25), which is what collection uses, and logs out again; a
@@ -130,6 +134,19 @@ vCenter only when the host you entered equals that vCenter's address in
 VCF Operations (its VCURL), or when an earlier cycle since the account
 was last edited found it; otherwise the collector log says the marker
 was not pushed. The next completed cycle sets it back to 0.
+
+**A host that does not resolve gives no marker and no alert.** If the
+vCenter host is mistyped (it does not resolve in DNS, or names no
+vCenter), Validate Connection fails with a connection error. An account
+saved that way anyway never reaches vCenter, and since its host is not
+any vCenter's address in VCF Operations, the adapter cannot find the
+vCenter object to mark: nothing is pushed and **Compliance data not
+collected** does not fire. The signs are the Compliance World resource's
+collection status (error: the unresolved name is not a refused
+connection, so it is not shown as down) and the collector log, which
+names the host
+and says the marker was not pushed. Check the host in the account first
+when an account shows no compliance data at all.
 
 > **Upgrade note (build 93):** see the build 93 steps under Upgrading:
 > record the settings before you upgrade, then Validate Connection each
