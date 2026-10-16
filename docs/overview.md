@@ -402,9 +402,12 @@ collection continues; compliance is never failed over a stitch error.
   (bulk `stats/latest` requests packed up to a URL-length limit: about 41
   requests for 5,000 VMs, 7 for 500 hosts on SCG 9.1), and sets only the ones
   still at 0 to -1 with an explanatory `Actual`, which cancels their
-  alerts. It never creates a key the object did not have and does not
-  touch a key already at -1 or 1, so after the first cleanup there is
-  nothing more to push. Since build 76 the same read-back also covers
+  alerts. It never creates a key the object did not have and leaves a
+  lingering 1 outside the SCG alone. Since build 96 (issue #42) a key it
+  finds already at -1 gets -1 again every cycle while the control stays
+  out of the object's SCG: a per-control alert cancels only after three
+  fresh non-failing samples, and one -1 used to leave it open after a
+  guide version change. Since build 76 the same read-back also covers
   controls that ARE in the object's SCG but were not evaluated this cycle
   because they do not apply (for example vSAN controls on a cluster where
   vSAN is not enabled): any 0 or 1 left on them is set to -1, so an old
@@ -412,7 +415,8 @@ collection continues; compliance is never failed over a stitch error.
   applies. If that read fails, the object is skipped for the
   cycle (logged) and retried next cycle. Every cycle the adapter log
   carries one "Stale-control cleanup read" line with the objects queried,
-  requests made, Compliant values returned and zeros cleaned, so a read
+  requests made, Compliant values returned, zeros cleaned and (build 96)
+  retired keys pushed -1 again, so a read
   that silently returns nothing can be told apart from "nothing stale". Objects whose version could not
   be read are not cleaned.
 

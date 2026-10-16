@@ -1133,7 +1133,9 @@ public final class OverridesTest {
 		inOrder(clean, "cleanBatch",
 				"ComplianceDecisions.cleanupPlan(kind, p.profile, p.pushed, "
 						+ "bundled, cycleOverrides.skipped);",
-				"ComplianceDecisions.orphanProps(stale, p.profileName, "
+				// Build 96 (issue #42): the retired and the re-pushed keys
+				// go out together.
+				"ComplianceDecisions.orphanProps(ids, p.profileName, "
 						+ "cycleOverrides.skipped, cycle.account.overridesFile)");
 
 		// Build 92 (issue #41): every object with a benchmark pushes its

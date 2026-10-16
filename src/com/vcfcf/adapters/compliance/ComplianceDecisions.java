@@ -588,6 +588,38 @@ public final class ComplianceDecisions {
 	}
 
 	/**
+	 * Build 96 (issue #42, DEF-025): the retired controls to push -1 again
+	 * this cycle on one object: every control of {@code plan} (outside the
+	 * object's benchmark, or in it but not applicable) whose latest value
+	 * in VCF Ops is already -1. {@link #staleControls} sets a lingering 0
+	 * (or 1) to -1 once; the per-control symptom needs its cancel cycles
+	 * of fresh non-triggering samples before an open alert cancels, so a
+	 * single -1 left the alert open (the shape of issue #41). The key keeps
+	 * getting -1 every cycle while the control stays retired on the object,
+	 * like a Skip in force. A key the object never had is absent from
+	 * {@code latest} and is never created; {@code latest} null (the read
+	 * failed) means nothing this cycle. Never a score change: a -1 key is
+	 * outside every score and count.
+	 */
+	public static Set<String> heldNotEvaluatedControls(CleanupPlan plan,
+			Map<String, Double> latest) {
+		Set<String> out = new TreeSet<>();
+		if (latest == null || plan == null) return out;
+		for (Map.Entry<String, Double> e : latest.entrySet()) {
+			Double v = e.getValue();
+			if (v == null
+					|| v != ComplianceAdapterConstants.COMPLIANT_NOT_EVALUATED) {
+				continue;
+			}
+			String id = e.getKey();
+			if (plan.zeroOrOne.contains(id) || plan.zeroOnly.contains(id)) {
+				out.add(id);
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * Build 88 (review W2): what to do after one /api/resources page.
 	 * Build 96 (issue #52): {@link #EMPTY_UNCONFIRMED}, a valid but empty
 	 * list for a kind whose last complete list had objects; held back like

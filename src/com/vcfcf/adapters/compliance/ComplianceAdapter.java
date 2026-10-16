@@ -1351,9 +1351,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * {@code Compliant} values are bulk-read from VCF Ops (requests sized by
 	 * URL length, see ComplianceDecisions#latestCompliantPaths), and only a candidate whose latest value is 0 is set to -1
 	 * ({@link ComplianceDecisions#staleZeroControls}). No key is ever
-	 * created, a cleaned key is not touched again, and a missed or failed
-	 * cleanup is retried next cycle. If a bulk read fails, that batch is
-	 * skipped this cycle (logged), with no fallback.
+	 * created, and a missed or failed cleanup is retried next cycle. If a
+	 * bulk read fails, that batch is skipped this cycle (logged), with no
+	 * fallback. Build 96 (issue #42): a cleaned key, read back at -1, is
+	 * pushed -1 again every cycle while the control stays retired
+	 * ({@link ComplianceDecisions#heldNotEvaluatedControls}), so an alert
+	 * open on it sees its cancel cycles (before, it got one -1 and stayed
+	 * open).
 	 */
 	private void cleanStaleControls(CycleStats cs) throws InterruptedException {
 		if (cycle.stitcher == null || pendingCleanup.isEmpty()) return;
@@ -1385,8 +1389,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ cs.cleanupRequests + " request(s); " + cs.cleanupValues
 				+ " Compliant value(s) returned; " + cs.cleanedKeys
 				+ " stale 0(s) set to -1 on " + cs.cleanedObjects
-				+ " object(s); " + cs.cleanupSkipped
-				+ " object(s) skipped (read failed)");
+				+ " object(s); " + cs.heldKeys + " retired key(s) already at "
+				+ "-1 pushed -1 again on " + cs.heldObjects + " object(s); "
+				+ cs.cleanupSkipped + " object(s) skipped (read failed)");
 		if (cs.cleanupSkipped > 0) {
 			logWarn("Stale-control cleanup skipped for " + cs.cleanupSkipped
 					+ " object(s) this cycle (latest-value read failed); "
@@ -1445,15 +1450,31 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		for (PendingCleanup p : batch) {
 			ComplianceDecisions.CleanupPlan plan = plans.get(p.resourceId);
 			if (plan == null) continue;
+			java.util.Map<String, Double> objLatest = latest.get(p.resourceId);
 			java.util.Set<String> stale = ComplianceDecisions.staleControls(
-					plan, latest.get(p.resourceId));
-			if (stale.isEmpty()) continue;
+					plan, objLatest);
+			// Build 96 (issue #42, DEF-025): a key already retired to -1
+			// gets -1 again every cycle while the control stays retired
+			// (guide version change, or no longer applicable), so its
+			// symptom sees the cancel cycles an open alert needs. Same
+			// properties and stats call as the retirement itself.
+			java.util.Set<String> held =
+					ComplianceDecisions.heldNotEvaluatedControls(plan,
+							objLatest);
+			if (stale.isEmpty() && held.isEmpty()) continue;
+			java.util.Set<String> ids = new java.util.TreeSet<>(stale);
+			ids.addAll(held);
 			cycle.stitcher.pushProperties(p.resourceId,
-					ComplianceDecisions.orphanProps(stale, p.profileName,
+					ComplianceDecisions.orphanProps(ids, p.profileName,
 							cycleOverrides.skipped,
 							cycle.account.overridesFile), ts);
 			cycle.stitcher.pushStats(p.resourceId,
-					ComplianceDecisions.orphanStats(stale), ts);
+					ComplianceDecisions.orphanStats(ids), ts);
+			if (!held.isEmpty()) {
+				cs.heldObjects++;
+				cs.heldKeys += held.size();
+			}
+			if (stale.isEmpty()) continue;
 			cs.cleanedObjects++;
 			cs.cleanedKeys += stale.size();
 			logInfo(kind.rollupName + " resource " + p.resourceId + ": "
@@ -2593,6 +2614,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int hostsScored; int hostsNonCompliant; int hostsWhollyUnreadable;
 		int noBenchmark; int versionUnreadable; int unreadable;
 		int cleanedObjects; int cleanedKeys; int cleanupSkipped;
+		int heldObjects; int heldKeys;
 		int cleanupQueried; int cleanupRequests; int cleanupValues;
 		int skipPushedObjects; int skipPushedKeys;
 	}

@@ -102,7 +102,11 @@ Build 90: for a control whose expected value comes from the overrides
 file, Expected reads `<value> (site override)` and a read Actual reads
 `<actual>, expected <value> (site override)`. A skipped control's
 Actual reads `(skipped by override file <name>)` and its Compliant reads
--1, pushed every cycle while the Skip is in force (build 92).
+-1, pushed every cycle while the Skip is in force (build 92). Build 96
+(issue #42): a control no longer in the applied benchmark (after a guide
+version change) or no longer applicable gets -1 every cycle too, once its
+key reads -1, while it stays that way; a key the object never had is
+never created.
 
 Actual values you can see:
 
