@@ -587,8 +587,14 @@ public final class ComplianceDecisions {
 		return out;
 	}
 
-	/** Build 88 (review W2): what to do after one /api/resources page. */
-	public enum ResourcePage { COMPLETE, NEXT_PAGE, INCOMPLETE }
+	/**
+	 * Build 88 (review W2): what to do after one /api/resources page.
+	 * Build 96 (issue #52): {@link #EMPTY_UNCONFIRMED}, a valid but empty
+	 * list for a kind whose last complete list had objects; held back like
+	 * {@link #INCOMPLETE} for one cycle (see {@link #resourcePageOutcome(
+	 * boolean, Long, int, int, int, int, boolean)}).
+	 */
+	public enum ResourcePage { COMPLETE, NEXT_PAGE, INCOMPLETE, EMPTY_UNCONFIRMED }
 
 	/** Build 88 (review W2): page size requested from /api/resources. */
 	public static final int RESOURCE_PAGE_SIZE = 10000;
@@ -624,6 +630,37 @@ public final class ComplianceDecisions {
 			return ResourcePage.INCOMPLETE;   // short, and no way to finish
 		}
 		return ResourcePage.NEXT_PAGE;
+	}
+
+	/**
+	 * Build 96 (issue #52): {@link #resourcePageOutcome(boolean, Long, int,
+	 * int, int)} with the kind's history. A list that reads as complete with
+	 * no rows (a 200 with an empty {@code resourceList} and a total of 0, or
+	 * no list and a total of 0) is not taken as "no objects of this kind"
+	 * when the kind's last complete list had objects: every object would
+	 * then count as unmatched, the kind's numbers would drop to 0, and
+	 * {@code Rollup|incomplete} would stay 0. It is
+	 * {@link ResourcePage#EMPTY_UNCONFIRMED} instead, which the caller holds
+	 * back like {@link ResourcePage#INCOMPLETE} (Rollup|incomplete = 1, the
+	 * kind's keys keep their values). The next cycle's empty list is then
+	 * accepted: a kind empty two cycles in a row is genuinely empty (its
+	 * last objects were removed).
+	 *
+	 * @param previousCount rows in the kind's last complete list (0 when
+	 *                      none was read since the instance was configured)
+	 * @param emptyHeldBack the kind's previous read was an
+	 *                      {@code EMPTY_UNCONFIRMED} empty list
+	 */
+	public static ResourcePage resourcePageOutcome(boolean hasList,
+			Long totalCount, int collected, int rowsThisPage, int pageIndex,
+			int previousCount, boolean emptyHeldBack) {
+		ResourcePage r = resourcePageOutcome(hasList, totalCount, collected,
+				rowsThisPage, pageIndex);
+		if (r == ResourcePage.COMPLETE && collected == 0 && previousCount > 0
+				&& !emptyHeldBack) {
+			return ResourcePage.EMPTY_UNCONFIRMED;
+		}
+		return r;
 	}
 
 	/**

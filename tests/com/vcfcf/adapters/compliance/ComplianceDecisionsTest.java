@@ -496,8 +496,14 @@ public final class ComplianceDecisionsTest {
 				"int rows = hasList ? list.size() : 0;",
 				"collected += rows;",
 				"SimpleJson total = parsed.path(\"pageInfo.totalCount\"); Long totalCount = total.isNull() ? null : total.asLong();",
-				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page);",
-				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); return out; }",
+				// Build 96 (issue #52): the kind's history goes in, and an
+				// unconfirmed empty list is held back like INCOMPLETE
+				// (Build96StitcherTest runs the loop itself).
+				"ComplianceDecisions.resourcePageOutcome(hasList, totalCount, collected, rows, page, previousCount, heldEmpty);",
+				"if (next == ComplianceDecisions.ResourcePage.COMPLETE) { failedLoads.remove(resourceKind); lastCompleteCount.put(resourceKind, collected);",
+				"return out; }",
+				"if (next == ComplianceDecisions.ResourcePage .EMPTY_UNCONFIRMED) { emptyHeldBack.add(resourceKind);",
+				"return out; }",
 				"if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {",
 				"return out; }");
 		// The failed mark is cleared in exactly one place: a complete list.

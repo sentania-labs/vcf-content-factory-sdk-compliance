@@ -114,11 +114,27 @@ public final class ComplianceStitcher
 	// unscoped matcher — single-vCenter safe).
 	private volatile String owningVcUuid;
 
-	// Build 88: resource kinds whose /api/resources read failed on the last
-	// load (exception or unparseable body). Distinct from "0 results": the
-	// adapter holds that kind's rollup back instead of reporting every
-	// object as unmatched.
+	// Build 88: resource kinds whose /api/resources read did not end in a
+	// complete list on the last load: an exception (HTTP error, timeout,
+	// interrupt), an unparseable body, a page with no resourceList (unless
+	// it reports a total of 0), a list short of its pageInfo.totalCount (an
+	// empty page or the page cap), and since build 96 (issue #52) an empty
+	// list for a kind whose last complete list had objects
+	// (EMPTY_UNCONFIRMED, accepted the next cycle if still empty). Distinct
+	// from "0 results": the adapter holds that kind's rollup back
+	// (Rollup|incomplete = 1) instead of reporting every object as
+	// unmatched.
 	private final java.util.Set<String> failedLoads =
+			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+	// Build 96 (issue #52): rows in each kind's last complete list, and the
+	// kinds whose last read was an empty list held back as unconfirmed. Kept
+	// for the life of this stitcher (one instance configuration); a new
+	// configuration starts with no history, so its first empty list is
+	// accepted.
+	private final Map<String, Integer> lastCompleteCount =
+			java.util.Collections.synchronizedMap(new HashMap<>());
+	private final java.util.Set<String> emptyHeldBack =
 			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
 	// Build 95 (issue #17): this cycle's measurement, null for none. Every
@@ -315,11 +331,23 @@ public final class ComplianceStitcher
 	 * {@link ComplianceDecisions#MAX_RESOURCE_PAGES} reached). Since build 88
 	 * an object missing from this list leaves the rollup, so a short list
 	 * must hold the kind back rather than pass as complete.
+	 *
+	 * <p>Build 96 (issue #52): an empty but valid list for a kind whose
+	 * last complete list had objects is held back too, once
+	 * ({@link ComplianceDecisions.ResourcePage#EMPTY_UNCONFIRMED}); the
+	 * next cycle's empty list is accepted as genuinely empty. An interrupt
+	 * during the read keeps the thread's interrupt flag, so the adapter's
+	 * stop check ends the cycle.
 	 */
 	private List<SimpleJson> fetchResources(String resourceKind) {
 		java.util.List<SimpleJson> out = new java.util.ArrayList<>();
 		// Build 88: failed until the whole list is read.
 		failedLoads.add(resourceKind);
+		// Build 96 (issue #52): the kind's history; the unconfirmed-empty
+		// mark lasts one read only.
+		Integer prev = lastCompleteCount.get(resourceKind);
+		int previousCount = prev == null ? 0 : prev;
+		boolean heldEmpty = emptyHeldBack.remove(resourceKind);
 		try {
 			String enc = java.net.URLEncoder.encode(resourceKind, "UTF-8");
 			int collected = 0;
@@ -349,9 +377,30 @@ public final class ComplianceStitcher
 				Long totalCount = total.isNull() ? null : total.asLong();
 				ComplianceDecisions.ResourcePage next =
 						ComplianceDecisions.resourcePageOutcome(hasList,
-								totalCount, collected, rows, page);
+								totalCount, collected, rows, page,
+								previousCount, heldEmpty);
 				if (next == ComplianceDecisions.ResourcePage.COMPLETE) {
 					failedLoads.remove(resourceKind);
+					lastCompleteCount.put(resourceKind, collected);
+					if (heldEmpty && collected == 0) {
+						logger.warn("ComplianceStitcher: fetchResources("
+								+ resourceKind + ") empty again (pageInfo."
+								+ "totalCount " + totalCount + "); accepted as "
+								+ "genuinely empty after one held-back cycle "
+								+ "(the last complete list had "
+								+ previousCount + ")");
+					}
+					return out;
+				}
+				if (next == ComplianceDecisions.ResourcePage
+						.EMPTY_UNCONFIRMED) {
+					emptyHeldBack.add(resourceKind);
+					logger.warn("ComplianceStitcher: fetchResources("
+							+ resourceKind + ") returned an empty list "
+							+ "(pageInfo.totalCount " + totalCount + ") but "
+							+ "the last complete list had " + previousCount
+							+ "; this kind is held back this cycle, and an "
+							+ "empty list next cycle is accepted as empty");
 					return out;
 				}
 				if (next == ComplianceDecisions.ResourcePage.INCOMPLETE) {
@@ -365,6 +414,10 @@ public final class ComplianceStitcher
 				}
 			}
 		} catch (Exception e) {
+			if (e instanceof InterruptedException) {
+				// Build 96: keep the interrupt for the adapter's stop check.
+				Thread.currentThread().interrupt();
+			}
 			logger.warn("ComplianceStitcher: fetchResources(" + resourceKind
 					+ ") failed: " + e.getClass().getName()
 					+ ": " + e.getMessage());
@@ -555,6 +608,10 @@ public final class ComplianceStitcher
 				}
 				requests++;
 			} catch (Exception e) {
+				if (e instanceof InterruptedException) {
+					// Build 96: keep the interrupt for the stop check.
+					Thread.currentThread().interrupt();
+				}
 				return new LatestRead(null, requests, returned,
 						e.getClass().getSimpleName() + ": " + e.getMessage());
 			}
