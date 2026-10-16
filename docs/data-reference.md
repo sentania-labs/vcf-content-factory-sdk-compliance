@@ -106,7 +106,8 @@ Actual reads `(skipped by override file <name>)` and its Compliant reads
 (issue #42): a control no longer in the applied benchmark (after a guide
 version change) or no longer applicable gets -1 again on later cycles
 once its key reads -1, up to 4 -1 pushes per key in all (enough for the
-alert's 3 cancel cycles); a key the object never had is never created.
+alert's 3 cancel cycles), carried in the object's own push; a key the
+object never had is never created.
 
 Actual values you can see:
 
@@ -231,8 +232,9 @@ VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when rollup ke
                                                (held one cycle; empty again is accepted);
                                                or (build 96, #16) the cycle ended early on
                                                its time budget or timeout breaker (the kinds
-                                               not finished are held back), or read only
-                                               the rest of a kind after such a cycle; or
+                                               not finished are held back; a later cycle
+                                               that finishes them and the round clears it);
+                                               or
                                                (build 93)
                                                the cycle could not reach vCenter at all (the
                                                only key pushed then)
@@ -463,8 +465,8 @@ ended early on its time budget or timeout breaker (build 96); the next
 cycles carry on from there, so every object is visited again within a
 bounded number of cycles (about the full walk time divided by the
 budget, plus one; a host that stops answering costs one timeout per
-visit, and an object that never fits is pushed flagged on its second
-try). If every cycle ends early, lengthen the collection interval. All these
+visit, and an object that never fits is marked Not Read on its second
+try, with the reason "cut by cycle budget twice" and no score). If every cycle ends early, lengthen the collection interval. All these
 cases set `Rollup|incomplete` = 1 on the vCenter, which
 raises "Compliance data not collected (vCenter)"; an unreachable vCenter
 also leaves the ComplianceWorld resource in collection status down (no

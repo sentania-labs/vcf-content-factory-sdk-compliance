@@ -63,8 +63,10 @@ an expected value of "X or Undefined", "X or Not Present" or a bare "Not
 Present".
 
 **Keeps each cycle inside the collection interval.** A cycle may take
-about 80% of the account's collection interval (240 s at the default 5
-minutes), and it also stops after 5 vCenter calls in a row time out.
+about 95% of the account's collection interval (285 s at the default 5
+minutes), and it also stops after 5 vCenter calls in a row time out. A
+walk that fits in the interval is not affected; one that takes longer
+than 95% of it ends early and raises the alert below.
 When a cycle stops early, what was not finished keeps its last values,
 "Compliance data not collected" fires on the vCenter, and the next cycle
 carries on from where it stopped, through the remaining object kinds,
@@ -72,7 +74,8 @@ before starting over. So every object is read again within a bounded
 number of cycles (about the time a full walk takes divided by the
 cycle's budget, plus one). A host that stops answering costs one timeout
 each time it is visited, and an object that never fits in a cycle is
-pushed flagged as not read on its second try so the walk moves past it.
+marked Not Read on its second try (its last score stays) so the walk
+moves past it.
 If cycles keep ending early on a large vCenter, lengthen the account's
 collection interval (see docs/installing.md).
 

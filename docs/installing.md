@@ -135,22 +135,26 @@ VCF Operations (its VCURL), or when an earlier cycle since the account
 was last edited found it; otherwise the collector log says the marker
 was not pushed. The next completed cycle sets it back to 0.
 
-**When every cycle ends early.** A cycle may take about 80% of the
+**When every cycle ends early.** A cycle may take about 95% of the
 account's collection interval and stops after 5 vCenter calls in a row
-time out (build 96). A cycle that ends early logs "Cycle ended early"
+time out (build 96). A walk longer than 95% of the interval therefore
+ends early every cycle and keeps "Compliance data not collected
+(vCenter)" raised. A cycle that ends early logs "Cycle ended early"
 and ends its collection-complete line with "ENDED EARLY", raises
 "Compliance data not collected (vCenter)", and the next cycle continues
 from where it stopped, through the remaining object kinds, before
 starting over. Every object is read again within a bounded number of
 cycles (about the time a full walk takes divided by the cycle's budget,
 plus one). A host that stops answering costs one timeout each time it is
-visited, and an object that does not fit in a cycle is pushed flagged as
-not read on its second try and the walk moves past it. If it happens
+visited, and an object that does not fit in a cycle is marked Not Read
+on its second try (only the marker and the reason "cut by cycle budget
+twice"; its last score stays) and the walk moves past it. If it happens
 every cycle and the vCenter
 answers normally (no timeouts in the log), the walk is longer than the
 interval allows: edit the account and lengthen its collection interval
-(for example to 10 or 15 minutes). A host named in "host not answering"
-reasons is a host whose hostd stopped answering; fix that host instead.
+(for example to 10 or 15 minutes). A host whose advanced-settings read
+timed out ("host not answering" in its reasons) is a host whose hostd
+stopped answering; fix that host instead.
 
 **A host that does not resolve gives no marker and no alert.** If the
 vCenter host is mistyped (it does not resolve in DNS, or names no
