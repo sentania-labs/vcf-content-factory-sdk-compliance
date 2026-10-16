@@ -191,17 +191,18 @@ jobs:
           fi
           echo "Tag ${GITHUB_REF_NAME} matches adapter.yaml (${expected})."
 
-      # Adapter reproducibility gates (compliance build 58, review W3). Run
-      # before build-sdk so a tag never builds a pak whose generated alert
-      # blocks are stale or whose decision logic fails its tests.
-      #  - generate_compliance_alerts.py --check: describe.xml and
-      #    resources.properties generated blocks must match the canonical
-      #    profiles + manual_review.csv byte for byte (stdlib only).
-      #  - ci/run_java_tests.sh: the adapter's JDK-only unit tests plus the
-      #    generator's unittest suite (needs no SDK jar).
+      # Compliance-only reproducibility gate (compliance build 58, review W3):
+      # the generated alert blocks in describe.xml and resources.properties
+      # must match the canonical profiles + manual_review.csv byte for byte
+      # (stdlib only). Runs before build-sdk so a tag never builds a pak
+      # whose generated alert definitions are stale.
       - name: Check generated alert definitions are current
         run: python3 scripts/generate_compliance_alerts.py --check
 
+      # The adapter's plain-JDK unit tests (compliance build 58, review W3).
+      # Run before the buildkit and the SDK jar are fetched, so a tag never
+      # builds a pak whose logic fails its own tests. Needs only the JDK set
+      # up above; no SDK jar, no secret.
       - name: Run adapter unit tests
         run: bash ci/run_java_tests.sh
 

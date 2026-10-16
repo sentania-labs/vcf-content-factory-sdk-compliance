@@ -90,6 +90,133 @@ class GateTest(unittest.TestCase):
                     defect_gate.gate_pak("template", p)
                 self.assertEqual(self.run_cli(p, "template"), 1)
 
+    def test_indented_heading_one_to_three_spaces_parses(self):
+        # Codex P1 (unifi PR #37): an indented open blocker, with another
+        # unindented entry present, was parsed by neither regex and dropped.
+        for pad in (" ", "  ", "   "):
+            with self.subTest(indent=len(pad)):
+                p = self.write(registry(
+                    entry(1, "unifi"),
+                    entry(2, "template", heading=pad + "### DEF-002")))
+                hits = defect_gate.gate_pak("template", p)
+                self.assertEqual([e.id for e in hits], ["DEF-002"])
+                self.assertEqual(self.run_cli(p, "template"), 2)
+
+    def test_heading_indented_as_code_block_fails_closed(self):
+        for pad in ("    ", "      ", "\t", " \t"):
+            with self.subTest(indent=repr(pad)):
+                p = self.write(registry(
+                    entry(1, "unifi"),
+                    entry(2, "template", heading=pad + "### DEF-002")))
+                with self.assertRaises(defect_gate.DefectRegistryError):
+                    defect_gate.gate_pak("template", p)
+                self.assertEqual(self.run_cli(p, "template"), 1)
+
+    def indented_fields(self, pad: str) -> str:
+        text = entry(2, "template")
+        return "\n".join(pad + l if l.startswith("- **") else l
+                         for l in text.splitlines()) + "\n"
+
+    def test_fields_indented_one_to_three_spaces_parse(self):
+        for pad in (" ", "  ", "   "):
+            with self.subTest(indent=len(pad)):
+                p = self.write(registry(entry(1, "unifi"), self.indented_fields(pad)))
+                hits = defect_gate.gate_pak("template", p)
+                self.assertEqual([e.id for e in hits], ["DEF-002"])
+                self.assertEqual(hits[0].severity, "blocking")
+                self.assertEqual(self.run_cli(p, "template"), 2)
+
+    def test_fields_indented_as_code_block_fail_closed(self):
+        for pad in ("    ", "\t", " \t"):
+            with self.subTest(indent=repr(pad)):
+                p = self.write(registry(entry(1, "unifi"), self.indented_fields(pad)))
+                with self.assertRaises(defect_gate.DefectRegistryError):
+                    defect_gate.gate_pak("template", p)
+                self.assertEqual(self.run_cli(p, "template"), 1)
+
+    def test_one_deep_indented_status_line_fails_closed(self):
+        # Only the Status line in a code-block indent: before, it was glued
+        # onto the previous field and the entry failed later or not at all.
+        text = entry(2, "template").replace("- **Status:**", "    - **Status:**")
+        p = self.write(registry(entry(1, "unifi"), text))
+        self.assertEqual(self.run_cli(p, "template"), 1)
+
+    # --- peer review on f87a544 -------------------------------------------
+
+    def nested_under_summary(self, line: str) -> str:
+        text = entry(2, "template")
+        return text.replace("- **Summary:** it broke",
+                            "- **Summary:** it broke\n" + line)
+
+    def test_nested_field_shaped_bullet_never_passes(self):
+        # A sub-bullet under Summary shaped like a field used to overwrite
+        # the real field: "  - **Status:** closed" made an open blocker vanish.
+        for line in ("  - **Status:** closed", "  - **Severity:** tracked",
+                     "  - **Affects:** unifi", " - **Status:** closed",
+                     "   - **Severity:** tracked",
+                     "  - **Status:** closed\n  - **Closing-evidence:** fixed in build 3"):
+            with self.subTest(line=line):
+                p = self.write(registry(entry(1, "unifi"),
+                                        self.nested_under_summary(line)))
+                # Malformed, exit 1; above all never 0 (the blocker vanishing).
+                self.assertEqual(self.run_cli(p, "template"), 1)
+
+    def test_repeated_field_fails_closed(self):
+        # Last-wins is how the hole worked: a second Severity: tracked used
+        # to turn an open blocker into a pass (exit 0).
+        for extra in ("- **Severity:** tracked", "- **Status:** closed",
+                      "- **Affects:** unifi"):
+            with self.subTest(extra=extra):
+                text = entry(2, "template").replace(
+                    "- **Summary:** it broke", "- **Summary:** it broke\n" + extra)
+                p = self.write(registry(entry(1, "unifi"), text))
+                self.assertEqual(self.run_cli(p, "template"), 1)
+
+    def test_indented_example_in_intro_is_skipped(self):
+        intro = ("# Defect registry\n\nSchema example:\n\n"
+                 "    ### DEF-NNN\n    - **Affects:** <pak>\n\n## Defects\n\n")
+        p = self.write(registry(entry(1, "template"), preamble=intro))
+        self.assertEqual([e.id for e in defect_gate.gate_pak("template", p)], ["DEF-001"])
+        self.assertEqual(self.run_cli(p, "unifi"), 0)
+
+    def test_fenced_example_in_intro_is_skipped(self):
+        intro = ("# Defect registry\n\n```\n### DEF-NNN\n- **Affects:** <pak>\n```\n\n"
+                 "## Defects\n\n")
+        p = self.write(registry(entry(1, "template"), preamble=intro))
+        self.assertEqual(self.run_cli(p, "template"), 2)
+
+    def test_fence_content_is_description_not_fields(self):
+        text = entry(2, "template").replace(
+            "- **Summary:** it broke",
+            "- **Summary:** it broke\n```\n- **Status:** closed\n- **Severity:** tracked\n```")
+        p = self.write(registry(entry(1, "unifi"), text))
+        hits = defect_gate.gate_pak("template", p)
+        self.assertEqual([(e.id, e.status, e.severity) for e in hits],
+                         [("DEF-002", "open", "blocking")])
+        self.assertEqual(self.run_cli(p, "template"), 2)
+
+    def test_def_heading_inside_fence_fails_closed(self):
+        text = entry(1, "unifi").replace(
+            "- **Summary:** it broke",
+            "- **Summary:** it broke\n```\n" + entry(2, "template") + "```")
+        p = self.write(registry(text))
+        self.assertEqual(self.run_cli(p, "template"), 1)
+
+    def test_bom_does_not_hide_first_heading(self):
+        d = Path(tempfile.mkdtemp())
+        p = d / "defects.md"
+        p.write_bytes(b"\xef\xbb\xbf" + entry(1, "template").encode("utf-8"))
+        self.assertEqual([e.id for e in defect_gate.gate_pak("template", p)], ["DEF-001"])
+        self.assertEqual(self.run_cli(p, "template"), 2)
+
+    def test_nbsp_or_blockquote_heading_fails_closed(self):
+        for heading in ("\u00a0### DEF-002", "> ### DEF-002", ">### DEF-002",
+                        "###\u00a0DEF-002"):
+            with self.subTest(heading=heading):
+                p = self.write(registry(entry(1, "unifi"),
+                                        entry(2, "template", heading=heading)))
+                self.assertEqual(self.run_cli(p, "template"), 1)
+
     def test_prose_heading_is_not_a_defect(self):
         p = self.write(registry(entry(1, "unifi")) + "\n### DEFECTS ELSEWHERE\n\nprose\n")
         self.assertEqual(defect_gate.gate_pak("template", p), [])

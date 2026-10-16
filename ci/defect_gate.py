@@ -22,6 +22,13 @@ load_registry(registry_path) -> List[DefectEntry]
         unrecognised, never an all-clear)
       - an ``Affects:`` value that is not one token (whitespace, a comma or a
         backtick), which would otherwise match no pak and gate nothing
+      - a DEF heading or field line indented like a code block (a tab or 4+
+        spaces), inside a blockquote, behind a non-breaking space, or (a
+        heading) inside a fenced code block, after the first entry
+      - a field-shaped line at a different indent from the entry's first
+        field (a nested sub-bullet), or a field repeated within one entry
+    Fenced code blocks are description text; indented or fenced examples
+    before the first entry are skipped. The file is read as utf-8-sig.
 
 gate_pak(pak_name, registry_path) -> List[DefectEntry]
     Return all open blocking defects whose ``Affects:`` token is ``pak_name``
@@ -119,7 +126,7 @@ class DefectRegistryError(ValueError):
 # heading had to end at the id, and a heading with trailing text was not
 # seen as a section at all, so its fields merged into the previous entry
 # and the defect gated nothing (issue #18 CI4).
-_SECTION_RE = re.compile(r"^#{1,4}\s+(DEF-\d+)\b.*$")
+_SECTION_RE = re.compile(r"^#{1,4}[ \t]+(DEF-\d+)\b.*$")
 # Any heading, at ANY depth, that starts like a defect id: any run of '#',
 # optional spaces, then DEF- in any case. One that does not also match
 # _SECTION_RE ("### DEF-1O2", "##### DEF-002", "###DEF-003", "### def-004")
@@ -128,6 +135,22 @@ _SECTION_RE = re.compile(r"^#{1,4}\s+(DEF-\d+)\b.*$")
 # PR #22: an open blocker followed by "##### DEF-002" with a tracked
 # severity made the blocker vanish).
 _DEF_HEADING_RE = re.compile(r"^#+\s*DEF-", re.IGNORECASE)
+# Leading whitespace before a heading. Markdown allows up to three spaces
+# before an ATX heading; four or more spaces (or a tab) make the line an
+# indented code block, not a heading. Both regexes above, and _FIELD_RE, are
+# matched after this indent is split off (Codex P1 on unifi PR #37: an indented open
+# blocker was parsed by neither and silently dropped).
+_INDENT_RE = re.compile(r"^([ \t]*)(.*)$")
+# Loose shapes, used to catch a heading or field that is disguised: any
+# leading run of whitespace (including a non-breaking space) and blockquote
+# markers. A line that matches a loose shape but not the strict one is
+# malformed and fails closed, so nothing that LOOKS like a defect heading or
+# field can be skipped or mis-parsed.
+_LOOSE_DEF_HEADING_RE = re.compile(r"^[\s>]*#+\s*DEF-", re.IGNORECASE)
+_LOOSE_FIELD_RE = re.compile(r"^[\s>]*-\s+\*\*[^:]+:\*\*")
+# A fenced code block delimiter (indent already split off): ``` or ~~~,
+# three or more, optional info string on the opening fence.
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _FIELD_RE = re.compile(r"^-\s+\*\*([^:]+):\*\*\s*(.*)")
 
 # Anything that makes an Affects value more than one bare token.
@@ -181,7 +204,8 @@ def load_registry(
     if not registry_path.exists():
         raise FileNotFoundError(f"defect registry not found: {registry_path}")
 
-    lines = registry_path.read_text(encoding="utf-8").splitlines()
+    # utf-8-sig: a byte-order mark must not hide a first-line heading.
+    lines = registry_path.read_text(encoding="utf-8-sig").splitlines()
 
     entries: List[DefectEntry] = []
     seen_ids: dict[str, int] = {}  # id -> line number for dup detection
@@ -191,6 +215,8 @@ def load_registry(
     current_fields: dict[str, str] = {}
     current_last_field: Optional[str] = None
     current_id_lineno: int = 0
+    field_indent: Optional[int] = None   # indent of the entry's first field
+    fence: Optional[str] = None          # opening fence while inside one
 
     def _flush_entry(lineno: int) -> None:
         """Validate and emit the current entry."""
@@ -202,22 +228,71 @@ def load_registry(
         current_fields = {}
         current_last_field = None
 
+    def _append(text: str) -> None:
+        """Description text: continue the last field's value, if any."""
+        if current_last_field is not None and text.strip():
+            current_fields[current_last_field] = (
+                current_fields[current_last_field] + " " + text.strip()
+            )
+
     for lineno, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip()
+        # Up to three spaces of indent are allowed before a heading, a field
+        # or a fence; four or more, or a tab, make the line an indented code
+        # block in Markdown.
+        indent, rest = _INDENT_RE.match(line).groups()
+        code_indent = "\t" in indent or len(indent) > 3
+
+        # --- Fenced code blocks ---
+        # Lines inside a fence are description text, never fields or
+        # headings. A defect heading inside a fence after the first entry
+        # fails closed: a defect must not hide in a code block.
+        m_fence = None if code_indent else _FENCE_RE.match(rest)
+        if fence is not None:
+            if (m_fence and m_fence.group(1)[0] == fence[0]
+                    and len(m_fence.group(1)) >= len(fence)
+                    and not m_fence.group(2).strip()):
+                fence = None
+                continue
+            if current_id is not None and _LOOSE_DEF_HEADING_RE.match(line):
+                raise DefectRegistryError(
+                    f"line {lineno}: defect heading {line.strip()!r} is inside "
+                    f"a fenced code block; refusing to guess"
+                )
+            if current_id is not None:
+                _append(line)
+            continue
+        if m_fence:
+            fence = m_fence.group(1)
+            continue
+
+        # --- Before the first entry ---
+        # The registry's introduction may show schema examples as indented
+        # code; those are skipped. Everything else that looks like a defect
+        # heading is checked strictly, here and after.
+        if current_id is None and code_indent:
+            continue
 
         # --- New entry section heading ---
-        m_section = _SECTION_RE.match(line)
-        if not m_section and _DEF_HEADING_RE.match(line):
-            raise DefectRegistryError(
-                f"line {lineno}: heading {line.strip()!r} starts like a defect "
-                f"but its id is not DEF-NNN; refusing to guess"
-            )
-        if m_section:
+        if _LOOSE_DEF_HEADING_RE.match(line):
+            if code_indent:
+                raise DefectRegistryError(
+                    f"line {lineno}: defect heading {rest!r} is indented like "
+                    f"a code block (a tab or 4+ spaces); refusing to guess"
+                )
+            m_section = _SECTION_RE.match(rest)
+            if not m_section:
+                raise DefectRegistryError(
+                    f"line {lineno}: {line.strip()!r} starts like a defect "
+                    f"heading but is not '### DEF-NNN' (a bad id, too deep, a "
+                    f"blockquote, or a non-breaking space); refusing to guess"
+                )
             _flush_entry(lineno)
             current_id = m_section.group(1)
             current_id_lineno = lineno
             current_fields = {}
             current_last_field = None
+            field_indent = None
             continue
 
         # Skip lines before the first entry.
@@ -225,11 +300,41 @@ def load_registry(
             continue
 
         # --- Field line ---
-        m_field = _FIELD_RE.match(line)
-        if m_field:
+        # Fail closed on anything field-shaped that is not a plain field at
+        # this entry's field indent: a code-block indent, a blockquote or a
+        # non-breaking space, a different indent (a nested sub-bullet such
+        # as "  - **Status:** closed" under Summary), or a repeated field.
+        # Each of those used to be able to overwrite or drop a real field.
+        if _LOOSE_FIELD_RE.match(line):
+            if code_indent:
+                raise DefectRegistryError(
+                    f"line {lineno}: field line {rest!r} in {current_id} is "
+                    f"indented like a code block (a tab or 4+ spaces); "
+                    f"refusing to guess"
+                )
+            m_field = _FIELD_RE.match(rest)
+            if not m_field:
+                raise DefectRegistryError(
+                    f"line {lineno}: {line.strip()!r} in {current_id} looks "
+                    f"like a field but is prefixed by a blockquote or a "
+                    f"non-breaking space; refusing to guess"
+                )
+            if field_indent is None:
+                field_indent = len(indent)
+            elif len(indent) != field_indent:
+                raise DefectRegistryError(
+                    f"line {lineno}: field line {rest!r} in {current_id} is "
+                    f"indented {len(indent)} space(s) but the entry's fields "
+                    f"are at {field_indent} (a nested bullet shaped like a "
+                    f"field?); refusing to guess"
+                )
             fname = m_field.group(1).strip()
-            fval = m_field.group(2).strip()
-            current_fields[fname] = fval
+            if fname in current_fields:
+                raise DefectRegistryError(
+                    f"line {lineno}: field {fname!r} appears twice in "
+                    f"{current_id}; refusing to pick one"
+                )
+            current_fields[fname] = m_field.group(2).strip()
             current_last_field = fname
             continue
 
@@ -237,17 +342,13 @@ def load_registry(
         # A non-blank, non-section, non-field line that follows a field line
         # is appended to the last field's value (handles Summary, Closing-
         # evidence, etc. which can span 2-4 lines in the markdown).
-        if current_last_field is not None and line.strip():
-            # Only append if we are inside a known entry.
-            current_fields[current_last_field] = (
-                current_fields[current_last_field] + " " + line.strip()
-            )
+        if line.strip():
+            _append(line)
             continue
 
         # Blank line: clear the continuation pointer so a blank line between
         # fields doesn't accidentally merge separate fields.
-        if not line.strip():
-            current_last_field = None
+        current_last_field = None
 
     # Flush the last entry.
     _flush_entry(len(lines) + 1)
