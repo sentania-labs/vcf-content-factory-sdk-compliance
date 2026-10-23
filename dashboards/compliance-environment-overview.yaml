@@ -130,9 +130,14 @@ widgets:
     title: "Compliance by vCenter and Object Type"
     coords: {x: 1, y: 7, w: 12, h: 8}
     self_provider: true
-    # Owner decision: keep the default (true) explicit so W6 populates
-    # with the first vCenter's alerts on load instead of sitting blank.
-    select_first_row: true
+    # Show-all-then-narrow (factory issue #177): with nothing selected the
+    # AlertList receiver lists every alert matching its filters, and it
+    # narrows once a row is clicked here. With true the first vCenter row
+    # was auto-selected, so W6 opened already narrowed to one vCenter.
+    # Evidence: knowledge/context/wire-formats/dashboard_sort_color_default_summary_rows.md
+    # section #177 (factory repo); the vendor Cluster Performance
+    # dashboard uses the same pattern.
+    select_first_row: false
     pin:
       adapter_kind: VMWARE
       resource_kind: "vSphere World"
