@@ -48,6 +48,14 @@ delta 6 is adapter build 57):
    and `vc.tls-ciphers` expects `NIST_2024_TLS_13_ONLY` (the vendor 9.1
    baseline).
 
+8. **Remediation comments (adapter build 98).** The vm.virtual-hardware
+   remediation loses its PowerShell comment lines and its trailing
+   comment, which otherwise turn the one-line recommendation into a
+   comment that runs nothing (`build98` in scripts/_adapter_deltas.py;
+   9.1 carries no VAMI policy command, so the other build-98 delta is a
+   no-op here). A workaround for factory issue #254: remove it once #254
+   lands.
+
 The deltas are applied by patching the imported factory modules
 in-process (module-level constants and the shared COMPONENT_MAP /
 SOURCE_ID_PREFIX_MAP dicts) rather than forking the 300-line driver.
@@ -201,11 +209,14 @@ def main(argv: list) -> int:
     def _apply(rows):
         got.update(deltas.build74(rows))
         got["tls"] = deltas.tls_ciphers_91(rows)
+        # Delta 8 (adapter build 98): see the module docstring.
+        got.update(deltas.build98(rows))
         return 0
 
     deltas.rewrite(argv[2], base, _apply)
-    if got != {"encryption": 3, "vami": 2, "tls": 1}:
-        raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
+    if got != {"encryption": 3, "vami": 2, "tls": 1,
+               "unproven_remediation": 0, "comments": 1}:
+        raise SystemExit(f"ERROR: unexpected build-74/98 delta counts {got}")
     return 0
 
 

@@ -86,7 +86,8 @@ adapter never pushes):
   the control is scored. If that row has no usable remediation text
   (empty or N/A), the next-newest scored row with one is used. When the
   remediation text differs across the scored versions, the
-  recommendation says which SCG version it is from.
+  recommendation says which SCG version it is from and names only the
+  versions whose own fix differs (build 98).
 """
 
 from __future__ import annotations
@@ -307,7 +308,8 @@ def collect() -> list:
             if usable_remediation(r["remediation_text"]):
                 rem_idx, rem = idx, r["remediation_text"].strip()
                 break
-        distinct = {r["remediation_text"].strip() for _, r in versions
+        distinct = {" ".join(r["remediation_text"].split())
+                    for _, r in versions
                     if usable_remediation(r["remediation_text"])}
         priority = newest["priority"].strip()
         if priority not in SEVERITY:
@@ -324,6 +326,14 @@ def collect() -> list:
             "remediation_label": PROFILES[rem_idx][2] if rem_idx is not None
             else None,
             "remediation_differs": len(distinct) > 1,
+            # Build 98 (review of build 97 N2): the scored guides whose own
+            # usable fix differs from the one shown. Guides with no fix
+            # are not "worded differently" and are not named.
+            "remediation_others": [
+                PROFILES[i][2] for i, r in versions
+                if usable_remediation(r["remediation_text"])
+                and " ".join(r["remediation_text"].split())
+                != " ".join(rem.split())],
         })
     controls.sort(key=lambda c: (KIND_ORDER.index(c["resource_kind"]),
                                  c["control_id"]))
@@ -338,23 +348,45 @@ def collect() -> list:
     return controls
 
 
+# Build 98 (review of build 97 W2): controls whose vendor command the
+# drivers drop as unproven (scripts/_adapter_deltas.py,
+# _UNPROVEN_REMEDIATION). The sentence says why no command is given and
+# where the vendor puts the setting (SCG 9.1 "Setting Location").
+_VAMI_ROOT_EXPIRY_NOTE = (
+    " Some guides print a PowerCLI command that sets the appliance-wide "
+    "local-accounts policy (com.vmware.appliance.local_accounts.policy); "
+    "this control reads the root account's own password expiration, which "
+    "that command is not known to change, so it is not given here. The "
+    "SCG 9.1 guide places the root account setting in the vCenter Server "
+    "Management Interface (VAMI) under Administration.")
+NO_COMMAND_NOTE = {
+    "vc.vami-password-max-age": _VAMI_ROOT_EXPIRY_NOTE,
+    "vc.vami-administration-password-expiration": _VAMI_ROOT_EXPIRY_NOTE,
+}
+
+
 def recommendation_text(c: dict) -> str:
     applies = ", ".join(c["labels"])
     if c["remediation_label"] is None:
-        return (f"The Security Configuration Guide gives no remediation "
-                f"command for {c['control_id']}. Review the control "
+        lead = ("No remediation command is given"
+                if c["control_id"] in NO_COMMAND_NOTE else
+                "The Security Configuration Guide gives no remediation "
+                "command")
+        return (f"{lead} for {c['control_id']}. Review the control "
                 f"description in the {c['newest_label']} guide and correct "
                 f"the setting so that its Actual value matches Expected "
                 f"(both are on the object under VCF-CF Compliance|"
-                f"{c['control_id']}). Scored in: {applies}.")
+                f"{c['control_id']})."
+                f"{NO_COMMAND_NOTE.get(c['control_id'], '')} "
+                f"Scored in: {applies}.")
     text = c["remediation"]
     if c["remediation_differs"]:
-        others = ", ".join(x for x in c["labels"]
-                           if x != c["remediation_label"])
+        others = c["remediation_others"]
+        verb = "words" if len(others) == 1 else "word"
         note = (f" (Remediation from {c['remediation_label']}, the newest "
-                f"guide with a fix for this control. {others} word the fix "
-                f"differently; the object's profile_name shows which guide "
-                f"applies to it.)")
+                f"guide with a fix for this control. {', '.join(others)} "
+                f"{verb} the fix differently; the object's profile_name shows "
+                f"which guide applies to it. Scored in: {applies}.)")
     else:
         note = f" (Source: {c['remediation_label']}. Scored in: {applies}.)"
     return text + note

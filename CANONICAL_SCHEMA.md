@@ -402,7 +402,7 @@ Sources currently in use:
 Single-line PowerCLI/esxcli command suitable for embedding in symptom
 messages. Normalizers strip newlines, collapse whitespace, and CSV-escape
 quotes and commas. Where the source has no remediation command, the
-column is empty.
+column is empty or `N/A`.
 
 ## Normalizers
 
@@ -432,6 +432,17 @@ Per-source Python scripts under `scripts/`:
   field; a distributed switch's `config.policy` is DVSPolicy and never
   had it, so every switch read it as unreadable). SCG 9.1 already maps
   the control that way; the id and alert are now shared.
+  Build 98 (`build98`, applied by the 8.0, 9.0 and 9.1 drivers) adds
+  two remediation deltas, both keyed by control_id. (1) The vendor's
+  command for `vc.vami-password-max-age` and
+  `vc.vami-administration-password-expiration` sets the appliance-wide
+  local-accounts policy, while the adapter reads the root account's own
+  `max_days_between_password_change`; the command is not known to change
+  that field, so it becomes `N/A` and the recommendation says why. (2) The
+  `vm.virtual-hardware` remediation is a multi-line vendor script joined
+  on ` ; `; its comment lines and trailing comment are stripped, since a
+  leading `#` makes the one-line recommendation run nothing. (2) is a
+  workaround for factory issue #254 and goes when #254 lands.
 - `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
   (this repo's `scripts/`; a thin delta driver over the factory's
   9.x normalizer — 9.1 drops the embedded-newline header cells,
