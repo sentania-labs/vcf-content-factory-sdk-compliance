@@ -189,6 +189,7 @@ widgets:
     title: "Open Compliance Alerts"
     coords: {x: 1, y: 27, w: 12, h: 7}
     criticality: [2, 3, 4]
+    status: [0]  # active only; an empty list means no status filter and lists canceled alerts too (investigation 2026-10-24 part 2)
     mode: all
     # depth 4: input is a VMwareAdapter Instance (vCenter); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
     depth: 4
