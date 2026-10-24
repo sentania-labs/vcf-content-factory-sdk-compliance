@@ -95,7 +95,9 @@ objects are non-compliant, how many have no guide for their version, how
 many were scored (so a 0 non-compliant reading is never shown without its
 denominator), and how each vCenter is doing broken down by object type. Further down it
 shows how many objects are on each SCG version, the score trend and the
-open compliance alerts (both of those have open bugs; see Known issues).
+open compliance alerts. The alert list shows every compliance alert when
+the page opens; click a vCenter in the compliance-by-vCenter table to
+narrow it to that vCenter and the objects under it.
 
 **ESX Hosts** starts with a scope. Pick a vCenter, or all of vSphere,
 and its hosts are listed worst first with their version, the guide
@@ -287,17 +289,6 @@ The full walkthrough, with permissions, ports and troubleshooting, is in
   overrides file.
 
 ## Known issues
-
-- [#30](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/30):
-  the "Failing Controls on Selected ..." panels on the ESX Hosts, VMs and
-  vCenter & Networking dashboards are empty. Until it's fixed, open the
-  object and look under All Metrics, VCF-CF Compliance.
-- [#31](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/31):
-  the Open Compliance Alerts widget on the overview is empty. The alerts
-  themselves are raised; see them in the Alerts list.
-- [#32](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/32):
-  the Objects by SCG Version table only shows the 6.7, 7.0 and 8.0
-  columns.
 
 All open issues are on the
 [issue list](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues).
