@@ -366,10 +366,15 @@ A third reserved form: an `expected_value` of `vmx-<N> or higher` or
 version**. A read value `vmx-<M>` is compliant iff `M >= N` (numeric,
 so `vmx-9` is below `vmx-13`); a present value that is not
 `vmx-<digits>` is non-compliant. Absent / unreadable values never reach
-the comparison (same short-circuit as the other modes). SCG 7.0
-(`vmx-13 or newer`) and SCG 9.1 (`vmx-17 or higher`) use this form for
-`vm.virtual-hardware`; a bare `vmx-<N>` (SCG 8.0 and 9.0) keeps exact
-equality, as their row descriptions state.
+the comparison (same short-circuit as the other modes). Every bundled
+profile that scores `vm.virtual-hardware` uses this form: SCG 7.0
+(`vmx-13 or newer`), 8.0 (`vmx-21 or newer`), 9.0 (`vmx-19 or newer`)
+and 9.1 (`vmx-17 or higher`). The vendor CSVs phrase some baselines as
+a bare `vmx-<N>` under a title that says "N or newer"; the normalizers
+rewrite that to `vmx-<N> or newer`, keyed by control_id (below), so no
+profile scores the hardware version by exact match (build 97; exact
+match on 8.0 and 9.0 before it). A bare `vmx-<N>` that still reaches the
+evaluator, from an override for example, is plain equality.
 
 These tokens are reserved values in the `expected_value` column. A
 literal expected value of `(non-empty)` or one beginning `not:` is not
@@ -408,6 +413,15 @@ Per-source Python scripts under `scripts/`:
 - `scripts/normalize_scg_v9.py` — VMware SCG 9.0 source format
   (different column order than 8.x; factory repo `scripts/`). Since build
   72 generated through `scripts/normalize_scg_v90.py` (same pattern).
+- Both factory normalizers are thin column-name wrappers over
+  `scripts/_compliance_normalize.py` (factory), whose classifier chain and
+  scoring fix-ups are keyed by the version-independent `control_id`, not
+  by vendor SCG IDs or wording (factory #169). One rule therefore covers
+  every SCG version, including the drivers in this repo that build on
+  them. One of those rules (factory #170) rewrites the
+  `vm.virtual-hardware` baseline from a bare `vmx-N` to the
+  `vmx-N or newer` minimum; a baseline the vendor already phrases as a
+  floor (`vmx-17 or higher`) passes through unchanged.
 - `scripts/_adapter_deltas.py` (this repo, build 72): post-normalization
   deltas shared by the 7.0 / 8.0 / 9.0 drivers. Today one:
   `vds.network-reset-port` becomes `dvpg.network-reset-port` on
