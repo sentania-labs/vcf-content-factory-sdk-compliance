@@ -146,6 +146,13 @@ public final class ProfileSetTest {
 			T.check(ControlEvaluator.isVmxMinimumMode(vh.expectedValue),
 					prof + " vm.virtual-hardware uses the vmx minimum");
 		}
+		// Build 97 (compliance #62): the 20260612 vendor revisions put the
+		// 8.0 and 9.0 floor at vmx-17, like 9.1.
+		for (String prof : new String[] {"VMware_SCG_8.0", "VMware_SCG_9.0",
+				"VMware_SCG_9.1"}) {
+			T.eq("vmx-17 or higher", find(all.get(prof).controls,
+					"vm.virtual-hardware").expectedValue, prof + " hardware floor");
+		}
 
 		// 7.0 esx.etc-issue carries the real ESX option key case.
 		T.eq("Config.Etc.issue", find(all.get("VMware_SCG_7.0").controls,
