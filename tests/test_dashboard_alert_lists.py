@@ -11,14 +11,18 @@ the drift this test guards is now in the widget config:
   - the type filter is present and exactly ["15_21"]
   - no alert_definitions pin has crept back in
   - depth matches the documented per-dashboard value
+  - relationship_mode is `self` exactly where documented (absent
+    elsewhere, so the renderer's default applies)
   - every dashboard has exactly the expected AlertList count
 
 Expected depth per dashboard (see the comment above each depth in the YAML):
   compliance-environment-overview.yaml  4  (vCenter > Datacenter > Cluster
                                             > HostSystem > VirtualMachine)
-  compliance-esxi-hosts.yaml            1  (HostSystem > VirtualMachine)
+  compliance-esxi-hosts.yaml            1, self  (the host's own controls)
   compliance-vms.yaml                   1  (VirtualMachine)
-  compliance-vcenter-networking.yaml    4  (vCenter, cluster, vDS, portgroup)
+  compliance-vcenter-networking.yaml    1, self  (the selected vCenter,
+                                            cluster, vDS or portgroup's own
+                                            controls; build 101)
   compliance-world-summary.yaml         4  (input is the selected vCenter
                                             row: vCenter > Datacenter >
                                             Cluster > HostSystem >
@@ -50,8 +54,15 @@ EXPECTED_DEPTH = {
     "compliance-environment-overview.yaml": 4,
     "compliance-esxi-hosts.yaml": 1,
     "compliance-vms.yaml": 1,
-    "compliance-vcenter-networking.yaml": 4,
+    "compliance-vcenter-networking.yaml": 1,
     "compliance-world-summary.yaml": 4,
+}
+
+# dashboard file -> AlertList relationship_mode; absent means no
+# relationship_mode line (the renderer default)
+EXPECTED_MODE = {
+    "compliance-esxi-hosts.yaml": "self",
+    "compliance-vcenter-networking.yaml": "self",
 }
 
 EXPECTED_KINDS = {
@@ -85,7 +96,7 @@ def alert_widgets(text: str) -> list:
                    for l in w["lines"])]
 
 
-def widget_problems(widget: dict, depth: int) -> list:
+def widget_problems(widget: dict, depth: int, mode=None) -> list:
     """Human-readable contract violations for one AlertList widget."""
     problems = []
     code = [l.split("#", 1)[0].rstrip() for l in widget["lines"]]
@@ -101,6 +112,11 @@ def widget_problems(widget: dict, depth: int) -> list:
     if len(depths) != 1 or depths[0].split(":", 1)[1].strip() != str(depth):
         problems.append(f"{widget['id']}: depth must be {depth}, "
                         f"found {depths}")
+    modes = [l for l in code if re.match(r"^    relationship_mode:", l)]
+    found = [m.split(":", 1)[1].strip() for m in modes]
+    if found != ([mode] if mode else []):
+        problems.append(f"{widget['id']}: relationship_mode must be "
+                        f"{mode or 'absent'}, found {modes}")
     return problems
 
 
@@ -142,7 +158,8 @@ class DashboardAlertListTest(unittest.TestCase):
                 self.assertEqual(len(widgets), 1,
                                  f"{name}: expected one AlertList, "
                                  f"found {len(widgets)}")
-                problems = widget_problems(widgets[0], depth)
+                problems = widget_problems(widgets[0], depth,
+                                           EXPECTED_MODE.get(name))
                 self.assertEqual(problems, [], f"{name}: " + "; ".join(problems))
 
     def test_every_dashboard_is_covered(self):
