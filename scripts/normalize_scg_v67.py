@@ -343,7 +343,14 @@ def main(argv: list) -> int:
         print("usage: normalize_scg_v67.py <input.csv> <output.csv>",
               file=sys.stderr)
         return 2
-    return normalize(argv[1], argv[2])
+    rc = normalize(argv[1], argv[2])
+    if rc != 0:
+        return rc
+    # Build 100 post-condition: no `#` line comment survives (factory #254).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _adapter_deltas as deltas
+    deltas.assert_inline_ps_comments(argv[2], "6.7")
+    return 0
 
 
 if __name__ == "__main__":

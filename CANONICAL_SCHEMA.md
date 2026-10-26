@@ -445,6 +445,14 @@ Per-source Python scripts under `scripts/`:
   inline `<# ... #>` block comment, so the one-line recommendation runs
   and keeps the vendor's guidance. A remediation that is only comments,
   a commented-out vendor example, keeps its `#` lines.)
+  Every driver ends with `assert_inline_ps_comments` (build 100): the
+  run fails if any `remediation_text` keeps a PowerShell `#` line
+  comment outside `<# ... #>`, so a factory checkout older than #254
+  (1a758dc) cannot regenerate the `#`-led text with exit 0. The four
+  comment-only rows are exempt by `source_ref` (6.7
+  `esx.deactivate-cim`, `esx.deactivate-slp`; 7.0
+  `esx.iscsi-mutual-chap`, vCenter `dvpg.network-vgt`) and must stay
+  comment-only.
 - `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
   (this repo's `scripts/`; a thin delta driver over the factory's
   9.x normalizer — 9.1 drops the embedded-newline header cells,

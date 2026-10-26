@@ -68,6 +68,8 @@ def main(argv: list) -> int:
         deltas.build98(rows)) or 0)
     if got98 != {"unproven_remediation": 1}:
         raise SystemExit(f"ERROR: unexpected build-98 delta counts {got98}")
+    # Build 100 post-condition: no `#` line comment survives (factory #254).
+    deltas.assert_inline_ps_comments(argv[2], "8.0")
     print(f"[normalize_scg_v80] reset-port rows moved to portgroup: {n}",
           file=sys.stderr)
     return 0

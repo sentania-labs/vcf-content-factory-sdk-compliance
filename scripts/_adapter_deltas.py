@@ -8,6 +8,7 @@ fix lives in ONE place and regenerates reproducibly. Standard library only.
 from __future__ import annotations
 
 import csv
+import re
 from typing import Dict, List
 
 
@@ -214,3 +215,97 @@ def build98(rows: List[Dict[str, str]]) -> Dict[str, int]:
     was removed in build 100: factory #254 makes the shared normalizer
     keep PowerShell comments as inline block comments."""
     return {"unproven_remediation": drop_unproven_remediation(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Build 100 post-condition (review of build 100, W1).
+# ---------------------------------------------------------------------------
+
+# The only rows whose vendor remediation is nothing but `#` comments, keyed
+# by profile and keyed by source_ref (control_id is not unique: 7.0 has two
+# dvpg.network-vgt rows, and only the vCenter one is comment-only). They
+# stay `#`-led (there is no code to keep running), and no recommendation
+# carries them. Every other row must keep its comments as inline
+# `<# ... #>` blocks.
+COMMENT_ONLY_REMEDIATION = {
+    "6.7": frozenset({"SCG-6.7:ESXi.disable-cim",      # esx.deactivate-cim
+                      "SCG-6.7:ESXi.disable-slp"}),    # esx.deactivate-slp
+    "7.0": frozenset({"SCG-7.0:esxi-7.iscsi-mutual-chap",
+                      "SCG-7.0:vcenter-7.network-vgt"}),  # dvpg.network-vgt
+    "8.0": frozenset(),
+    "9.0": frozenset(),
+    "9.1": frozenset(),
+}
+
+# A `#` that starts a token: at the start of the text, or after whitespace,
+# a statement separator, a brace, a paren or a pipe.
+_LINE_COMMENT = re.compile(r"(?:^|(?<=[\s;{}()|]))#")
+
+
+def _ps_code_only(text: str):
+    """Return `text` with `<# ... #>` blocks and quoted strings blanked, or
+    None when a block comment is unterminated."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("<#", i):
+            j = text.find("#>", i + 2)
+            if j < 0:
+                return None
+            out.append(" ")
+            i = j + 2
+            continue
+        c = text[i]
+        if c in "'\"":
+            j = text.find(c, i + 1)
+            if j < 0:
+                out.append(text[i:])
+                break
+            out.append(" ")
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def assert_inline_ps_comments(path: str, profile: str) -> None:
+    """Fail the run when a PowerShell line comment survives in a
+    `remediation_text` outside `<# ... #>`.
+
+    Factory #254 (1a758dc) makes the shared normalizer turn each `#` comment
+    line of a multi-line remediation into an inline block comment, so a
+    pasted one-line remediation runs. A factory checkout from before #254
+    writes the `#` lines back, and everything after the first `#` is
+    commented out. This post-condition is what keeps that from regenerating
+    with exit 0. The rows in COMMENT_ONLY_REMEDIATION are exempt, but must
+    still be nothing but `#` comments, so a stale exemption also fails."""
+    exempt = COMMENT_ONLY_REMEDIATION[profile]
+    bad, seen = [], set()
+    with open(path, encoding="utf-8", newline="") as f:
+        for r in csv.DictReader(f):
+            cid, text = r["control_id"], r.get("remediation_text", "")
+            ref = r.get("source_ref", "")
+            if ref in exempt:
+                seen.add(ref)
+                parts = [p.strip() for p in text.split(" ; ")]
+                if not all(p.startswith("#") for p in parts):
+                    bad.append(f"{cid} {ref} (exempt as comment-only, "
+                               "but has code)")
+                continue
+            if "#" not in text:
+                continue
+            code = _ps_code_only(text)
+            if code is None:
+                bad.append(f"{cid} (unterminated <# block)")
+            elif _LINE_COMMENT.search(code):
+                bad.append(cid)
+    missing = sorted(exempt - seen)
+    if missing:
+        bad.extend(f"{ref} (exempt, but no such row)" for ref in missing)
+    if bad:
+        raise SystemExit(
+            f"ERROR: {path}: PowerShell line comment outside <# #> in "
+            f"remediation_text: {', '.join(bad)}. The factory normalizer "
+            "predates #254 (needs 1a758dc or later); update the factory "
+            "checkout and re-run.")

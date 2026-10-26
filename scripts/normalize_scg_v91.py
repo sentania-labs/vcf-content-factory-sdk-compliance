@@ -214,6 +214,8 @@ def main(argv: list) -> int:
     if got != {"encryption": 3, "vami": 2, "tls": 1,
                "unproven_remediation": 0}:
         raise SystemExit(f"ERROR: unexpected build-74/98 delta counts {got}")
+    # Build 100 post-condition: no `#` line comment survives (factory #254).
+    deltas.assert_inline_ps_comments(argv[2], "9.1")
     return 0
 
 
