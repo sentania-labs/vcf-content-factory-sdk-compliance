@@ -433,16 +433,18 @@ Per-source Python scripts under `scripts/`:
   had it, so every switch read it as unreadable). SCG 9.1 already maps
   the control that way; the id and alert are now shared.
   Build 98 (`build98`, applied by the 8.0, 9.0 and 9.1 drivers) adds
-  two remediation deltas, both keyed by control_id. (1) The vendor's
-  command for `vc.vami-password-max-age` and
+  a remediation delta keyed by control_id: the vendor's command for
+  `vc.vami-password-max-age` and
   `vc.vami-administration-password-expiration` sets the appliance-wide
   local-accounts policy, while the adapter reads the root account's own
   `max_days_between_password_change`; the command is not known to change
-  that field, so it becomes `N/A` and the recommendation says why. (2) The
-  `vm.virtual-hardware` remediation is a multi-line vendor script joined
-  on ` ; `; its comment lines and trailing comment are stripped, since a
-  leading `#` makes the one-line recommendation run nothing. (2) is a
-  workaround for factory issue #254 and goes when #254 lands.
+  that field, so it becomes `N/A` and the recommendation says why.
+  (Build 98's second delta, a comment strip on `vm.virtual-hardware`,
+  was removed in build 100: since factory #254 the shared normalizer
+  turns each PowerShell `#` comment in a multi-line remediation into an
+  inline `<# ... #>` block comment, so the one-line recommendation runs
+  and keeps the vendor's guidance. A remediation that is only comments,
+  a commented-out vendor example, keeps its `#` lines.)
 - `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
   (this repo's `scripts/`; a thin delta driver over the factory's
   9.x normalizer — 9.1 drops the embedded-newline header cells,

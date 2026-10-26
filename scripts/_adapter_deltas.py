@@ -8,7 +8,6 @@ fix lives in ONE place and regenerates reproducibly. Standard library only.
 from __future__ import annotations
 
 import csv
-import re
 from typing import Dict, List
 
 
@@ -166,7 +165,7 @@ def build74(rows: List[Dict[str, str]]) -> Dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Build 98 deltas (review of build 97, W2 and W3).
+# Build 98 deltas (review of build 97, W2; W3 removed in build 100).
 # ---------------------------------------------------------------------------
 
 # W2: the vendor's command for the VAMI root password expiration controls
@@ -210,56 +209,8 @@ def drop_unproven_remediation(rows: List[Dict[str, str]]) -> int:
     return n
 
 
-# W3: the vendor's multi-line vm.virtual-hardware script reaches the
-# canonical CSV joined on " ; " with its comment lines kept, so the
-# one-line recommendation starts with "#" and PowerShell runs none of it (a
-# trailing "# ..." on the $spec.Version line also comments out the
-# ReconfigVM_Task call). Workaround until factory issue #254 fixes the
-# shared normalizer: drop whole-line comments and trailing comments from
-# this control's remediation. The caveats those comments carried (verify
-# DR / standby hosts, snapshot first, not on VMware appliances) are in the
-# control's description, which is pushed with the result.
-# REMOVE this delta (and its calls in normalize_scg_v80/v90/v91.py) once
-# factory #254 lands: the factory output will then already be clean.
-_STRIP_COMMENTS_CONTROLS = ("vm.virtual-hardware",)
-_TRAILING_COMMENT = re.compile(r"\s+#\s.*$")
-
-
-def _strip_ps_comments(text: str) -> str:
-    out = []
-    for seg in text.split(" ; "):
-        s = seg.strip()
-        if not s or s.startswith("#"):
-            continue
-        m = _TRAILING_COMMENT.search(s)
-        # Only a "#" outside quotes starts a comment.
-        if m and s[:m.start()].count('"') % 2 == 0 and \
-                s[:m.start()].count("'") % 2 == 0:
-            s = s[:m.start()].rstrip()
-        out.append(s)
-    return " ; ".join(out)
-
-
-def strip_remediation_comments(rows: List[Dict[str, str]]) -> int:
-    """Apply the W3 workaround. Returns the number of rows changed; fails
-    the run if a stripped script is empty or still holds a comment."""
-    n = 0
-    for r in rows:
-        if r["control_id"] not in _STRIP_COMMENTS_CONTROLS:
-            continue
-        old = r.get("remediation_text", "")
-        if "#" not in old:
-            continue
-        new = _strip_ps_comments(old)
-        if not new or re.search(r"(^|\s)#", new):
-            raise SystemExit(f"ERROR: {r['control_id']} remediation still "
-                             f"holds a comment after stripping: {new!r}")
-        r["remediation_text"] = new
-        n += 1
-    return n
-
-
 def build98(rows: List[Dict[str, str]]) -> Dict[str, int]:
-    """Apply the build-98 deltas (8.0 / 9.0 / 9.1)."""
-    return {"unproven_remediation": drop_unproven_remediation(rows),
-            "comments": strip_remediation_comments(rows)}
+    """Apply the build-98 deltas (8.0 / 9.0 / 9.1). The W3 comment strip
+    was removed in build 100: factory #254 makes the shared normalizer
+    keep PowerShell comments as inline block comments."""
+    return {"unproven_remediation": drop_unproven_remediation(rows)}
