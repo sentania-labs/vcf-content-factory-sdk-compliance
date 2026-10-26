@@ -85,7 +85,8 @@ widgets:
     coords: {x: 6, y: 13, w: 7, h: 8}
     criticality: [2, 3, 4]
     mode: all
-    # depth 1: input is a HostSystem; its only compliance-bearing child level is VirtualMachine, 1 level.
+    # relationship_mode self, depth 1: only the selected host's own controls; VM controls live on the VMs dashboard.
+    relationship_mode: self
     depth: 1
     alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 

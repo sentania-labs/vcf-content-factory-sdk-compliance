@@ -71,8 +71,9 @@ widgets:
     coords: {x: 1, y: 20, w: 12, h: 7}
     criticality: [2, 3, 4]
     mode: all
-    # depth 4: input may be a vCenter instance (4 levels to VirtualMachine via Datacenter > Cluster > HostSystem), Cluster (2), vDS (2) or Distributed Port Group (1); 4 covers all.
-    depth: 4
+    # relationship_mode self, depth 1: only the selected object's own controls (vCenter, Cluster, vDS or Distributed Port Group); VM controls live on the VMs dashboard.
+    relationship_mode: self
+    depth: 1
     alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
 
 interactions:
