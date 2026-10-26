@@ -134,19 +134,25 @@ public final class ProfileSetTest {
 					prof + " scores dvpg.network-reset-port on the portgroup");
 		}
 
-		// vm.virtual-hardware: scored with the minimum comparison in 9.1
-		// (not in the overlay) and, since build 57, in 7.0.
-		for (String prof : new String[] {"VMware_SCG_7.0", "VMware_SCG_9.1"}) {
+		// vm.virtual-hardware: scored with the minimum comparison in every
+		// profile that has it (9.1 and, since build 57, 7.0; since build 97
+		// 8.0 and 9.0 too, factory #170: no profile scores it by exact
+		// match).
+		for (String prof : new String[] {"VMware_SCG_7.0", "VMware_SCG_8.0",
+				"VMware_SCG_9.0", "VMware_SCG_9.1"}) {
 			BenchmarkProfile.Control vh =
 					find(all.get(prof).controls, "vm.virtual-hardware");
 			T.check(vh.isEvaluable(), prof + " vm.virtual-hardware scored");
 			T.check(ControlEvaluator.isVmxMinimumMode(vh.expectedValue),
 					prof + " vm.virtual-hardware uses the vmx minimum");
 		}
-		// 8.0 / 9.0 keep exact equality (their descriptions say so).
-		T.check(!ControlEvaluator.isVmxMinimumMode(find(
-				all.get("VMware_SCG_8.0").controls, "vm.virtual-hardware")
-				.expectedValue), "8.0 vmx is exact");
+		// Build 97 (compliance #62): the 20260612 vendor revisions put the
+		// 8.0 and 9.0 floor at vmx-17, like 9.1.
+		for (String prof : new String[] {"VMware_SCG_8.0", "VMware_SCG_9.0",
+				"VMware_SCG_9.1"}) {
+			T.eq("vmx-17 or higher", find(all.get(prof).controls,
+					"vm.virtual-hardware").expectedValue, prof + " hardware floor");
+		}
 
 		// 7.0 esx.etc-issue carries the real ESX option key case.
 		T.eq("Config.Etc.issue", find(all.get("VMware_SCG_7.0").controls,

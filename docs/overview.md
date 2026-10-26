@@ -160,6 +160,14 @@ collected" alerts and the Host Compliance Score Degraded alert alike. The
 widget has no filter that separates them, and pinning all 143 alert
 definitions per widget was ruled out.
 
+On the Environment Overview nothing is selected when the page opens
+(build 97, factory #177), so Open Compliance Alerts lists every
+Compliance-type alert in the environment, not those of one object. Click
+a vCenter in Compliance by vCenter and Object Type and the list narrows
+to that vCenter and the objects under it. Before build 97 the first
+vCenter row was selected on load, so the list opened already narrowed to
+that vCenter.
+
 The Environment Overview's four tiles (Controls Passing, Non-Compliant
 Objects, Objects Without Benchmark, Objects Scored) and its score trend
 read the engine-computed `Rollup|Environment|*` metrics on the pack's own

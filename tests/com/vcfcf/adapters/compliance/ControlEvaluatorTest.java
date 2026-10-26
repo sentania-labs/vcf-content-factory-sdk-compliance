@@ -27,7 +27,9 @@ public final class ControlEvaluatorTest {
 				"vmx-13 or newer"), "100 >= 13 (numeric compare)");
 		T.check(!ControlEvaluator.vimPropertyMatches("garbage",
 				"vmx-17 or higher"), "unparseable actual fails");
-		// Bare vmx-N keeps exact equality (8.0 / 9.0 semantics unchanged).
+		// A bare vmx-N is plain equality. No bundled profile carries one
+		// since build 97 (all are vmx-N or newer / or higher), but an
+		// override can still set one.
 		T.check(ControlEvaluator.vimPropertyMatches("vmx-21", "vmx-21"),
 				"exact equal");
 		T.check(!ControlEvaluator.vimPropertyMatches("vmx-22", "vmx-21"),

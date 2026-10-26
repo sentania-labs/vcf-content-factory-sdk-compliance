@@ -366,10 +366,17 @@ A third reserved form: an `expected_value` of `vmx-<N> or higher` or
 version**. A read value `vmx-<M>` is compliant iff `M >= N` (numeric,
 so `vmx-9` is below `vmx-13`); a present value that is not
 `vmx-<digits>` is non-compliant. Absent / unreadable values never reach
-the comparison (same short-circuit as the other modes). SCG 7.0
-(`vmx-13 or newer`) and SCG 9.1 (`vmx-17 or higher`) use this form for
-`vm.virtual-hardware`; a bare `vmx-<N>` (SCG 8.0 and 9.0) keeps exact
-equality, as their row descriptions state.
+the comparison (same short-circuit as the other modes). Every bundled
+profile that scores `vm.virtual-hardware` uses this form: SCG 7.0
+(`vmx-13 or newer`), and 8.0, 9.0 and 9.1 (`vmx-17 or higher`). The
+8.0 and 9.0 floors are the vendor's 20260612 revisions (build 97,
+compliance #62); the 20260107 revisions carried a bare `vmx-21` (8.0)
+and `vmx-19` (9.0). The vendor CSVs phrase some baselines as
+a bare `vmx-<N>` under a title that says "N or newer"; the normalizers
+rewrite that to `vmx-<N> or newer`, keyed by control_id (below), so no
+profile scores the hardware version by exact match (build 97; exact
+match on 8.0 and 9.0 before it). A bare `vmx-<N>` that still reaches the
+evaluator, from an override for example, is plain equality.
 
 These tokens are reserved values in the `expected_value` column. A
 literal expected value of `(non-empty)` or one beginning `not:` is not
@@ -395,7 +402,7 @@ Sources currently in use:
 Single-line PowerCLI/esxcli command suitable for embedding in symptom
 messages. Normalizers strip newlines, collapse whitespace, and CSV-escape
 quotes and commas. Where the source has no remediation command, the
-column is empty.
+column is empty or `N/A`.
 
 ## Normalizers
 
@@ -408,6 +415,15 @@ Per-source Python scripts under `scripts/`:
 - `scripts/normalize_scg_v9.py` — VMware SCG 9.0 source format
   (different column order than 8.x; factory repo `scripts/`). Since build
   72 generated through `scripts/normalize_scg_v90.py` (same pattern).
+- Both factory normalizers are thin column-name wrappers over
+  `scripts/_compliance_normalize.py` (factory), whose classifier chain and
+  scoring fix-ups are keyed by the version-independent `control_id`, not
+  by vendor SCG IDs or wording (factory #169). One rule therefore covers
+  every SCG version, including the drivers in this repo that build on
+  them. One of those rules (factory #170) rewrites the
+  `vm.virtual-hardware` baseline from a bare `vmx-N` to the
+  `vmx-N or newer` minimum; a baseline the vendor already phrases as a
+  floor (`vmx-17 or higher`) passes through unchanged.
 - `scripts/_adapter_deltas.py` (this repo, build 72): post-normalization
   deltas shared by the 7.0 / 8.0 / 9.0 drivers. Today one:
   `vds.network-reset-port` becomes `dvpg.network-reset-port` on
@@ -416,6 +432,17 @@ Per-source Python scripts under `scripts/`:
   field; a distributed switch's `config.policy` is DVSPolicy and never
   had it, so every switch read it as unreadable). SCG 9.1 already maps
   the control that way; the id and alert are now shared.
+  Build 98 (`build98`, applied by the 8.0, 9.0 and 9.1 drivers) adds
+  two remediation deltas, both keyed by control_id. (1) The vendor's
+  command for `vc.vami-password-max-age` and
+  `vc.vami-administration-password-expiration` sets the appliance-wide
+  local-accounts policy, while the adapter reads the root account's own
+  `max_days_between_password_change`; the command is not known to change
+  that field, so it becomes `N/A` and the recommendation says why. (2) The
+  `vm.virtual-hardware` remediation is a multi-line vendor script joined
+  on ` ; `; its comment lines and trailing comment are stripped, since a
+  leading `#` makes the one-line recommendation run nothing. (2) is a
+  workaround for factory issue #254 and goes when #254 lands.
 - `scripts/normalize_scg_v91.py` — VMware SCG 9.1 source format
   (this repo's `scripts/`; a thin delta driver over the factory's
   9.x normalizer — 9.1 drops the embedded-newline header cells,
@@ -475,6 +502,20 @@ unchanged.
 - The SCG 6.7 workbook's `Deprecated` sheet (one control,
   `VM.Enable-VGA-Only-Mode`, retired from the guide) is not part of
   the baseline and is not converted.
+
+SCG 8.0 and 9.0 are vendor CSVs, copied byte for byte from upstream
+`main` (no conversion). Build 97 (compliance #62) re-ingested both from
+upstream commit `ea455b0` (2026-06-10):
+
+| Source CSV | Upstream file | Version | Was (upstream `7c4e302`) |
+|---|---|---|---|
+| `vmware_scg_8.0.csv` | `security-configuration-hardening-guide/vsphere/8.0/vmware-vsphere-security-configuration-guide-8-controls.csv` | 803-20260612-01 | 803-20260107-01 |
+| `vmware_scg_9.0.csv` | `security-configuration-hardening-guide/cloud-foundation/9.0/vmware-cloud-foundation-security-configuration-guide-90-controls.csv` | 902-20260612-01 | 901-20260107-01 |
+
+The scored control set did not change. `vm.virtual-hardware` drops to
+`vmx-17 or higher` in both, with the vendor's new remediation script;
+in 9.0 `vc.vami-password-max-age` gains a remediation command and three
+unscored controls swap between `powercli_only` and `manual_audit`.
 
 Regeneration, from the adapter repo root inside a factory checkout
 (the `git show` commands are in the `xlsx_to_csv.py` docstring).

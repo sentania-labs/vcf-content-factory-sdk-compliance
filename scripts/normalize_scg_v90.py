@@ -16,6 +16,11 @@ Deltas (scripts/_adapter_deltas.py):
 2. Build 74: host encryption rows read
    `esxcli:system.settings.encryption.get`, and the VAMI recipes are
    fixed (`build74` in scripts/_adapter_deltas.py).
+3. Build 98: the VAMI root password expiration row loses the vendor's
+   global-policy command (the adapter reads the root account's own field),
+   and the vm.virtual-hardware remediation loses its PowerShell comment
+   lines (`build98` in scripts/_adapter_deltas.py). The comment strip is a
+   workaround for factory issue #254; remove it once #254 lands.
 
 The factory normalizer's own output is otherwise unchanged.
 """
@@ -56,6 +61,14 @@ def main(argv: list) -> int:
         deltas.build74(rows)) or 0)
     if got != {"encryption": 3, "vami": 3}:
         raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
+    # Build 98 (review of build 97 W2, W3): drop the unproven VAMI policy
+    # command and strip the PowerShell comments from vm.virtual-hardware.
+    # The comment strip is a workaround: remove it when factory #254 lands.
+    got98 = {}
+    deltas.rewrite(argv[2], base, lambda rows: got98.update(
+        deltas.build98(rows)) or 0)
+    if got98 != {"unproven_remediation": 1, "comments": 1}:
+        raise SystemExit(f"ERROR: unexpected build-98 delta counts {got98}")
     print(f"[normalize_scg_v90] reset-port rows moved to portgroup: {n}",
           file=sys.stderr)
     return 0

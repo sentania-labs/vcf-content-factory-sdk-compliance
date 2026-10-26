@@ -1,6 +1,6 @@
 name: "VCF Content Factory Compliance"
 version: "1.0.0"
-build_number: 96
+build_number: 99
 adapter_kind: "vcfcf_compliance"
 tier: 2
 description: >
@@ -18,6 +18,9 @@ description: >
   SCG remediation as the recommendation) per scored control.
 entry_class: "com.vcfcf.adapters.compliance.ComplianceAdapter"
 released: false
+# Build 97 (factory #229): every bundled view and dashboard name carries the
+# "[VCF Content Factory] " prefix; validate-sdk enforces it as an error.
+content_naming: factory_prefixed
 # Build 87 (build 86 review W2): the one relationship the adapter makes
 # outside describe.xml, declared so the generated docs show it.
 cross_mp_edges:

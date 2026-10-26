@@ -1,4 +1,4 @@
-# VCF Content Factory Compliance — Documentation
+# VCF Content Factory Compliance Documentation
 
 > Generated index. The SVG diagram and per-kind table are regenerated on every
 > build; prose sections (overview, installing) are hand-curated.
@@ -18,7 +18,7 @@
 
 ## Cross-MP Relationships
 
-These edges are created at collection time via the Suite API and never appear in `describe.xml` — they are declared explicitly in `adapter.yaml` (`cross_mp_edges`) so this generated docset doesn't silently omit them. *Italic* endpoints belong to a foreign management pack; `code` endpoints are owned by this adapter.
+These edges are created at collection time via the Suite API and never appear in `describe.xml`. They are declared explicitly in `adapter.yaml` (`cross_mp_edges`) so this generated docset doesn't silently omit them. *Italic* endpoints belong to a foreign management pack; `code` endpoints are owned by this adapter.
 
 | Parent | Child | Description |
 |--------|-------|-------------|
@@ -27,7 +27,7 @@ These edges are created at collection time via the Suite API and never appear in
 ## Quick Reference
 
 - **Adapter kind:** `vcfcf_compliance`
-- **Version:** 0.0.0.96
+- **Version:** 0.0.0.99
 - **Traversal spec:** (none)
 - **Resource kinds:** 1
 - **Cross-MP relationships:** 1 (see [Cross-MP Relationships](#cross-mp-relationships) below)
