@@ -17,10 +17,10 @@ Deltas (scripts/_adapter_deltas.py):
    `esxcli:system.settings.encryption.get`, and the VAMI recipes are
    fixed (`build74` in scripts/_adapter_deltas.py).
 3. Build 98: the VAMI root password expiration row loses the vendor's
-   global-policy command (the adapter reads the root account's own field),
-   and the vm.virtual-hardware remediation loses its PowerShell comment
-   lines (`build98` in scripts/_adapter_deltas.py). The comment strip is a
-   workaround for factory issue #254; remove it once #254 lands.
+   global-policy command (the adapter reads the root account's own field;
+   `build98` in scripts/_adapter_deltas.py). The build-98 comment strip on
+   vm.virtual-hardware was removed in build 100: factory #254 keeps
+   PowerShell comments as inline block comments.
 
 The factory normalizer's own output is otherwise unchanged.
 """
@@ -61,14 +61,15 @@ def main(argv: list) -> int:
         deltas.build74(rows)) or 0)
     if got != {"encryption": 3, "vami": 3}:
         raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
-    # Build 98 (review of build 97 W2, W3): drop the unproven VAMI policy
-    # command and strip the PowerShell comments from vm.virtual-hardware.
-    # The comment strip is a workaround: remove it when factory #254 lands.
+    # Build 98 (review of build 97 W2): drop the unproven VAMI policy
+    # command. (The W3 comment strip was removed in build 100, factory #254.)
     got98 = {}
     deltas.rewrite(argv[2], base, lambda rows: got98.update(
         deltas.build98(rows)) or 0)
-    if got98 != {"unproven_remediation": 1, "comments": 1}:
+    if got98 != {"unproven_remediation": 1}:
         raise SystemExit(f"ERROR: unexpected build-98 delta counts {got98}")
+    # Build 100 post-condition: no `#` line comment survives (factory #254).
+    deltas.assert_inline_ps_comments(argv[2], "9.0")
     print(f"[normalize_scg_v90] reset-port rows moved to portgroup: {n}",
           file=sys.stderr)
     return 0

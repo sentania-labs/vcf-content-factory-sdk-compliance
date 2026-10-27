@@ -235,6 +235,8 @@ def main(argv: list) -> int:
     if got != {"encryption": 1, "vami": 2}:
         raise SystemExit(f"ERROR: unexpected build-74 delta counts {got}")
     base.write_canonical(argv[2], out_rows)
+    # Build 100 post-condition: no `#` line comment survives (factory #254).
+    deltas.assert_inline_ps_comments(argv[2], "7.0")
     return 0
 
 
