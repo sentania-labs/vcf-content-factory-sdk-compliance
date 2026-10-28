@@ -239,8 +239,10 @@ public final class Build95TriageTest {
 				{"private void collectClusters(",
 						"for (VSphereClient.ClusterInfo cluster : clusters) { "
 						+ "stop.check(\"cluster \" + cluster.name);"},
+				// Build 103: the shadow re-reads the bulk-scored objects
+				// per object; the stop check comes first in that loop.
 				{"private void runShadow(",
-						"for (VSphereClient.BulkRow row : rows) { "
+						": sh.controls.entrySet()) { String moid = e.getKey(); "
 						+ "stop.check(\"bulk shadow \""},
 				{"private void cleanStaleControls(",
 						"i += CLEANUP_BATCH) { stop.check(\"per-control "
@@ -251,10 +253,16 @@ public final class Build95TriageTest {
 			T.check(b.contains(l[1]), l[0] + " checks the stop flag first "
 					+ "in its loop");
 		}
-		// runShadow does not swallow the stop; the cycle logs it.
-		OverridesTest.inOrder(OverridesTest.body(ca, "private void runShadow("),
-				"runShadow", "catch (InterruptedException e) { throw e; }",
-				"catch (Exception e) {");
+		// runShadow does not swallow the stop; the cycle logs it. Build
+		// 103 review N4: its catch-all (dev preview only, the shadow never
+		// fails the cycle) comes after a catch that rethrows the stop.
+		String rs = OverridesTest.body(ca, "private void runShadow(");
+		int stopCatch = rs.indexOf(
+				"catch (InterruptedException e) { throw e; }");
+		int catchAll = rs.indexOf("catch (Exception e)");
+		T.check(stopCatch >= 0 && catchAll > stopCatch && rs.indexOf(
+				"catch (") == stopCatch, "runShadow rethrows the stop "
+				+ "before its catch-all");
 		// Review N4: an abandoned cycle logs ONE WARN carrying where it
 		// stopped and the timing summary; no second "failed" line.
 		String abandoned = ComplianceDecisions.cycleEndLine(false,

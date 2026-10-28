@@ -97,18 +97,28 @@ public final class VimOptions {
 			if (val == null) {
 				throw new ReadFault(what + ": " + propPath + " has no value");
 			}
-			Map<String, String> out = new HashMap<>();
-			for (Element item : children(val, null)) {
-				String key = childText(item, "key");
-				String value = childText(item, "value");
-				if (key != null && value != null) out.put(key, value);
-			}
-			return out;   // present; empty only when the value is empty
+			return fromOptionList(val);   // empty only when the value is empty
 		}
 		String fault = missingSetFault(rv, propPath);
 		throw new ReadFault(what + ": " + propPath + " not returned"
 				+ (fault != null ? " (fault " + fault + ")"
 				: " (unset: inaccessible or orphaned object)"));
+	}
+
+	/**
+	 * The key/value pairs of an OptionValue list ({@code <val>} of
+	 * {@code config.extraConfig} or {@code config.option}). Build 103: the
+	 * one place both the per-object and the bulk read take them, so the
+	 * two read the same strings (text content, untrimmed).
+	 */
+	public static Map<String, String> fromOptionList(Element val) {
+		Map<String, String> out = new HashMap<>();
+		for (Element item : children(val, null)) {
+			String key = childText(item, "key");
+			String value = childText(item, "value");
+			if (key != null && value != null) out.put(key, value);
+		}
+		return out;
 	}
 
 	/**

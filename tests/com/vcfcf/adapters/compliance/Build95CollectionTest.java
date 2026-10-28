@@ -25,9 +25,9 @@ import java.util.Set;
  *       cycle, and a failed login leaves no session behind (review W3);</li>
  *   <li>connections are reused, and a server-closed connection is
  *       replaced cleanly;</li>
- *   <li>bulk reads page with RetrievePropertiesEx /
- *       ContinueRetrievePropertiesEx, fix invalid paths, fail (and cancel)
- *       on a failed page;</li>
+ *   <li>bulk reads fix invalid paths and remember the accepted set
+ *       (build 103: through the primary page read; the build 95
+ *       container-view read is removed);</li>
  *   <li>bulk evaluation agrees with the per-object path on the same data,
  *       and the comparator reports a disagreement when they differ;</li>
  *   <li>CycleMetrics charges nested phases exclusively.</li>
@@ -52,8 +52,7 @@ public final class Build95CollectionTest {
 		failedLoginLeavesNoSession();
 		esxcliMarksSurviveRelogin();
 		connectionReuse();
-		bulkPaging();
-		bulkPathFixAndFailedPage();
+		bulkPathFix();
 		bulkAgreesWithPerObject();
 		comparator();
 		shadowSwitchAndPageBytes();
@@ -417,66 +416,33 @@ public final class Build95CollectionTest {
 		}
 	}
 
-	/** 5 VMs, pages by maxObjects with tokens. */
-	static FakeVCenter.Resp pagedVms(FakeVCenter.Req r, int total) {
-		String op = r.action.replace("urn:vim25/", "");
-		int max;
-		int from;
-		if (op.equals("RetrievePropertiesEx")) {
-			max = Integer.parseInt(FakeVCenter.tag(r.body, "maxObjects"));
-			from = 0;
-		} else if (op.equals("ContinueRetrievePropertiesEx")) {
-			String[] t = FakeVCenter.tag(r.body, "token").split(":");
-			from = Integer.parseInt(t[0]);
-			max = Integer.parseInt(t[1]);
-		} else {
-			return FakeVCenter.fault("NotImplemented", op);
+	/** One RetrieveProperties page: every object asked for, config.version. */
+	static FakeVCenter.Resp pageOfVms(FakeVCenter.Req r) {
+		StringBuilder b = new StringBuilder();
+		for (String[] o : FakeVCenter.objs(r.body)) {
+			b.append(FakeVCenter.objectContent("returnval", o[0], o[1],
+					FakeVCenter.vals("config.version", "<val>vmx-21</val>")));
 		}
-		StringBuilder b = new StringBuilder("<returnval>");
-		int to = Math.min(total, from + max);
-		if (to < total) b.append("<token>").append(to).append(':').append(max)
-				.append("</token>");
+		return FakeVCenter.ok("RetrieveProperties", b.toString());
+	}
+
+	static List<VSphereClient.MoRef> vmRefs(int from, int to) {
+		List<VSphereClient.MoRef> out = new ArrayList<>();
 		for (int i = from; i < to; i++) {
-			b.append(FakeVCenter.objectContent("objects", "VirtualMachine",
-					"vm-" + i, FakeVCenter.vals("config.version",
-							"<val>vmx-21</val>")));
+			out.add(new VSphereClient.MoRef("VirtualMachine", "vm-" + i));
 		}
-		return FakeVCenter.ok(op, b.append("</returnval>").toString());
+		return out;
 	}
 
-	static void bulkPaging() throws Exception {
+	/**
+	 * Build 103 (review N3: the build 95 container-view read is removed):
+	 * the path fixes now run through the primary bulk read. A subtype path
+	 * is shortened; a host path that would need the whole config is
+	 * dropped, never shortened to config; the accepted set is remembered;
+	 * the fixes add up over the pages of one BulkStats (review N2).
+	 */
+	static void bulkPathFix() throws Exception {
 		try (FakeVCenter f = new FakeVCenter()) {
-			f.handler = r -> pagedVms(r, 5);
-			VSphereClient c = f.client();
-			c.ensureConnected();
-			List<Integer> sizes = new ArrayList<>();
-			List<String> moids = new ArrayList<>();
-			VSphereClient.BulkStats st = c.retrieveBulk("VirtualMachine",
-					Arrays.asList("config.version"), 2, rows -> {
-						sizes.add(rows.size());
-						for (VSphereClient.BulkRow row : rows) {
-							moids.add(row.ref.value);
-							T.check(row.exact("config.version") != null,
-									"value present");
-						}
-					});
-			T.eq(Arrays.asList(2, 2, 1), sizes, "pages handed over in order");
-			T.eq(Arrays.asList("vm-0", "vm-1", "vm-2", "vm-3", "vm-4"), moids,
-					"every object once");
-			T.eq(3, st.pages, "three pages");
-			T.eq(5, st.objects, "five objects");
-			T.eq(1, f.count("RetrievePropertiesEx"), "one first call");
-			T.eq(2, f.count("ContinueRetrievePropertiesEx"), "two continues");
-			T.eq(1, f.count("DestroyView"), "view destroyed");
-			T.check(f.of("RetrievePropertiesEx").get(0).body
-					.contains("<maxObjects>2</maxObjects>"), "page size sent");
-		}
-	}
-
-	static void bulkPathFixAndFailedPage() throws Exception {
-		try (FakeVCenter f = new FakeVCenter()) {
-			// A subtype path is invalid; a host path that would need the
-			// whole config is dropped, never shortened to config.
 			f.handler = r -> {
 				List<String> ps = FakeVCenter.pathSets(r.body);
 				for (String p : ps) {
@@ -485,88 +451,40 @@ public final class Build95CollectionTest {
 						return FakeVCenter.invalidProperty(p);
 					}
 				}
-				return FakeVCenter.ok("RetrievePropertiesEx", "<returnval/>");
+				return FakeVCenter.ok("RetrieveProperties", "");
 			};
 			VSphereClient c = f.client();
 			c.ensureConnected();
-			VSphereClient.BulkStats st = c.retrieveBulk(
-					"DistributedVirtualPortgroup", Arrays.asList(
-							"config.defaultPortConfig.securityPolicy",
-							"config.policy.portConfigResetAtDisconnect"),
-					100, rows -> { });
+			List<VSphereClient.MoRef> pg = Arrays.asList(new VSphereClient.MoRef(
+					"DistributedVirtualPortgroup", "dvportgroup-1"));
+			VSphereClient.BulkStats st = new VSphereClient.BulkStats();
+			c.retrieveObjects("DistributedVirtualPortgroup", pg, Arrays.asList(
+					"config.defaultPortConfig.securityPolicy",
+					"config.policy.portConfigResetAtDisconnect"), st);
 			T.eq(1, st.pathFixes, "one invalid path fixed");
 			T.eq(Arrays.asList("config.policy.portConfigResetAtDisconnect",
 					"config.defaultPortConfig"), st.pathSet, "shortened set");
-			int before = f.count("RetrievePropertiesEx");
-			c.retrieveBulk("DistributedVirtualPortgroup", Arrays.asList(
+			int before = f.count("RetrieveProperties");
+			c.retrieveObjects("DistributedVirtualPortgroup", pg, Arrays.asList(
 					"config.defaultPortConfig.securityPolicy",
-					"config.policy.portConfigResetAtDisconnect"), 100, rows -> { });
-			T.eq(before + 1, f.count("RetrievePropertiesEx"),
-					"accepted set remembered: no fix calls next cycle");
+					"config.policy.portConfigResetAtDisconnect"), st);
+			T.eq(before + 1, f.count("RetrieveProperties"),
+					"accepted set remembered: no fix calls on the next page");
+			T.eq(1, st.pathFixes, "review N2: the first page's fix is still "
+					+ "counted after the second page");
 
-			VSphereClient.BulkStats hs = c.retrieveBulk("HostSystem",
-					Arrays.asList("config.firewall", "config.service"), 10,
-					rows -> { });
+			VSphereClient.BulkStats hs = new VSphereClient.BulkStats();
+			c.retrieveObjects("HostSystem", Arrays.asList(new VSphereClient.MoRef(
+					"HostSystem", "host-1")), Arrays.asList("config.firewall",
+					"config.service"), hs);
 			T.eq(Arrays.asList("config.firewall"), hs.droppedPaths,
 					"host path dropped rather than fetching all of config");
 			T.eq(Arrays.asList("config.service"), hs.pathSet, "kept path");
-		}
-		try (FakeVCenter f = new FakeVCenter()) {
-			f.handler = r -> r.action.endsWith("ContinueRetrievePropertiesEx")
-					? FakeVCenter.fault("SystemError", "page lost")
-					: pagedVms(r, 5);
-			VSphereClient c = f.client();
-			c.ensureConnected();
-			List<Integer> sizes = new ArrayList<>();
-			boolean threw = false;
-			try {
-				c.retrieveBulk("VirtualMachine", Arrays.asList("config.version"),
-						2, rows -> sizes.add(rows.size()));
-			} catch (VimOptions.ReadFault e) {
-				threw = e.getMessage().contains("page 2 failed");
-			}
-			T.check(threw, "a failed page fails the bulk read of the kind");
-			T.eq(Arrays.asList(2), sizes, "only the first page was handed over");
-			T.eq(1, f.count("CancelRetrievePropertiesEx"),
-					"remaining pages cancelled");
-			T.eq(1, f.count("DestroyView"), "view destroyed on failure");
-		}
-		// Review N1: a page handler that throws (Stop, an evaluation error)
-		// cancels the retrieval still open: the token for the NEXT page,
-		// which vCenter has handed out and nobody will continue.
-		for (int failOn = 1; failOn <= 3; failOn++) {
-			try (FakeVCenter f = new FakeVCenter()) {
-				f.handler = r -> pagedVms(r, 5);
-				VSphereClient c = f.client();
-				c.ensureConnected();
-				int[] seen = {0};
-				final int stopAt = failOn;
-				boolean threw = false;
-				try {
-					c.retrieveBulk("VirtualMachine",
-							Arrays.asList("config.version"), 2, rows -> {
-								if (++seen[0] == stopAt) {
-									throw new InterruptedException("stop");
-								}
-							});
-				} catch (InterruptedException e) {
-					threw = true;
-				}
-				T.check(threw, "the handler's exception is rethrown");
-				List<FakeVCenter.Req> cancels =
-						f.of("CancelRetrievePropertiesEx");
-				if (failOn == 3) {
-					T.eq(0, cancels.size(), "last page: nothing left open");
-				} else {
-					T.eq(1, cancels.size(), "page " + failOn + ": one cancel");
-					T.eq((failOn * 2) + ":2", FakeVCenter.tag(
-							cancels.get(0).body, "token"),
-							"page " + failOn + ": the next page's token");
-				}
-				T.eq(failOn - 1, f.count("ContinueRetrievePropertiesEx"),
-						"no page requested after the throw");
-				T.eq(1, f.count("DestroyView"), "view destroyed");
-			}
+			c.retrieveObjects("HostSystem", Arrays.asList(new VSphereClient.MoRef(
+					"HostSystem", "host-2")), Arrays.asList("config.firewall",
+					"config.service"), hs);
+			T.eq(Arrays.asList("config.firewall"), hs.droppedPaths,
+					"a dropped path is named once over the pages");
 		}
 	}
 
@@ -593,20 +511,19 @@ public final class Build95CollectionTest {
 						"dvportgroup-1|config.policy.portConfigResetAtDisconnect",
 						BOOL_TRUE);
 				f.handler = r -> {
-					if (r.action.endsWith("RetrievePropertiesEx")) {
-						for (String p : FakeVCenter.pathSets(r.body)) {
+					List<String> ps = FakeVCenter.pathSets(r.body);
+					if (ps.size() > 1) {   // the bulk page (one path is per object)
+						for (String p : ps) {
 							if (p.startsWith("config.defaultPortConfig.")) {
 								return FakeVCenter.invalidProperty(p);
 							}
 						}
-						return FakeVCenter.ok("RetrievePropertiesEx",
-								"<returnval>" + FakeVCenter.objectContent(
-										"objects", kind, "dvportgroup-1",
-										FakeVCenter.vals(
+						return FakeVCenter.ok("RetrieveProperties",
+								FakeVCenter.objectContent("returnval", kind,
+										"dvportgroup-1", FakeVCenter.vals(
 										"config.policy.portConfigResetAtDisconnect",
 										BOOL_TRUE, "config.defaultPortConfig",
-										String.format(PG_DEFAULT, bulkPromisc)))
-								+ "</returnval>");
+										String.format(PG_DEFAULT, bulkPromisc))));
 					}
 					return perObject(r, table, "config.defaultPortConfig.");
 				};
@@ -622,13 +539,16 @@ public final class Build95CollectionTest {
 				ShadowComparator sc = new ShadowComparator("Portgroup");
 				sc.record("dvportgroup-1", "pg1", per.controlResults,
 						VSphereClient.bulkComparable(kind, ctl));
-				c.retrieveBulk(kind, VSphereClient.bulkPaths(kind, ctl), 100,
-						rows -> {
-							for (VSphereClient.BulkRow row : rows) {
-								sc.compare(row.ref.value,
-										c.evaluateBulkRow(row, ctl, "pg1"));
-							}
-						});
+				Map<String, VSphereClient.BulkRow> rows = c.retrieveObjects(
+						kind, Arrays.asList(pg), VSphereClient.bulkPaths(kind,
+								ctl), null);
+				int before = f.count("RetrieveProperties");
+				sc.compare("dvportgroup-1", ControlEvaluator.evaluateVimProperties(
+						ctl, c.readVimProperties(pg, ctl,
+								rows.get("dvportgroup-1")), "pg1",
+						VSphereClient.UNREADABLE).controlResults);
+				T.eq(before, f.count("RetrieveProperties"),
+						"scored from the row: no per-object call");
 				T.eq(3L, sc.controlsCompared(), "three controls compared");
 				if (bulkPromisc.equals("false")) {
 					T.eq(0L, sc.disagreements(), "same data: no disagreement");
@@ -640,21 +560,18 @@ public final class Build95CollectionTest {
 				}
 			}
 		}
-		// Advanced settings: a host's config.option evaluated like
-		// QueryOptions; a missing value is UNREADABLE, never a pass.
+		// Advanced settings: a host's config.option is read in bulk; a row
+		// without it gives no map (the caller reads QueryOptions per
+		// object; Build103BulkPrimaryTest.missingBothWaysIsUnreadable).
 		List<BenchmarkProfile.Control> hostCtl = Arrays.asList(
 				adv("esx.shell", "HostSystem", "UserVars.ESXiShellTimeOut",
 						"900"));
 		T.check(VSphereClient.bulkPaths("HostSystem", hostCtl)
 				.contains("config.option"), "hosts read config.option");
-		VSphereClient c = new VSphereClient("http://127.0.0.1:9/sdk", "u", "p",
-				null, null, true);
 		VSphereClient.BulkRow none = new VSphereClient.BulkRow(
 				new VSphereClient.MoRef("HostSystem", "host-1"));
-		List<ControlEvaluator.ControlResult> r = c.evaluateBulkRow(none,
-				hostCtl, "esx01");
-		T.eq(1, r.size(), "one result");
-		T.check(r.get(0).unreadable, "no config.option: unreadable");
+		T.check(VSphereClient.advancedOf(none) == null,
+				"no config.option in the row: no map, never an empty one");
 	}
 
 	static void comparator() {
@@ -733,7 +650,7 @@ public final class Build95CollectionTest {
 		// Decision point 6: the switch follows the build's version stamp
 		// (Build95UnreadableTest.shadowMode runs ShadowMode itself).
 		T.check(!ca.contains("BULK_SHADOW"), "no compiled-in default");
-		T.check(ca.contains("new ShadowComparator(kind, enabled)"),
+		T.check(ca.contains("ShadowComparator.perObjectCheck(kind, enabled)"),
 				"every kind's comparator follows the switch");
 		T.eq(5, OverridesTest.count(ca, "bulkShadow);"),
 				"every kind's shadow is built from the per-cycle switch");
@@ -741,22 +658,23 @@ public final class Build95CollectionTest {
 				"VM bulk page of 50");
 
 		try (FakeVCenter f = new FakeVCenter()) {
-			f.handler = r -> pagedVms(r, 5);
+			f.handler = Build95CollectionTest::pageOfVms;
 			VSphereClient c = f.client();
 			c.ensureConnected();
-			VSphereClient.BulkStats st = c.retrieveBulk("VirtualMachine",
-					Arrays.asList("config.version"), 2, rows -> { });
+			VSphereClient.BulkStats st = new VSphereClient.BulkStats();
+			for (int from = 0; from < 5; from += 2) {
+				c.retrieveObjects("VirtualMachine", vmRefs(from,
+						Math.min(from + 2, 5)), Arrays.asList("config.version"),
+						st);
+			}
 			T.eq(3, st.pages, "three pages");
+			T.eq(5, st.objects, "five objects");
 			T.check(st.maxPageBytes > 0, "largest page measured");
 			T.check(st.bytes >= st.maxPageBytes * 2, "total over the pages: "
 					+ st.bytes + " vs largest " + st.maxPageBytes);
 			T.check(st.bytes <= st.maxPageBytes * 3, "three pages at most "
 					+ "the largest each");
 		}
-		String sum = on.summary(3, 40, 123456, 45678);
-		T.check(sum.contains("3 page(s), 40 ms, 123456 bytes, largest page "
-				+ "45678 bytes (scores still come from the per-object path)"),
-				sum);
 	}
 
 	static void metrics() {

@@ -99,6 +99,18 @@ public final class BenchmarkSelector {
 		return new BenchmarkSelector(byScg, Collections.unmodifiableMap(m));
 	}
 
+	/**
+	 * Build 103 (issue #17): every profile an object of {@code kind} can be
+	 * scored against this cycle: its pin, or every Auto profile. The bulk
+	 * read asks for the union of their paths, before any object's version
+	 * (and so its benchmark) is known.
+	 */
+	public java.util.Collection<BenchmarkProfile> profilesFor(Kind kind) {
+		BenchmarkProfile pinned = pins.get(kind);
+		if (pinned != null) return Collections.singletonList(pinned);
+		return Collections.unmodifiableCollection(byScg.values());
+	}
+
 	/** Build 90: the pinned profile for {@code kind}, or null. */
 	public BenchmarkProfile pinFor(Kind kind) {
 		return pins.get(kind);

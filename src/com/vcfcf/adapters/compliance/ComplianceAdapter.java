@@ -563,11 +563,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 	/**
 	 * Build 95 (bulk-collection design build B): the internal switch for the
-	 * bulk-read shadow comparison. On: after each kind is scored the
-	 * per-object way, the same objects are read in paged bulk calls,
-	 * evaluated locally and compared, and the differences logged. Scores,
-	 * pushes and alerts still come only from the per-object path. Not a
-	 * user setting. Review W5: the one switch for shadow mode; off, no
+	 * bulk-read shadow comparison. Build 103 (issue #17 build 2): the bulk
+	 * read is primary, so the shadow runs the other way round: after each
+	 * kind is scored from the bulk read, the objects scored from it are
+	 * read again the per-object way and compared, and the differences
+	 * logged. Scores, pushes and alerts come only from the primary path.
+	 * Not a user setting. Review W5: the one switch for shadow mode; off, no
 	 * kind records per-object outcomes (no memory held) and no bulk read
 	 * is made. Decision 2026-10-14 (point 6): on in a dev-preview build
 	 * (0.0.0.N), off in a tagged release, decided each cycle from the
@@ -821,6 +822,158 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 			cycle.resume.carry(kind, null);
 		}
+	}
+
+	/**
+	 * Build 103 (issue #17 build 2): one kind's primary bulk read. The
+	 * objects the walk will read (in its order, so the resume cursor and
+	 * the budget cut work exactly as before) are fetched a page at a time,
+	 * one {@code RetrieveProperties} per page ({@link
+	 * VSphereClient#retrieveObjects}), with every path any benchmark the
+	 * kind can be scored against needs ({@link VSphereClient#primaryPaths}).
+	 * The page is fetched when the walk reaches its first object, so the
+	 * call (and a refusal by the budget) belongs to that object, and is
+	 * released when the next is fetched.
+	 *
+	 * <p>Fallback, per object: when a page's call fails (a fault, the
+	 * response cap, a missing object), or the row lacks a value, that read
+	 * is made per object exactly as in build 102 ({@link #row} returns
+	 * null, or the reader falls back per control), so a bulk miss yields
+	 * the per-object value or UNREADABLE with the per-object reason, never
+	 * a pass.
+	 */
+	private final class BulkPager {
+		final String label;
+		final String type;
+		final java.util.List<VSphereClient.MoRef> order;
+		final java.util.Map<String, Integer> index = new java.util.HashMap<>();
+		final java.util.Set<String> paths;
+		final int pageSize;
+		final VSphereClient.BulkStats stats = new VSphereClient.BulkStats();
+		private java.util.Map<String, VSphereClient.BulkRow> page =
+				java.util.Collections.emptyMap();
+		private final java.util.Set<String> pageMoids = new java.util.HashSet<>();
+		private final int fallbackAtStart;
+		int failedPages;
+		int refusedPages;
+		int perObject;
+		private boolean warned;
+		// Review N5: set when a page of this kind was over the response
+		// cap; no further page of the kind is fetched this cycle.
+		private String tooLarge;
+
+		/**
+		 * @param order the objects to read in bulk, in walk order (only
+		 *              the ones the walk will read: matched, not a Pod)
+		 * @param slices every control slice an object of the kind can be
+		 *               scored against ({@link BenchmarkSelector#profilesFor})
+		 */
+		BulkPager(String label, String type,
+				java.util.List<VSphereClient.MoRef> order,
+				java.util.Collection<java.util.List<BenchmarkProfile.Control>> slices) {
+			this.label = label;
+			this.type = type;
+			this.order = order;
+			for (int i = 0; i < order.size(); i++) {
+				index.putIfAbsent(order.get(i).value, i);
+			}
+			this.paths = VSphereClient.primaryPaths(type, slices);
+			this.pageSize = bulkPageSize(type);
+			this.fallbackAtStart = cycle.vsphere.bulkFallbackReads();
+		}
+
+		/**
+		 * The object's bulk row, fetching its page first when needed; null
+		 * when the object is read per object (no path to read in bulk, not
+		 * in the bulk order, its page failed, or vCenter did not return it).
+		 */
+		VSphereClient.BulkRow row(String moid) {
+			if (paths.isEmpty() || moid == null || !index.containsKey(moid)) {
+				return null;
+			}
+			if (tooLarge != null && !pageMoids.contains(moid)) {
+				// Review N5: a page of this kind was over the response
+				// cap; the rest of the kind is read per object this cycle.
+				perObject++;
+				return null;
+			}
+			if (!pageMoids.contains(moid)) load(index.get(moid));
+			VSphereClient.BulkRow r = page.get(moid);
+			if (r == null) perObject++;
+			return r;
+		}
+
+		private void load(int at) {
+			page = java.util.Collections.emptyMap();   // release the last page
+			pageMoids.clear();
+			java.util.List<VSphereClient.MoRef> refs = order.subList(at,
+					Math.min(at + pageSize, order.size()));
+			for (VSphereClient.MoRef r : refs) pageMoids.add(r.value);
+			try {
+				page = cycle.vsphere.retrieveObjects(type, refs, paths, stats);
+			} catch (CycleBudget.Exhausted e) {
+				// Refused by the cycle budget: the object being read is
+				// cut (the walk sees the refusal); no WARN of its own.
+				refusedPages++;
+			} catch (VSphereClient.BulkTooLarge e) {
+				// Review N5: remembered for the cycle, so the kind's later
+				// pages do not each download up to the cap again.
+				failedPages++;
+				tooLarge = e.getMessage();
+				logWarn("Bulk read of " + refs.size() + " " + label
+						+ " object(s) failed (" + e.getMessage() + "); the "
+						+ "rest of the " + label + " objects are read one at a "
+						+ "time this cycle (the same values, more calls; "
+						+ "page size " + pageSize + ").");
+			} catch (Exception e) {
+				failedPages++;
+				if (!warned) {
+					warned = true;
+					logWarn("Bulk read of " + refs.size() + " " + label
+							+ " object(s) failed (" + e.getClass().getSimpleName()
+							+ ": " + e.getMessage() + "); they are read one at "
+							+ "a time this cycle (the same values, more calls). "
+							+ "Further failed " + label + " pages are counted "
+							+ "in the bulk read summary.");
+				}
+			}
+		}
+
+		/** One INFO line per kind per cycle. */
+		void logSummary() {
+			if (paths.isEmpty() || order.isEmpty()) return;
+			logInfo("Bulk read " + label + ": " + stats.objects + " of "
+					+ order.size() + " object(s) in " + stats.pages
+					+ " call(s), " + paths.size() + " path(s)"
+					+ (stats.pathFixes > 0 || !stats.droppedPaths.isEmpty()
+							? " (vCenter rejected " + stats.pathFixes
+							+ " this cycle; dropped " + stats.droppedPaths + ")"
+							: "")
+					+ ", " + stats.bytes + " bytes (largest page "
+					+ stats.maxPageBytes + "); " + perObject + " object(s) "
+					+ "read one at a time (" + failedPages + " failed page(s), "
+					+ refusedPages + " refused by the cycle budget"
+					+ (tooLarge != null ? "; over the response cap, the "
+							+ "rest of the kind read one at a time" : "")
+					+ "), "
+					+ (cycle.vsphere.bulkFallbackReads() - fallbackAtStart)
+					+ " control(s) read one at a time (value not in the bulk "
+					+ "read)");
+		}
+	}
+
+	/**
+	 * Build 103: every control slice an object of {@code kind} can be
+	 * scored against this cycle (its pin, or every Auto profile).
+	 */
+	private static java.util.List<java.util.List<BenchmarkProfile.Control>>
+			slicesFor(BenchmarkSelector selector, BenchmarkSelector.Kind kind) {
+		java.util.List<java.util.List<BenchmarkProfile.Control>> out =
+				new java.util.ArrayList<>();
+		for (BenchmarkProfile p : selector.profilesFor(kind)) {
+			out.add(ComplianceDecisions.sliceFor(p, kind));
+		}
+		return out;
 	}
 
 	private CycleMetrics.Scope phase(CycleMetrics.Phase p) {
@@ -2127,6 +2280,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		Shadow shadow = new Shadow("Host", "HostSystem", bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.HOST, rollup, seen);
 		hosts = walk.order(hosts, h -> h.moid);   // build 96 (review B1)
+		// Build 103 (issue #17): the hosts the walk will read, in its
+		// order, read in bulk a page at a time.
+		java.util.List<VSphereClient.MoRef> bulkOrder =
+				new java.util.ArrayList<>();
+		if (pushable) {
+			for (VSphereClient.HostInfo h : hosts) {
+				if (cycle.stitcher.matchHost(h.name, h.moid) != null) {
+					bulkOrder.add(h.moRef);
+				}
+			}
+		}
+		BulkPager bulk = new BulkPager("Host", "HostSystem", bulkOrder,
+				slicesFor(selector, BenchmarkSelector.Kind.HOST));
 
 		for (VSphereClient.HostInfo hostInfo : hosts) {
 			stop.check("host " + hostInfo.name);
@@ -2154,13 +2320,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				continue;
 			}
 			String resourceId = he.resourceId;
+			// Build 103: the host's bulk row (null: read per object).
+			VSphereClient.BulkRow row = bulk.row(hostId);
 
-			String version = null;
-			try {
-				version = cycle.vsphere.getHostProductVersion(hostInfo.moRef);
-			} catch (Exception e) {
-				logWarn("Host " + hostName + ": could not read the ESX "
-						+ "version (" + e.getMessage() + ")");
+			String version = VSphereClient.hostVersionOf(row);
+			if (version == null) {
+				try {
+					version = cycle.vsphere.getHostProductVersion(
+							hostInfo.moRef);
+				} catch (Exception e) {
+					logWarn("Host " + hostName + ": could not read the ESX "
+							+ "version (" + e.getMessage() + ")");
+				}
 			}
 			if (hostId != null) hostVersions.put(hostId, version);
 
@@ -2198,11 +2369,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			// nothing is pushed per control and no score; the host is
 			// flagged has_unreadable with the reason "host not responding"
 			// or "host disconnected").
-			String connState;
-			try {
-				connState = cycle.vsphere.getHostConnectionState(hostInfo.moRef);
-			} catch (Exception e) {
-				connState = null;  // unknown -> proceed with normal evaluation
+			String connState = VSphereClient.textOf(row,
+					"runtime.connectionState");
+			if (connState == null) {
+				try {
+					connState = cycle.vsphere.getHostConnectionState(
+							hostInfo.moRef);
+				} catch (Exception e) {
+					connState = null;  // unknown -> proceed with normal evaluation
+				}
 			}
 
 			ControlEvaluator.ComplianceResult cr;
@@ -2217,33 +2392,39 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				noteUnreadable(hostName, "host-not-connected: connectionState="
 						+ connState, cr.unreadableCount);
 			} else {
-				java.util.Map<String, String> advSettings = null;
+				// Build 103: config.option from the bulk row (the same
+				// list QueryOptions returns, proven on devel); per object
+				// when the row does not carry it.
+				java.util.Map<String, String> advSettings =
+						VSphereClient.advancedOf(row);
 				boolean advUnreadable = false;
 				String advReason = null;
-				try {
-					advSettings = cycle.vsphere.getAdvancedSettings(hostInfo.moRef);
-				} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
-					// Build 48: null OptionManager MoRef means the host
-					// disconnected between the connectionState check and this
-					// read (a flap). Treat the WHOLE host as unreadable.
-					logWarn("Host " + hostName + ": advanced-settings channel "
-							+ "UNREADABLE (" + e.getMessage() + "); host "
-							+ "flapped between connection check and read; ALL "
-							+ "compliance controls marked UNREADABLE this cycle "
-							+ "(no partial score emitted)");
-					wholeHostUnreadable = true;
-					advReason = "advanced-settings-unreadable: host flapped ("
-							+ e.getMessage() + ")";
-				} catch (Exception e) {
-					// Any other read failure (SOAP fault, transport) is a read
-					// failure, not an empty result: treat as unreadable.
-					advUnreadable = true;
-					advReason = "advanced-settings-unreadable: "
-							+ e.getClass().getSimpleName() + ": " + e.getMessage();
-					logWarn("Host " + hostName + ": failed to read advanced "
-							+ "settings (" + e.getMessage() + "); all "
-							+ "advanced_setting controls marked UNREADABLE this "
-							+ "cycle (not dropped from the denominator)");
+				if (advSettings == null) {
+					try {
+						advSettings = cycle.vsphere.getAdvancedSettings(hostInfo.moRef);
+					} catch (VSphereClient.AdvancedSettingsUnreadableException e) {
+						// Build 48: null OptionManager MoRef means the host
+						// disconnected between the connectionState check and this
+						// read (a flap). Treat the WHOLE host as unreadable.
+						logWarn("Host " + hostName + ": advanced-settings channel "
+								+ "UNREADABLE (" + e.getMessage() + "); host "
+								+ "flapped between connection check and read; ALL "
+								+ "compliance controls marked UNREADABLE this cycle "
+								+ "(no partial score emitted)");
+						wholeHostUnreadable = true;
+						advReason = "advanced-settings-unreadable: host flapped ("
+								+ e.getMessage() + ")";
+					} catch (Exception e) {
+						// Any other read failure (SOAP fault, transport) is a read
+						// failure, not an empty result: treat as unreadable.
+						advUnreadable = true;
+						advReason = "advanced-settings-unreadable: "
+								+ e.getClass().getSimpleName() + ": " + e.getMessage();
+						logWarn("Host " + hostName + ": failed to read advanced "
+								+ "settings (" + e.getMessage() + "); all "
+								+ "advanced_setting controls marked UNREADABLE this "
+								+ "cycle (not dropped from the denominator)");
+					}
 				}
 				if (wholeHostUnreadable) {
 					cr = wholeUnreadable(hostControls, hostName);
@@ -2260,7 +2441,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					}
 					ControlEvaluator.ComplianceResult vimCr =
 							evaluateVimForResource(hostInfo.moRef, hostControls,
-									hostName);
+									hostName, row);
 					cr = mergeResults(advCr, vimCr);
 				}
 			}
@@ -2277,9 +2458,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.HOST, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
-			if (!wholeHostUnreadable) {
+			if (!wholeHostUnreadable && row != null) {
 				// Build 95: a wholly unreadable host is a known state, not
-				// a comparison.
+				// a comparison. Build 103: only a host scored from the bulk
+				// read is compared.
 				shadow.record(hostId, hostName, hostControls, cr);
 			}
 
@@ -2342,25 +2524,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ "scores at DEBUG, at INFO for hosts with unreadable "
 				+ "controls");
 		if (pushable) walk.finish();
+		bulk.logSummary();
 		runShadow(shadow);
 		return hostVersions;
 	}
 
 	/**
 	 * Build 95 (bulk-collection design build B): one kind's shadow
-	 * comparison for this cycle: the per-object results recorded while the
-	 * kind is scored, and the controls each object was scored against (its
-	 * benchmark's slice), so the bulk result is evaluated against the same
-	 * controls.
+	 * comparison for this cycle: the results recorded while the kind is
+	 * scored, and the controls each object was scored against (its
+	 * benchmark's slice), so the other path is evaluated against the same
+	 * controls. Build 103: the bulk read is primary, so the recorded side
+	 * is the bulk result (only objects scored from a bulk row are
+	 * recorded) and the per-object re-read is compared
+	 * ({@link ShadowComparator#perObjectCheck}).
 	 */
 	private static final class Shadow {
 		final ShadowComparator comparator;
 		final java.util.Map<String, java.util.List<BenchmarkProfile.Control>>
-				controls = new java.util.HashMap<>();
+				controls = new java.util.LinkedHashMap<>();
+		final java.util.Map<String, String> names = new java.util.HashMap<>();
 		String type;
 
 		Shadow(String kind, String type, boolean enabled) {
-			this.comparator = new ShadowComparator(kind, enabled);
+			this.comparator = ShadowComparator.perObjectCheck(kind, enabled);
 			this.type = type;
 		}
 
@@ -2372,72 +2559,68 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			}
 			comparator.record(moid, name, cr.controlResults,
 					VSphereClient.bulkComparable(type, slice));
-			if (comparator.isRecorded(moid)) controls.put(moid, slice);
+			if (comparator.isRecorded(moid)) {
+				controls.put(moid, slice);
+				names.put(moid, name);
+			}
 		}
 	}
 
 	/**
-	 * Build 95: read the kind in paged bulk calls, evaluate each object
-	 * locally and compare with what the per-object path recorded. One INFO
-	 * summary, then one INFO line per disagreement (capped). Never changes
-	 * a score or a push, never fails the cycle: a failed bulk read is
-	 * reported in the summary. In this shadow build a failed page does not
-	 * hold the kind back, because the kind's numbers come from the
-	 * per-object path, which succeeded.
+	 * Build 95, reversed in build 103 (issue #17 build 2): in a dev-preview
+	 * build, after the kind is scored from the bulk read, each object
+	 * scored from it is read again the per-object way (advanced settings
+	 * and vim properties, never esxcli) and compared. One INFO summary,
+	 * then one INFO line per disagreement (capped). Never changes a score
+	 * or a push, never fails the cycle; skipped once the cycle's budget is
+	 * used up, and stops early if it runs out during the re-read (the
+	 * summary says so). Off in a release build: nothing is recorded and
+	 * nothing is read.
 	 */
 	private void runShadow(Shadow sh) throws InterruptedException {
-		// Off (a release build): nothing was recorded, so no bulk read.
+		// Off (a release build): nothing was recorded, so no re-read.
 		if (sh == null || !sh.comparator.hasRecords()) return;
 		if (budgetExhausted()) {
-			// Build 96 (issue #16): no bulk comparison on a cycle that
-			// ended early (its vCenter calls would be refused anyway).
+			// Build 96 (issue #16): no comparison on a cycle that ended
+			// early (its vCenter calls would be refused anyway).
 			logInfo("Bulk shadow " + sh.comparator.summaryKind()
 					+ ": skipped, the cycle ended early");
 			return;
 		}
-		java.util.Set<String> paths = new java.util.LinkedHashSet<>();
-		java.util.Set<java.util.List<BenchmarkProfile.Control>> slices =
-				java.util.Collections.newSetFromMap(
-						new java.util.IdentityHashMap<>());
-		slices.addAll(sh.controls.values());
-		for (java.util.List<BenchmarkProfile.Control> slice : slices) {
-			paths.addAll(VSphereClient.bulkPaths(sh.type, slice));
-		}
-		final int[] pages = {0};
-		final long[] bytes = {0, 0};   // total, largest page (review W5)
 		long t0 = System.nanoTime();
 		try (CycleMetrics.Scope ph = phase(CycleMetrics.Phase.SHADOW)) {
-			VSphereClient.BulkStats st = cycle.vsphere.retrieveBulk(sh.type, paths,
-					bulkPageSize(sh.type), rows -> {
-						pages[0]++;
-						for (VSphereClient.BulkRow row : rows) {
-							stop.check("bulk shadow " + sh.type + " "
-									+ row.ref.value);
-							String moid = row.ref.value;
-							java.util.List<BenchmarkProfile.Control> slice =
-									sh.controls.get(moid);
-							sh.comparator.compare(moid, slice == null ? null
-									: cycle.vsphere.evaluateBulkRow(row, slice,
-											moid));
-						}
-					});
-			bytes[0] = st.bytes;
-			bytes[1] = st.maxPageBytes;
-			if (!st.droppedPaths.isEmpty() || st.pathFixes > 0) {
-				logInfo("Bulk shadow " + sh.comparator.summaryKind()
-						+ ": vCenter rejected " + st.pathFixes
-						+ " path(s) as invalid for " + sh.type
-						+ "; read with " + st.pathSet + (st.droppedPaths
-						.isEmpty() ? "" : ", dropped " + st.droppedPaths));
+			for (java.util.Map.Entry<String,
+					java.util.List<BenchmarkProfile.Control>> e
+					: sh.controls.entrySet()) {
+				String moid = e.getKey();
+				stop.check("bulk shadow " + sh.type + " " + moid);
+				if (budgetExhausted()) {
+					sh.comparator.fail("the cycle time budget ran out "
+							+ "during the per-object re-read");
+					break;
+				}
+				java.util.List<ControlEvaluator.ControlResult> per =
+						cycle.vsphere.evaluatePerObject(new VSphereClient.MoRef(
+								sh.type, moid), e.getValue(), sh.names.get(moid));
+				if (budgetExhausted()) {
+					// Review N4: the budget ran out during this object's
+					// re-read, so its refused reads came back UNREADABLE;
+					// comparing them would log false disagreements.
+					sh.comparator.fail("the cycle time budget ran out "
+							+ "during the per-object re-read");
+					break;
+				}
+				sh.comparator.compare(moid, per);
 			}
 		} catch (InterruptedException e) {
-			throw e;   // Stop Collecting: abandon the cycle
+			throw e;
 		} catch (Exception e) {
+			// Review N4: dev-preview only; the shadow never fails the cycle.
 			sh.comparator.fail(e.getClass().getSimpleName() + ": "
 					+ e.getMessage());
 		}
 		long ms = (System.nanoTime() - t0) / 1_000_000L;
-		logInfo(sh.comparator.summary(pages[0], ms, bytes[0], bytes[1]));
+		logInfo(sh.comparator.summary(-1, ms));
 		for (String line : sh.comparator.disagreementLines()) {
 			logInfo("Bulk shadow disagreement: " + line);
 		}
@@ -2475,6 +2658,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		Shadow shadow = new Shadow("VM", "VirtualMachine", bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VM, rollup, seen);
 		vms = walk.order(vms, v -> v.moid);   // build 96 (review B1)
+		// Build 103 (issue #17): the VMs the walk will read (matched, not
+		// a vSphere Pod), in its order, read in bulk a page at a time.
+		java.util.List<VSphereClient.MoRef> bulkOrder =
+				new java.util.ArrayList<>();
+		if (pushable) {
+			for (VSphereClient.VmInfo v : vms) {
+				if (!ComplianceDecisions.isPodGuestId(v.guestId)
+						&& cycle.stitcher.matchVm(v.name, v.moid) != null) {
+					bulkOrder.add(v.moRef);
+				}
+			}
+		}
+		BulkPager bulk = new BulkPager("VM", "VirtualMachine", bulkOrder,
+				slicesFor(selector, BenchmarkSelector.Kind.VM));
 
 		for (VSphereClient.VmInfo vm : vms) {
 			stop.check("VM " + vm.name);
@@ -2536,10 +2733,15 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			java.util.List<BenchmarkProfile.Control> vmControls =
 					d.profile.vmControls();
 
+			// Build 103: the VM's bulk row (null: read per object).
+			VSphereClient.BulkRow row = bulk.row(vm.moid);
 			ControlEvaluator.ComplianceResult advCr;
 			try {
 				java.util.Map<String, String> extra =
-						cycle.vsphere.getVmExtraConfig(vm.moRef);
+						VSphereClient.advancedOf(row);
+				if (extra == null) {
+					extra = cycle.vsphere.getVmExtraConfig(vm.moRef);
+				}
 				advCr = ControlEvaluator.evaluateControls(vmControls, extra,
 						vm.name);
 			} catch (Exception e) {
@@ -2556,7 +2758,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						advCr.unreadableCount);
 			}
 			ControlEvaluator.ComplianceResult vimCr =
-					evaluateVimForResource(vm.moRef, vmControls, vm.name);
+					evaluateVimForResource(vm.moRef, vmControls, vm.name, row);
 			ControlEvaluator.ComplianceResult cr = mergeResults(advCr, vimCr);
 			int verdict = walk.afterRead("VM " + vm.name);
 			if (verdict == KindWalk.DROP) {
@@ -2570,7 +2772,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			cs.unreadable += cr.unreadableCount;
 			rollup.recordEvaluated(BenchmarkSelector.Kind.VM, d.bucket,
 					cr.totalCount, cr.failCount, cr.unreadableCount, cr.score);
-			shadow.record(vm.moid, vm.name, vmControls, cr);
+			if (row != null) shadow.record(vm.moid, vm.name, vmControls, cr);
 
 			ComplianceDecisions.SkipPush skip =
 					skipInForce(BenchmarkSelector.Kind.VM, d);
@@ -2584,6 +2786,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ rollup.skippedPods() + " vSphere Pod VM(s) skipped (out "
 				+ "of scope; named at DEBUG)");
 		if (pushable) walk.finish();
+		bulk.logSummary();
 		runShadow(shadow);
 	}
 
@@ -2766,10 +2969,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"VmwareDistributedVirtualSwitch", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type,
-				bulkShadow);
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = switches.get(0).moRef.type;
+		Shadow shadow = new Shadow("vDS", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VDS, rollup, seen);
 		switches = walk.order(switches, o -> o.moid);   // build 96 (review B1)
+		java.util.List<VSphereClient.MoRef> bulkOrder =
+				new java.util.ArrayList<>();
+		for (VSphereClient.DvsInfo o : switches) {
+			if (cycle.stitcher.matchDvs(o.name, o.moid) != null) {
+				bulkOrder.add(o.moRef);
+			}
+		}
+		BulkPager bulk = new BulkPager("vDS", vimType,
+				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.VDS));
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
 			if (!walk.next(dvs.moid, "vDS " + dvs.name)) {
@@ -2780,11 +2996,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					dvs.moid);
 			if (collectVimObject(BenchmarkSelector.Kind.VDS, dvs.moRef,
 					dvs.name, dvs.moid, he, selector, vcVersion, rollup, cs,
-					seen, shadow, walk) != KindWalk.CONTINUE) {
+					seen, shadow, walk, bulk) != KindWalk.CONTINUE) {
 				break;   // build 96 (review W2, B1-r2)
 			}
 		}
 		walk.finish();
+		bulk.logSummary();
 		runShadow(shadow);
 	}
 
@@ -2813,10 +3030,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"DistributedVirtualPortgroup", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type,
-				bulkShadow);
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = pgs.get(0).moRef.type;
+		Shadow shadow = new Shadow("Portgroup", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.PORTGROUP, rollup, seen);
 		pgs = walk.order(pgs, o -> o.moid);   // build 96 (review B1)
+		java.util.List<VSphereClient.MoRef> bulkOrder =
+				new java.util.ArrayList<>();
+		for (VSphereClient.DvpgInfo o : pgs) {
+			if (cycle.stitcher.matchDvpg(o.name, o.moid) != null) {
+				bulkOrder.add(o.moRef);
+			}
+		}
+		BulkPager bulk = new BulkPager("Portgroup", vimType,
+				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.PORTGROUP));
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
 			if (!walk.next(pg.moid, "portgroup " + pg.name)) {
@@ -2827,11 +3057,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					pg.moid);
 			if (collectVimObject(BenchmarkSelector.Kind.PORTGROUP, pg.moRef,
 					pg.name, pg.moid, he, selector, vcVersion, rollup, cs,
-					seen, shadow, walk) != KindWalk.CONTINUE) {
+					seen, shadow, walk, bulk) != KindWalk.CONTINUE) {
 				break;   // build 96 (review W2, B1-r2)
 			}
 		}
 		walk.finish();
+		bulk.logSummary();
 		runShadow(shadow);
 	}
 
@@ -2868,10 +3099,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"ClusterComputeResource", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type,
-				bulkShadow);
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = clusters.get(0).moRef.type;
+		Shadow shadow = new Shadow("Cluster", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.CLUSTER, rollup, seen);
 		clusters = walk.order(clusters, o -> o.moid);   // build 96 (review B1)
+		java.util.List<VSphereClient.MoRef> bulkOrder =
+				new java.util.ArrayList<>();
+		for (VSphereClient.ClusterInfo o : clusters) {
+			if (cycle.stitcher.matchCluster(o.name, o.moid) != null) {
+				bulkOrder.add(o.moRef);
+			}
+		}
+		BulkPager bulk = new BulkPager("Cluster", vimType,
+				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.CLUSTER));
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);
 			if (!walk.next(cluster.moid, "cluster " + cluster.name)) {
@@ -2882,11 +3126,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					cluster.name, cluster.moid);
 			if (collectVimObject(BenchmarkSelector.Kind.CLUSTER,
 					cluster.moRef, cluster.name, cluster.moid, he, selector,
-					vcVersion, rollup, cs, seen, shadow, walk) != KindWalk.CONTINUE) {
+					vcVersion, rollup, cs, seen, shadow, walk, bulk)
+					!= KindWalk.CONTINUE) {
 				break;   // build 96 (review W2, B1-r2)
 			}
 		}
 		walk.finish();
+		bulk.logSummary();
 		runShadow(shadow);
 	}
 
@@ -2903,7 +3149,8 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			VSphereClient.MoRef moRef, String name, String moid,
 			ComplianceStitcher.HostEntry he, BenchmarkSelector selector,
 			String vcVersion, ComplianceRollup rollup, CycleStats cs,
-			java.util.Set<String> seen, Shadow shadow, KindWalk walk) {
+			java.util.Set<String> seen, Shadow shadow, KindWalk walk,
+			BulkPager bulk) {
 		beginObject(kind);
 		if (moid != null) seen.add(LastBenchmarkMemory.key(kind, moid));
 		if (he == null) {
@@ -2931,24 +3178,38 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		java.util.List<BenchmarkProfile.Control> controls =
 				ComplianceDecisions.sliceFor(d.profile, kind);
 		ControlEvaluator.ComplianceResult cr;
+		// Build 103: the object's bulk row (null: read per object).
+		VSphereClient.BulkRow row = null;
 		// Review N4: gate on vim_property AND esxcli, the same kinds
 		// BenchmarkSelector.evaluatedFor and the alert generator admit here.
 		if (countEvaluable(controls, "vim_property")
 				+ countEvaluable(controls, "esxcli") == 0) {
 			cr = emptyResult(name);
 		} else if (kind == BenchmarkSelector.Kind.CLUSTER) {
-			Boolean vsan = probeVsan(moRef, name);
+			row = bulk.row(moid);
+			Boolean vsan = VSphereClient.vsanOf(row);
+			if (vsan == null) {
+				vsan = probeVsan(moRef, name);   // per object
+			} else if (!vsan) {
+				logDebug("Cluster " + name + ": vSAN not enabled; vSAN "
+						+ "controls not applicable (profile_name only)");
+			}
 			if (vsan == null) {
 				cr = null;                    // probe failed: unreadable
 			} else if (!vsan) {
 				cr = emptyResult(name);       // non-vSAN: genuinely N/A
 			} else {
-				cr = readAndEvaluateVim(moRef, controls, name);
-				shadow.record(moid, name, controls, cr);
+				cr = readAndEvaluateVim(moRef, controls, name, row);
+				if (cr != null && row != null) {
+					shadow.record(moid, name, controls, cr);
+				}
 			}
 		} else {
-			cr = readAndEvaluateVim(moRef, controls, name);
-			shadow.record(moid, name, controls, cr);
+			row = bulk.row(moid);
+			cr = readAndEvaluateVim(moRef, controls, name, row);
+			if (cr != null && row != null) {
+				shadow.record(moid, name, controls, cr);
+			}
 		}
 		if (cr == null) {
 			cr = unreadableVimResult(controls, name);
@@ -2999,10 +3260,11 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	/** Read + evaluate vim controls; null on a failed read (unreadable). */
 	private ControlEvaluator.ComplianceResult readAndEvaluateVim(
 			VSphereClient.MoRef moRef,
-			java.util.List<BenchmarkProfile.Control> controls, String name) {
+			java.util.List<BenchmarkProfile.Control> controls, String name,
+			VSphereClient.BulkRow row) {
 		java.util.Map<String, Object> values;
 		try {
-			values = cycle.vsphere.readVimProperties(moRef, controls);
+			values = cycle.vsphere.readVimProperties(moRef, controls, row);
 		} catch (Exception e) {
 			logWarn("Failed to read vim properties for " + name + ": "
 					+ e.getMessage() + "; controls marked UNREADABLE");
@@ -3076,7 +3338,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	private ControlEvaluator.ComplianceResult evaluateVimForResource(
 			VSphereClient.MoRef moRef,
 			java.util.List<BenchmarkProfile.Control> controls,
-			String resourceName) {
+			String resourceName, VSphereClient.BulkRow row) {
 		int evaluableCount = countEvaluable(controls, "vim_property")
 				+ countEvaluable(controls, "esxcli");
 		if (evaluableCount == 0) {
@@ -3084,7 +3346,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		java.util.Map<String, Object> values;
 		try {
-			values = cycle.vsphere.readVimProperties(moRef, controls);
+			values = cycle.vsphere.readVimProperties(moRef, controls, row);
 		} catch (Exception e) {
 			// v3 cardinal fix: a failed read is UNREADABLE (counted, object
 			// non-compliant), not a silent skip that shrinks the denominator.

@@ -425,6 +425,7 @@ public final class ComplianceDecisionsTest {
 				"stitcher.matchVm(vm.name, vm.moid); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.VM, vm.name, vm.moid); continue; }",
 				"vmHostVersion(vm, hostVersions)",
 				"decide(selector, BenchmarkSelector.Kind.VM",
+				"bulk.row(vm.moid)",
 				"vsphere.getVmExtraConfig(vm.moRef)",
 				"rollup.recordEvaluated(BenchmarkSelector.Kind.VM");
 		noReadBefore(vms, "collectVms", "stitcher.matchVm(");
@@ -434,7 +435,11 @@ public final class ComplianceDecisionsTest {
 				"kindPushable(BenchmarkSelector.Kind.HOST, \"HostSystem\", rollup)",
 				"if (!pushable) continue;",
 				"stitcher.matchHost(hostName, hostId); if (he == null) { rollup.recordUnmatched(BenchmarkSelector.Kind.HOST, hostName, hostId); continue; }",
-				"vsphere.getHostProductVersion(hostInfo.moRef)",
+				// Build 103: the bulk row (its page is read here) after the
+				// match, then the version from it or per object.
+				"bulk.row(hostId)",
+				"VSphereClient.hostVersionOf(row)",
+				"vsphere.getHostProductVersion( hostInfo.moRef)",
 				"decide(selector, BenchmarkSelector.Kind.HOST",
 				"vsphere.getAdvancedSettings(hostInfo.moRef)",
 				"rollup.recordEvaluated(BenchmarkSelector.Kind.HOST");

@@ -130,6 +130,23 @@ public final class Build96BudgetTest {
 	}
 
 	/**
+	 * Build 103: answer a host's esxcli executer lookup (null for any
+	 * other request), so its esxcli commands follow as ExecuteSoap calls
+	 * (each answered by the fake's fault: that command fails, the host is
+	 * not marked unreachable). With the hosts read as one bulk page, these
+	 * are the calls a single host makes on its own.
+	 */
+	static FakeVCenter.Resp esxcliExecuter(FakeVCenter.Req r) {
+		if (!r.action.endsWith("/RetrieveManagedMethodExecuter")) return null;
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+				">([^<]+)</_this>").matcher(r.body);
+		String host = m.find() ? m.group(1) : "host";
+		return FakeVCenter.ok("RetrieveManagedMethodExecuter",
+				"<returnval type=\"ReflectManagedMethodExecuter\">mme-"
+				+ host + "</returnval>");
+	}
+
+	/**
 	 * Build 102 (issue #63): answer only once {@code release} is counted
 	 * down (bounded at 60 s so a failed test cannot hang the run). The
 	 * call is hung for as long as the test needs it to be, whatever the
@@ -351,12 +368,16 @@ public final class Build96BudgetTest {
 
 			int before = h.suite.pushes.size();
 			final boolean[] jumped = {false};
+			// Build 103: the host page is one bulk read of all three, so
+			// the budget runs out on a call host-11 makes on its own (its
+			// esxcli executer lookup) and its esxcli commands are refused.
 			h.override = r -> {
-				if (!jumped[0] && r.body.contains(">host-11<")) {
+				FakeVCenter.Resp ex = esxcliExecuter(r);
+				if (!jumped[0] && ex != null && r.body.contains(">host-11<")) {
 					now.addAndGet(300L * 1_000_000_000L);
 					jumped[0] = true;
 				}
-				return null;
+				return ex;
 			};
 			h.cycle();
 			Map<String, Double> r2 = h.lastRollup();
@@ -411,8 +432,11 @@ public final class Build96BudgetTest {
 	/**
 	 * Review B1: two consecutive budget-ended cycles together visit every
 	 * object. Each host costs 50 s of the 285 s budget, so a cycle reads
-	 * four of six hosts and is cut in the fifth; the next cycle starts
-	 * after the last host finished.
+	 * five of six hosts and is cut in the sixth; the next cycle starts
+	 * after the last host finished. Build 103: the hosts are one bulk
+	 * page, so the per-host cost is charged on each host's own esxcli
+	 * executer lookup ({@link #esxcliExecuter}), and the cut falls on the
+	 * esxcli commands that follow it.
 	 */
 	static void twoCyclesVisitEverything() throws Exception {
 		String[] pairs = new String[12];
@@ -424,10 +448,9 @@ public final class Build96BudgetTest {
 			AtomicLong now = new AtomicLong(0);
 			h.adapter.budgetClock = now::get;
 			h.override = r -> {
-				if (r.body.contains("runtime.connectionState")) {
-					now.addAndGet(50L * 1_000_000_000L);
-				}
-				return null;
+				FakeVCenter.Resp ex = esxcliExecuter(r);
+				if (ex != null) now.addAndGet(50L * 1_000_000_000L);
+				return ex;
 			};
 			java.util.Set<String> pushed = new java.util.TreeSet<>();
 			for (int cycle = 1; cycle <= 2; cycle++) {
@@ -471,8 +494,12 @@ public final class Build96BudgetTest {
 			AtomicLong now = new AtomicLong(0);
 			h.adapter.budgetClock = now::get;
 			h.override = r -> {
-				if (r.body.contains("runtime.connectionState")) {
+				// Build 103: per host on its own esxcli executer lookup
+				// (the hosts are one bulk page).
+				FakeVCenter.Resp ex = esxcliExecuter(r);
+				if (ex != null) {
 					now.addAndGet(100L * 1_000_000_000L);
+					return ex;
 				} else if (r.body.contains(">VpxSettings<")) {
 					now.addAndGet(150L * 1_000_000_000L);
 				} else if (r.body.contains("config.extraConfig")) {
@@ -738,8 +765,11 @@ public final class Build96BudgetTest {
 
 	/**
 	 * Review B1, peer review item 1: a host whose hostd hangs (vCenter
-	 * still says connected) costs one host-relayed timeout: its QueryOptions
-	 * times out, and none of its esxcli commands is attempted. Properties
+	 * still says connected) costs one host-relayed timeout: its first
+	 * host-relayed call times out (build 103: the esxcli executer lookup;
+	 * its advanced settings now come from the bulk read's config.option,
+	 * so no QueryOptions is sent), and none of its other esxcli commands
+	 * is attempted. Properties
 	 * vCenter answers from its own inventory are still read, exactly as in
 	 * build 95, so the host scores the same controls build 95 would
 	 * (advanced settings and esxcli unreadable, vCenter-answered controls
@@ -825,13 +855,15 @@ public final class Build96BudgetTest {
 			T.check(full != null && full < 100.0,
 					"the full read fails some controls: " + full);
 			// The budget runs out after the advanced settings are read
-			// (passing reads only would follow).
+			// (passing reads only would follow). Build 103: they come from
+			// the bulk page, so the budget runs out on host-10's esxcli
+			// executer lookup and its esxcli commands are refused.
 			h.override = r -> {
-				if (r.action.endsWith("/QueryOptions")
-						&& r.body.contains("EsxHostAdvSettings-host-10")) {
+				FakeVCenter.Resp ex = esxcliExecuter(r);
+				if (ex != null && r.body.contains(">host-10<")) {
 					now.addAndGet(300L * 1_000_000_000L);
 				}
-				return null;
+				return ex;
 			};
 			int before = h.suite.pushes.size();
 			h.cycle();
@@ -855,9 +887,11 @@ public final class Build96BudgetTest {
 			// in time, and the timeout is wide enough that the calls vCenter
 			// does answer (listing, CurrentTime, CreateContainerView) are
 			// never cut by it on a loaded runner. The esxcli executer and
-			// ExecuteSoap calls go through EsxcliSoapClient, whose read
-			// timeout is not the client's; they are answered at once (empty),
-			// as the 1 s sleep answered them before.
+			// ExecuteSoap calls are answered at once (empty), as the 1 s
+			// sleep answered them before (build 103: they take the client's
+			// read timeout too; Build103BulkPrimaryTest holds one). Build
+			// 103: the held reads include the bulk host page, which times
+			// out and sends its hosts to the per-object reads.
 			final int timeoutMs = 2000;
 			final CountDownLatch release = new CountDownLatch(1);
 			final java.util.concurrent.atomic.AtomicInteger heldCalls =
