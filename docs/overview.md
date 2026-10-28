@@ -398,6 +398,22 @@ collection continues; compliance is never failed over a stitch error.
   next cycle never scores the new vCenter against the old one's
   benchmark or flags "not collected" on the old vCenter.
 
+- **One batched Suite API push per cycle (build 104, issue #17).** Every
+  value a cycle pushes onto VMWARE resources (each object's properties
+  and stats, the cleanup's -1 keys, the vCenter rollup and overrides
+  status) is queued and sent at the end of the cycle with the buildkit
+  1.0.24 batch push: properties for every resource, then stats, in
+  requests of at most 100 resources and about 1 MB each. Same resources,
+  keys and values as the per-object pushes of build 103 (two calls per
+  object); every value of a cycle carries one timestamp, the cycle's
+  start. One log line per cycle says what went out (`Suite API push: ...`,
+  INFO), or `Suite API push NOT clean: ...` (WARN) with the counts and the
+  reason when a request failed, was refused or the call stopped: the
+  values not delivered keep their last value until the next cycle, and
+  scoring is never affected. A 2xx means accepted, not landed (VCF
+  Operations drops an id that matches no resource without an error);
+  stale ids are caught by the per-cycle resource list, as before.
+
 - **Each kind is read in bulk (build 103, issue #17).** Hosts, VMs,
   distributed switches, portgroups and clusters are each read with one
   `RetrieveProperties` per page of objects (hosts 10, VMs and clusters

@@ -21,6 +21,28 @@ public final class SuiteApiStitcher {
 				java.util.Map<String, String> p, long ts) {}
 		default void pushStats(String id, java.util.Map<String, Double> s,
 				long ts) {}
+		/**
+		 * Build 104: the 1.0.24 batch push. Default: each resource's
+		 * properties, then each resource's stats, through the per-id hooks.
+		 */
+		default SuiteApiBatchResult pushBatch(
+				java.util.Map<String, ? extends java.util.Map<String, String>> p,
+				java.util.Map<String, ? extends java.util.Map<String, Double>> s,
+				long ts) {
+			int sent = 0;
+			for (java.util.Map.Entry<String, ? extends java.util.Map<String,
+					String>> e : p.entrySet()) {
+				pushProperties(e.getKey(), e.getValue(), ts);
+				sent++;
+			}
+			for (java.util.Map.Entry<String, ? extends java.util.Map<String,
+					Double>> e : s.entrySet()) {
+				pushStats(e.getKey(), e.getValue(), ts);
+				sent++;
+			}
+			int batches = (p.isEmpty() ? 0 : 1) + (s.isEmpty() ? 0 : 1);
+			return new SuiteApiBatchResult(sent, batches, 0, 0, 0, 0, false);
+		}
 		default boolean addChild(String parent, String child) { return true; }
 		default String findSingletonResourceId(String ak, String rk) {
 			return null;
@@ -60,6 +82,13 @@ public final class SuiteApiStitcher {
 	public void pushStats(String id, java.util.Map<String, Double> s,
 			long ts) {
 		b.pushStats(id, s, ts);
+	}
+
+	public SuiteApiBatchResult pushBatch(
+			java.util.Map<String, ? extends java.util.Map<String, String>> p,
+			java.util.Map<String, ? extends java.util.Map<String, Double>> s,
+			long ts) {
+		return b.pushBatch(p, s, ts);
 	}
 
 	public boolean addChild(String parent, String child) {

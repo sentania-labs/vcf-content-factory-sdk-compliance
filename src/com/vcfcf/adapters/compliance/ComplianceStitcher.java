@@ -3,6 +3,7 @@ package com.vcfcf.adapters.compliance;
 import com.vcfcf.adapter.json.SimpleJson;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -25,9 +26,9 @@ import java.util.Map;
  * classpath: all transport goes through the ambient {@code SuiteApiStitcher},
  * which acquires/releases a Suite API token per call as {@code
  * maintenanceAdmin}. Resource resolution is now a plain authenticated
- * {@code GET /api/resources?...} parsed with {@link SimpleJson}; pushes go
- * through {@code SuiteApiStitcher#pushProperties}/{@code
- * SuiteApiStitcher#pushStats}.
+ * {@code GET /api/resources?...} parsed with {@link SimpleJson}. Build 104
+ * (issue #17): pushes are queued for the cycle and go out through
+ * {@code SuiteApiStitcher#pushBatch} ({@link #flushPushes}).
  *
  * <p><b>Identity (build 102, issue #20).</b> Every vim25-backed VMWARE kind
  * resolves on {@code VMEntityObjectID} (MOID) plus {@code VMEntityVCID}
@@ -79,19 +80,78 @@ public final class ComplianceStitcher
 		implements ComplianceDecisions.PushSink {
 
 	/**
-	 * Build 96 (issue #27): the three Suite API calls this class makes, so
-	 * it needs no framework type. The adapter passes its
+	 * Build 96 (issue #27): the Suite API calls this class makes, so it
+	 * needs no framework type. The adapter passes its
 	 * {@code SuiteApiStitcher}; tests pass a fake. Same contract as the
-	 * framework methods: {@link #get} throws on a failed read, the pushes
-	 * log and swallow their own failures.
+	 * framework methods: {@link #get} throws on a failed read, the push logs
+	 * and swallows its own failures. Build 104 (issue #17): the two per-id
+	 * pushes are replaced by the buildkit 1.0.24 batch push
+	 * ({@code SuiteApiStitcher.pushBatch}: properties for every resource,
+	 * then stats, chunked by count and bytes), whose result comes back as
+	 * the SDK-free {@link BatchOutcome}.
 	 */
 	public interface SuiteApi {
 		String get(String path) throws java.io.IOException,
 				InterruptedException;
-		void pushProperties(String resourceId, Map<String, String> properties,
-				long timestamp);
-		void pushStats(String resourceId, Map<String, Double> stats,
-				long timestamp);
+		BatchOutcome pushBatch(Map<String, Map<String, String>> properties,
+				Map<String, Map<String, Double>> stats, long timestamp);
+	}
+
+	/**
+	 * Build 104 (issue #17): the framework's {@code SuiteApiBatchResult}
+	 * without the framework type (same fields, same meaning). A 2xx batch is
+	 * "accepted", not "landed": the Suite API drops an unknown id silently,
+	 * so {@link #batchesOk} says nothing about stale ids (those are caught
+	 * where ids are resolved, the per-cycle resource list).
+	 */
+	public static final class BatchOutcome {
+		public final int sent;
+		public final int batchesOk;
+		public final int batchesFailed;
+		public final int fellBack;
+		public final int skipped;
+		public final int dropped;
+		public final boolean stopped;
+
+		public BatchOutcome(int sent, int batchesOk, int batchesFailed,
+				int fellBack, int skipped, int dropped, boolean stopped) {
+			this.sent = sent;
+			this.batchesOk = batchesOk;
+			this.batchesFailed = batchesFailed;
+			this.fellBack = fellBack;
+			this.skipped = skipped;
+			this.dropped = dropped;
+			this.stopped = stopped;
+		}
+
+		static final BatchOutcome NONE =
+				new BatchOutcome(0, 0, 0, 0, 0, 0, false);
+
+		/** Same rule as {@code SuiteApiBatchResult.isClean()}. */
+		public boolean isClean() {
+			return batchesFailed == 0 && skipped == 0 && dropped == 0
+					&& !stopped;
+		}
+
+		/** Suite API requests made: batch requests plus per-id re-sends. */
+		public int requests() {
+			return batchesOk + batchesFailed + fellBack;
+		}
+
+		BatchOutcome plus(BatchOutcome o) {
+			return new BatchOutcome(sent + o.sent, batchesOk + o.batchesOk,
+					batchesFailed + o.batchesFailed, fellBack + o.fellBack,
+					skipped + o.skipped, dropped + o.dropped,
+					stopped || o.stopped);
+		}
+
+		@Override
+		public String toString() {
+			return "sent=" + sent + " batchesOk=" + batchesOk
+					+ " batchesFailed=" + batchesFailed + " fellBack="
+					+ fellBack + " skipped=" + skipped + " dropped=" + dropped
+					+ " stopped=" + stopped;
+		}
 	}
 
 	/** Build 96: a log that drops everything (no platform logger). */
@@ -747,26 +807,236 @@ public final class ComplianceStitcher
 		return index == null ? 0 : index.size();
 	}
 
+	// ----- build 104 (issue #17): one batched push per cycle -------------
+
+	/** One timestamp's queued values: resource id to key to value. */
+	private static final class Queued {
+		final Map<String, Map<String, String>> props = new LinkedHashMap<>();
+		final Map<String, Map<String, Double>> stats = new LinkedHashMap<>();
+	}
+
+	// Guarded by pushLock. While a cycle is open (beginPushCycle), every
+	// push is queued by timestamp and sent by flushPushes; outside a cycle a
+	// push is sent at once, as a one-resource batch.
+	private final Object pushLock = new Object();
+	private boolean pushCycleOpen;
+	private long pushCycleTs;
+	private final java.util.TreeMap<Long, Queued> queued =
+			new java.util.TreeMap<>();
+	private int replacedValues;
+
+	/**
+	 * Build 104: open a push cycle. Every push until {@link #endPushCycle}
+	 * is queued and sent by {@link #flushPushes} as one batched push
+	 * (properties, then stats) per timestamp. The callers stamp their pushes
+	 * with {@link #pushTimestamp()}, so a cycle is one timestamp and one
+	 * batched push. Anything still queued from an earlier cycle (none: the
+	 * adapter ends every cycle in a finally) is dropped.
+	 */
+	public void beginPushCycle(long timestamp) {
+		synchronized (pushLock) {
+			queued.clear();
+			replacedValues = 0;
+			pushCycleOpen = true;
+			pushCycleTs = timestamp;
+		}
+	}
+
+	/**
+	 * Build 104: the timestamp this cycle's pushes carry (the cycle's start),
+	 * or now when no cycle is open. One per cycle, so the queued pushes go
+	 * out in one batched push; the retired-key read-back
+	 * ({@link RetiredKeyRepeats}) matches on it exactly.
+	 */
+	public long pushTimestamp() {
+		synchronized (pushLock) {
+			return pushCycleOpen ? pushCycleTs : System.currentTimeMillis();
+		}
+	}
+
 	@Override
 	public void pushProperties(String resourceId,
 			Map<String, String> properties, long timestamp) {
 		if (properties.isEmpty()) return;
-		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
-				CycleMetrics.Phase.PUSHES)) {
-			countCall();
-			stitcher.pushProperties(resourceId, properties, timestamp);
+		synchronized (pushLock) {
+			if (pushCycleOpen) {
+				Map<String, String> m = queuedAt(timestamp).props
+						.computeIfAbsent(resourceId,
+								k -> new LinkedHashMap<>());
+				for (Map.Entry<String, String> e : properties.entrySet()) {
+					String old = m.put(e.getKey(), e.getValue());
+					if (old != null && !old.equals(e.getValue())) {
+						replacedValues++;
+					}
+				}
+				return;
+			}
 		}
+		Queued one = new Queued();
+		one.props.put(resourceId, new LinkedHashMap<>(properties));
+		send(java.util.Collections.singletonMap(timestamp, one), 0);
 	}
 
 	@Override
 	public void pushStats(String resourceId,
 			Map<String, Double> stats, long timestamp) {
 		if (stats.isEmpty()) return;
+		synchronized (pushLock) {
+			if (pushCycleOpen) {
+				Map<String, Double> m = queuedAt(timestamp).stats
+						.computeIfAbsent(resourceId,
+								k -> new LinkedHashMap<>());
+				for (Map.Entry<String, Double> e : stats.entrySet()) {
+					Double old = m.put(e.getKey(), e.getValue());
+					if (old != null && !old.equals(e.getValue())) {
+						replacedValues++;
+					}
+				}
+				return;
+			}
+		}
+		Queued one = new Queued();
+		one.stats.put(resourceId, new LinkedHashMap<>(stats));
+		send(java.util.Collections.singletonMap(timestamp, one), 0);
+	}
+
+	private Queued queuedAt(long timestamp) {
+		return queued.computeIfAbsent(timestamp, k -> new Queued());
+	}
+
+	/**
+	 * Build 104: send everything queued so far, one batched push per
+	 * timestamp (normally one: the cycle's), and log one summary line: INFO
+	 * when clean, WARN with the counts and the reason when not. Nothing
+	 * queued: nothing sent, nothing logged. Never throws; a failed push
+	 * leaves the last values in place, as a failed per-id push did. The
+	 * cycle stays open.
+	 */
+	public BatchOutcome flushPushes() {
+		Map<Long, Queued> work;
+		int replaced;
+		synchronized (pushLock) {
+			if (queued.isEmpty()) return BatchOutcome.NONE;
+			work = new java.util.TreeMap<>(queued);
+			queued.clear();
+			replaced = replacedValues;
+			replacedValues = 0;
+		}
+		return send(work, replaced);
+	}
+
+	/** Build 104: flush, then close the cycle (pushes go out at once again). */
+	public BatchOutcome endPushCycle() {
+		try {
+			return flushPushes();
+		} finally {
+			synchronized (pushLock) {
+				pushCycleOpen = false;
+			}
+		}
+	}
+
+	private BatchOutcome send(Map<Long, Queued> work, int replaced) {
+		BatchOutcome total = BatchOutcome.NONE;
+		int propRes = 0;
+		int statRes = 0;
+		int values = 0;
+		int notTried = 0;
+		String failure = null;
 		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
 				CycleMetrics.Phase.PUSHES)) {
-			countCall();
-			stitcher.pushStats(resourceId, stats, timestamp);
+			for (Map.Entry<Long, Queued> e : work.entrySet()) {
+				Queued q = e.getValue();
+				int entries = q.props.size() + q.stats.size();
+				propRes += q.props.size();
+				statRes += q.stats.size();
+				for (Map<String, String> m : q.props.values()) values += m.size();
+				for (Map<String, Double> m : q.stats.values()) values += m.size();
+				if (total.stopped || failure != null) {
+					// The Suite API refused or failed the call: one request
+					// per cycle to a struggling server, as the framework does.
+					notTried += entries;
+					continue;
+				}
+				BatchOutcome o;
+				try {
+					o = stitcher.pushBatch(q.props, q.stats, e.getKey());
+				} catch (RuntimeException ex) {
+					// The framework never throws; a fake or a drift might.
+					failure = ex.getClass().getSimpleName() + ": "
+							+ ex.getMessage();
+					notTried += entries;
+					continue;
+				}
+				if (o == null) o = BatchOutcome.NONE;
+				total = total.plus(o);
+				CycleMetrics m = metrics;
+				if (m != null) {
+					for (int i = 0; i < o.requests(); i++) m.suiteCall();
+				}
+			}
 		}
+		if (notTried > 0) {
+			total = total.plus(new BatchOutcome(0, 0, 0, 0, notTried, 0,
+					true));
+		}
+		String line = pushSummary(total, propRes, statRes, values,
+				work.size(), replaced, failure);
+		if (total.isClean()) {
+			logger.info(line);
+		} else {
+			logger.warn(line);
+		}
+		return total;
+	}
+
+	/**
+	 * Build 104: the one line a flush logs. Package-private for the tests.
+	 */
+	static String pushSummary(BatchOutcome o, int propResources,
+			int statResources, int values, int timestamps, int replaced,
+			String failure) {
+		StringBuilder b = new StringBuilder();
+		b.append(o.isClean() ? "Suite API push: "
+				: "Suite API push NOT clean: ");
+		b.append(propResources).append(" resource(s) with properties and ")
+				.append(statResources).append(" with stats, ").append(values)
+				.append(" value(s), in ").append(o.requests())
+				.append(" request(s)");
+		if (timestamps > 1) {
+			b.append(" (").append(timestamps).append(" timestamps)");
+		}
+		b.append(" [").append(o).append("]");
+		if (replaced > 0) {
+			b.append("; ").append(replaced).append(" value(s) replaced by a "
+					+ "later push to the same key this cycle");
+		}
+		if (o.isClean()) return b.toString();
+		java.util.List<String> why = new java.util.ArrayList<>();
+		if (failure != null) {
+			why.add("the push threw " + failure);
+		} else if (o.stopped) {
+			why.add("the call stopped early (a server error, 429, timeout, "
+					+ "token failure or interrupt; see the "
+					+ "SuiteApiStitchClient WARN above)");
+		}
+		if (o.batchesFailed > 0) {
+			why.add(o.batchesFailed + " batch request(s) failed"
+					+ (o.fellBack > 0 ? ", " + o.fellBack + " resource "
+							+ "entr(ies) re-sent one at a time" : ""));
+		}
+		if (o.skipped > 0) {
+			why.add(o.skipped + " resource entr(ies) not delivered");
+		}
+		if (o.dropped > 0) {
+			why.add(o.dropped + " value(s) dropped before sending (null "
+					+ "or not finite)");
+		}
+		b.append("; ").append(String.join("; ", why))
+				.append(". What was not delivered keeps its last value; "
+						+ "scoring is unaffected and the next cycle pushes "
+						+ "again");
+		return b.toString();
 	}
 
 	public int size() {
