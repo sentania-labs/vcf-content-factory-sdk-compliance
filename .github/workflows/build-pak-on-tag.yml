@@ -27,7 +27,8 @@
 #   A read-only ed25519 deploy key for sentania-labs/vcf-content-factory-sdk-runtime.
 #   The Broadcom SDK jar (vrops-adapters-sdk-2.2.jar) is committed at the repo root of
 #   that private repo and is never bundled in the factory or buildkit (C2 redistribution
-#   constraint). The jar is fetched via a shallow git clone using this deploy key.
+#   constraint). The jar is fetched with this deploy key at the pinned
+#   SDK_RUNTIME_COMMIT and verified against SDK_JAR_SHA256 (env, below).
 #   Setup: generate an ed25519 keypair, add the PUBLIC half as a read-only deploy key on
 #   sentania-labs/vcf-content-factory-sdk-runtime, and store the PRIVATE half as a repo
 #   (or org) Actions secret named SDK_RUNTIME_SSH_KEY before tagging a release.
@@ -52,6 +53,16 @@ env:
   # or the floating major tag (v1) to auto-follow compatible buildkit updates.
   BUILDKIT_TAG: sdk-buildkit-v1
   BUILDKIT_REPO: sentania-labs/vcf-content-factory
+  # The private SDK runtime repo is fetched at this exact commit, never its
+  # default-branch HEAD, and the jar is checked against SDK_JAR_SHA256 before
+  # javac sees it (sdk-runtime#1). A write to that repo cannot reach a
+  # release build until this pin and checksum are changed here, in review.
+  # To move to a new commit or jar: take the sha256 from the runtime repo's
+  # README (cross-check the factory's adapter_runtime/PROVENANCE.md) and
+  # update all three values together.
+  SDK_RUNTIME_COMMIT: b92956cc7c9ede5d9cfb5bc499c10b2e8e85cb9e
+  SDK_JAR: vrops-adapters-sdk-2.2.jar
+  SDK_JAR_SHA256: 2d53a91fc2b9a99d9b685ed10c1e37a471c2f71f04e7ae0fb2c53fdaa14b4f54
 
 jobs:
   build:
@@ -247,9 +258,20 @@ jobs:
           github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
           github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
           HOSTKEYS
+          # Fetch the pinned commit only (sdk-runtime#1), not HEAD.
+          git init -q _sdk_runtime
+          git -C _sdk_runtime remote add origin git@github.com:sentania-labs/vcf-content-factory-sdk-runtime.git
           GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes" \
-            git clone --depth 1 git@github.com:sentania-labs/vcf-content-factory-sdk-runtime.git _sdk_runtime
+            git -C _sdk_runtime fetch -q --depth 1 origin "$SDK_RUNTIME_COMMIT"
+          git -C _sdk_runtime checkout -q FETCH_HEAD
+          GOT="$(git -C _sdk_runtime rev-parse HEAD)"
+          if [ "$GOT" != "$SDK_RUNTIME_COMMIT" ]; then
+            echo "::error::sdk-runtime checkout is $GOT, expected $SDK_RUNTIME_COMMIT"
+            exit 1
+          fi
           ls _sdk_runtime/vrops-adapters-sdk-*.jar
+          # Verify the jar before anything compiles against it (sdk-runtime#1).
+          echo "${SDK_JAR_SHA256}  _sdk_runtime/${SDK_JAR}" | sha256sum -c -
 
       - name: Build the .pak (deterministic, headless)
         # --release is the explicit opt-in for the factory's version-line
@@ -262,7 +284,7 @@ jobs:
           set -euo pipefail
           PYTHONPATH=_kit python3 -m sdk_buildkit build-sdk "$GITHUB_WORKSPACE" \
             --release \
-            --sdk-jar _sdk_runtime/vrops-adapters-sdk-2.2.jar \
+            --sdk-jar "_sdk_runtime/$SDK_JAR" \
             --output dist
           ls -l dist/*.pak
 
