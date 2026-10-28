@@ -407,12 +407,18 @@ collection continues; compliance is never failed over a stitch error.
   state and a cluster's vSAN configuration). The controls are then
   evaluated from that data with the same readers as before. A host's
   advanced settings come from its `config.option` in the page instead of
-  a `QueryOptions` call to the host (the same list: compared on all
-  three devel vCenters before the switch). Pages follow the walk's order,
+  a `QueryOptions` call to the host. The two returned identical maps on
+  the 10 hosts compared before the switch: three devel vCenters (9.1.1),
+  ESXi 9.1.1 (builds 25714478 and 25782009), read with an account that
+  has the Administrator role. Older ESXi versions and a Read-only role
+  were not compared; a key `config.option` leaves out would score
+  "(undefined)", a FAIL, never a pass. Pages follow the walk's order,
   so the time limit, the resume point and the cuts below work as before.
   Fallback, per object: when a page's call fails (a fault, the response
   size cap, an object deleted meanwhile) its objects are read one at a
-  time as in build 102, with one WARN per kind; when a value is not in an
+  time as in build 102, with one WARN per kind (a page over the response
+  size cap also sends the rest of that kind one at a time for the cycle,
+  instead of fetching each page up to the cap); when a value is not in an
   object's row (unset, faulted or a rejected path) that control is read
   one at a time, so its value, or UNREADABLE with the per-object reason,
   is what build 102 would have produced; a missing value is never a pass.

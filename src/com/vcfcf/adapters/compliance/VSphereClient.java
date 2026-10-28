@@ -70,8 +70,8 @@ import org.w3c.dom.NodeList;
  * retried once. Inventory names come from the listing call. Connections
  * are reused (no disconnect after a successful call). The longest-prefix
  * fallback is bounded ({@link #minPrefixSegments}, {@link
- * #MAX_PREFIX_ATTEMPTS}). {@link #retrieveBulk} is the paged bulk read used
- * by the shadow comparison.
+ * #MAX_PREFIX_ATTEMPTS}). Build 103: {@link #retrieveObjects} is the primary
+ * bulk read, one page of objects per call.
  */
 public final class VSphereClient {
 
@@ -2016,11 +2016,6 @@ public final class VSphereClient {
 		}
 	}
 
-	/** Receives one bulk page at a time; the page is not kept afterwards. */
-	public interface PageHandler {
-		void page(List<BulkRow> rows) throws Exception;
-	}
-
 	/** What one bulk read did. */
 	public static final class BulkStats {
 		public int pages;
@@ -2034,79 +2029,27 @@ public final class VSphereClient {
 		public List<String> droppedPaths = new ArrayList<>();
 	}
 
+	/**
+	 * Build 103 (review N5): a bulk page whose response was over
+	 * {@link #MAX_SOAP_RESPONSE_BYTES}. The caller reads the rest of the
+	 * kind per object for the cycle instead of downloading up to the cap
+	 * again for every page.
+	 */
+	public static final class BulkTooLarge extends Exception {
+		private static final long serialVersionUID = 1L;
+
+		BulkTooLarge(String message) {
+			super(message);
+		}
+	}
+
 	// type + requested paths -> the path set vCenter accepted, and the
 	// paths dropped on the way (so only the first cycle pays the fixes).
 	private final Map<String, BulkStats> acceptedPaths =
 			new java.util.concurrent.ConcurrentHashMap<>();
 
 	/**
-	 * Build 95: every object of {@code type} under the root folder with the
-	 * values of {@code paths}, in pages of about {@code pageSize} objects
-	 * (RetrievePropertiesEx, then ContinueRetrievePropertiesEx while vCenter
-	 * returns a token), each page handed to {@code handler} and released
-	 * before the next is requested. A path vCenter rejects as
-	 * InvalidProperty is shortened ({@link #shortenBulkPath}) and the call
-	 * repeated; the accepted set is remembered for later cycles. Throws
-	 * {@link VimOptions.ReadFault} when the view, the first page or any
-	 * later page fails (the remaining pages are cancelled): a failed page
-	 * is a failed read of the kind, never a short inventory.
-	 */
-	public BulkStats retrieveBulk(String type, Collection<String> paths,
-			int pageSize, PageHandler handler) throws Exception {
-		ensureSession();
-		BulkStats st = new BulkStats();
-		if (paths == null || paths.isEmpty()) return st;
-		String cacheKey = type + "|" + String.join(",",
-				new java.util.TreeSet<>(paths));
-		BulkStats known = acceptedPaths.get(cacheKey);
-		Set<String> set = new LinkedHashSet<>(
-				known != null ? known.pathSet : paths);
-		if (known != null) st.droppedPaths.addAll(known.droppedPaths);
-
-		MoRef view = createContainerView(type);
-		if (view == null) {
-			throw new VimOptions.ReadFault("CreateContainerView(" + type
-					+ ") returned no view");
-		}
-		// Review N1: the token of the retrieval still open on vCenter, set
-		// as soon as a page is parsed and before its handler runs, so a
-		// handler that throws (Stop, an evaluation error) cancels the next
-		// page's token, not the one already consumed.
-		String[] open = {null};
-		try {
-			Document resp = postFixingPaths(type, set, st, cacheKey,
-					"RetrievePropertiesEx",
-					ps -> retrievePropertiesExBody(view, type, ps, pageSize));
-			handlePage(resp, type, handler, st, open);
-			while (open[0] != null) {
-				String token = open[0];
-				lastFault = null;
-				Document next = post("<ContinueRetrievePropertiesEx "
-						+ "xmlns=\"urn:vim25\">"
-						+ "<_this type=\"PropertyCollector\">"
-						+ xmlEscape(propertyCollector.value) + "</_this>"
-						+ "<token>" + xmlEscape(token) + "</token>"
-						+ "</ContinueRetrievePropertiesEx>",
-						"urn:vim25/ContinueRetrievePropertiesEx", true);
-				if (next == null) {
-					throw new VimOptions.ReadFault("bulk " + type + ": page "
-							+ (st.pages + 1) + " failed"
-							+ (lastFault != null ? ": " + lastFault : ""));
-				}
-				handlePage(next, type, handler, st, open);
-			}
-			return st;
-		} catch (Exception e) {
-			if (open[0] != null) cancelRetrieveQuietly(open[0]);
-			throw e;
-		} finally {
-			destroyViewQuietly(view);
-		}
-	}
-
-	/**
-	 * Build 95, shared by the shadow and (build 103) the primary bulk
-	 * read: post the body {@code bodyOf} builds for the path set
+	 * Build 95 (build 103: used by the primary bulk read): post the body {@code bodyOf} builds for the path set
 	 * {@code set}; a path vCenter rejects as InvalidProperty is shortened
 	 * ({@link #shortenBulkPath}) or dropped and the call repeated, at most
 	 * {@link #MAX_BULK_PATH_FIXES} times. The accepted set is remembered
@@ -2118,6 +2061,7 @@ public final class VSphereClient {
 			java.util.function.Function<Set<String>, String> bodyOf)
 			throws Exception {
 		Document resp;
+		int fixes = 0;   // this call's; st.pathFixes sums over the cycle
 		while (true) {
 			if (set.isEmpty()) {
 				throw new VimOptions.ReadFault("bulk " + type + ": no "
@@ -2127,12 +2071,17 @@ public final class VSphereClient {
 			lastFault = null;
 			resp = post(bodyOf.apply(set), "urn:vim25/" + op, true);
 			if (resp != null) break;
+			if (lastTooLarge) {
+				throw new BulkTooLarge(op + "(" + type + ") failed: "
+						+ lastFault);
+			}
 			String bad = lastInvalidProperty;
 			if (bad == null || !set.contains(bad)
-					|| st.pathFixes >= MAX_BULK_PATH_FIXES) {
+					|| fixes >= MAX_BULK_PATH_FIXES) {
 				throw new VimOptions.ReadFault(op + "(" + type + ") failed"
 						+ (lastFault != null ? ": " + lastFault : ""));
 			}
+			fixes++;
 			st.pathFixes++;
 			set.remove(bad);
 			String parent = shortenBulkPath(type, bad);
@@ -2246,9 +2195,14 @@ public final class VSphereClient {
 		BulkStats known = acceptedPaths.get(cacheKey);
 		Set<String> set = new LinkedHashSet<>(
 				known != null ? known.pathSet : paths);
-		st.droppedPaths.clear();
-		if (known != null) st.droppedPaths.addAll(known.droppedPaths);
-		st.pathFixes = 0;
+		// Review N2 (build 103): pathFixes and the dropped paths add up
+		// over the pages of a cycle (the caller's one BulkStats per kind),
+		// so the summary names every rejection, not the last page's.
+		if (known != null) {
+			for (String d : known.droppedPaths) {
+				if (!st.droppedPaths.contains(d)) st.droppedPaths.add(d);
+			}
+		}
 		Document resp = postFixingPaths(type, set, st, cacheKey,
 				"RetrieveProperties",
 				ps -> retrieveObjectsBody(type, refs, ps));
@@ -2349,133 +2303,9 @@ public final class VSphereClient {
 		return bulkFallbackReads.get();
 	}
 
-	private String retrievePropertiesExBody(MoRef view, String type,
-			Collection<String> paths, int pageSize) {
-		StringBuilder pathSet = new StringBuilder();
-		for (String p : paths) {
-			pathSet.append("<pathSet>").append(xmlEscape(p))
-					.append("</pathSet>");
-		}
-		return "<RetrievePropertiesEx xmlns=\"urn:vim25\">"
-				+ "<_this type=\"PropertyCollector\">"
-				+ xmlEscape(propertyCollector.value) + "</_this>"
-				+ "<specSet>"
-				+ "<propSet>"
-				+ "<type>" + xmlEscape(type) + "</type>"
-				+ pathSet
-				+ "</propSet>"
-				+ "<objectSet>"
-				+ "<obj type=\"ContainerView\">"
-				+ xmlEscape(view.value) + "</obj>"
-				+ "<skip>true</skip>"
-				+ "<selectSet xsi:type=\"TraversalSpec\">"
-				+ "<name>view</name>"
-				+ "<type>ContainerView</type>"
-				+ "<path>view</path>"
-				+ "<skip>false</skip>"
-				+ "</selectSet>"
-				+ "</objectSet>"
-				+ "</specSet>"
-				+ "<options><maxObjects>" + Math.max(1, pageSize)
-				+ "</maxObjects></options>"
-				+ "</RetrievePropertiesEx>";
-	}
-
 	/**
-	 * Parse one page, record its next-page token (or null) in
-	 * {@code openToken[0]}, then hand the page over (review N1: the token
-	 * is recorded first, so it is the one cancelled if the handler throws).
-	 */
-	private void handlePage(Document resp, String type, PageHandler handler,
-			BulkStats st, String[] openToken) throws Exception {
-		Element rv = firstByLocalName(resp.getDocumentElement(), "returnval");
-		List<BulkRow> rows = new ArrayList<>();
-		String token = null;
-		if (rv != null) {
-			String t = childText(rv, "token");
-			token = t == null || t.trim().isEmpty() ? null : t.trim();
-			for (Element oc : childrenByLocalName(rv, "objects")) {
-				BulkRow row = bulkRowOf(oc, type);
-				if (row != null) rows.add(row);
-			}
-		}
-		st.pages++;
-		st.objects += rows.size();
-		long bytes = lastResponseBytes;
-		st.bytes += bytes;
-		if (bytes > st.maxPageBytes) st.maxPageBytes = bytes;
-		if (log != null && log.isDebugEnabled()) {
-			logDebug("vSphere SOAP: bulk " + type + " page " + st.pages + ": "
-					+ rows.size() + " object(s), " + bytes + " bytes");
-		}
-		openToken[0] = token;
-		handler.page(rows);
-	}
-
-	private void cancelRetrieveQuietly(String token) {
-		try {
-			post("<CancelRetrievePropertiesEx xmlns=\"urn:vim25\">"
-					+ "<_this type=\"PropertyCollector\">"
-					+ xmlEscape(propertyCollector.value) + "</_this>"
-					+ "<token>" + xmlEscape(token) + "</token>"
-					+ "</CancelRetrievePropertiesEx>",
-					"urn:vim25/CancelRetrievePropertiesEx", true);
-		} catch (Exception ignored) {}
-	}
-
-	/**
-	 * Build 95: the advanced-setting and vim_property control results for
-	 * one bulk object, evaluated locally with the same evaluator and the
-	 * same recipe readers as the per-object path (esxcli and VAMI controls
-	 * are not produced). An advanced-settings value the bulk read did not
-	 * return makes those controls UNREADABLE, never passes.
-	 */
-	public List<ControlEvaluator.ControlResult> evaluateBulkRow(BulkRow row,
-			List<BenchmarkProfile.Control> controls, String name) {
-		List<ControlEvaluator.ControlResult> out = new ArrayList<>();
-		String advPath = advancedPath(row.ref.type);
-		if (advPath != null && hasKind(controls, "advanced_setting")) {
-			Element val = row.values.get(advPath);
-			ControlEvaluator.ComplianceResult adv;
-			if (val == null) {
-				adv = ControlEvaluator.evaluateControlsUnreadable(controls,
-						name);
-			} else {
-				// Build 103: keys and values exactly as the per-object
-				// reads take them (untrimmed), now that bulk is primary.
-				adv = ControlEvaluator.evaluateControls(controls,
-						VimOptions.fromOptionList(val), name);
-			}
-			out.addAll(adv.controlResults);
-		}
-		List<BenchmarkProfile.Control> vim = new ArrayList<>();
-		Map<String, Object> values = new HashMap<>();
-		for (BenchmarkProfile.Control c : controls) {
-			if (!"vim_property".equals(c.parameterKind) || !c.isEvaluable()
-					|| c.readRecipe == null || c.readRecipe.trim().isEmpty()) {
-				continue;
-			}
-			vim.add(c);
-			Object v;
-			readFailure = null;
-			try {
-				v = readByRecipe(row, c.readRecipe.trim());
-			} catch (Exception e) {
-				v = null;
-			}
-			values.put(c.parameter, v != null ? v : UNREADABLE);
-		}
-		if (!vim.isEmpty()) {
-			out.addAll(ControlEvaluator.evaluateVimProperties(vim, values,
-					name, UNREADABLE).controlResults);
-		}
-		return out;
-	}
-
-	/**
-	 * Build 103 (issue #17 build 2): the per-object counterpart of
-	 * {@link #evaluateBulkRow}, for the dev-preview shadow check now that
-	 * the bulk read is primary: the advanced settings (QueryOptions on a
+	 * Build 103 (issue #17 build 2): the per-object reads of one object,
+	 * for the dev-preview shadow check now that the bulk read is primary: the advanced settings (QueryOptions on a
 	 * host, {@code config.extraConfig} on a VM) and the vim_property
 	 * controls of {@code controls}, read per object exactly as build 102
 	 * did and evaluated with the same evaluator. A failed read is
@@ -2522,9 +2352,9 @@ public final class VSphereClient {
 	}
 
 	/**
-	 * Build 95: the control ids {@link #evaluateBulkRow} produces for
-	 * {@code controls} (advanced settings on hosts and VMs, vim
-	 * properties), the ones the shadow comparison checks.
+	 * Build 95: the control ids the bulk read scores for {@code controls}
+	 * (advanced settings on hosts and VMs, vim properties), the ones the
+	 * shadow comparison checks.
 	 */
 	public static Set<String> bulkComparable(String type,
 			List<BenchmarkProfile.Control> controls) {

@@ -106,12 +106,6 @@ public final class VimOptions {
 	}
 
 	/**
-	 * The per-property fault vCenter reported for {@code propPath} in a
-	 * {@code missingSet}: the fault's xsi:type plus its localized message
-	 * when present, e.g. {@code NoPermission: Permission to perform this
-	 * operation was denied.}; null when there is no missingSet entry.
-	 */
-	/**
 	 * The key/value pairs of an OptionValue list ({@code <val>} of
 	 * {@code config.extraConfig} or {@code config.option}). Build 103: the
 	 * one place both the per-object and the bulk read take them, so the
@@ -127,6 +121,12 @@ public final class VimOptions {
 		return out;
 	}
 
+	/**
+	 * The per-property fault vCenter reported for {@code propPath} in a
+	 * {@code missingSet}: the fault's xsi:type plus its localized message
+	 * when present, e.g. {@code NoPermission: Permission to perform this
+	 * operation was denied.}; null when there is no missingSet entry.
+	 */
 	static String missingSetFault(Element returnval, String propPath) {
 		for (Element ms : children(returnval, "missingSet")) {
 			if (!propPath.equals(childText(ms, "path"))) continue;

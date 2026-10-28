@@ -27,6 +27,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *       ones made when every bulk page fails and every object is read one
  *       at a time; a value missing from both reads is not pushed and the
  *       object is flagged.</li>
+ *   <li>Review fixes: a page refused by the cycle budget cuts the
+ *       object reading it and the next cycle's page starts there (W3);
+ *       a page over the response cap sends the rest of the kind per
+ *       object for the cycle (N5).</li>
  *   <li>Folded from the build 102 review: an esxcli call takes the
  *       client's read timeout (no fixed 120 s), so a held esxcli call is
  *       cut at that timeout and the cycle budget then ends the cycle
@@ -47,6 +51,8 @@ public final class Build103BulkPrimaryTest {
 		fixtureCallCount();
 		bulkEqualsPerObject();
 		missingBothWaysIsUnreadable();
+		refusedPageResumesThere();
+		overCapPageRemembered();
 		esxcliTakesClientTimeout();
 		heldEsxcliCutByBudget();
 		runtimeExceptionDropsConnection();
@@ -297,29 +303,35 @@ public final class Build103BulkPrimaryTest {
 				T.check(h.logged("12 object(s) read one at a time (2 failed "
 						+ "page(s)"), "the summary counts the pages");
 			}
-			List<String> lines = new ArrayList<>();
-			synchronized (h.suite.pushes) {
-				for (FakeSuiteApi.Push p : h.suite.pushes.subList(before,
-						h.suite.pushes.size())) {
-					if (p.props != null) {
-						for (Map.Entry<String, String> e
-								: new TreeMap<>(p.props).entrySet()) {
-							lines.add(p.resourceId + " P " + e.getKey() + "="
-									+ e.getValue());
-						}
+			List<String> lines = pushLines(h, before);
+			return lines;
+		}
+	}
+
+	/** Every property and stat pushed since {@code from}, sorted. */
+	static List<String> pushLines(AdapterHarness h, int from) {
+		List<String> lines = new ArrayList<>();
+		synchronized (h.suite.pushes) {
+			for (FakeSuiteApi.Push p : h.suite.pushes.subList(from,
+					h.suite.pushes.size())) {
+				if (p.props != null) {
+					for (Map.Entry<String, String> e
+							: new TreeMap<>(p.props).entrySet()) {
+						lines.add(p.resourceId + " P " + e.getKey() + "="
+								+ e.getValue());
 					}
-					if (p.stats != null) {
-						for (Map.Entry<String, Double> e
-								: new TreeMap<>(p.stats).entrySet()) {
-							lines.add(p.resourceId + " S " + e.getKey() + "="
-									+ e.getValue());
-						}
+				}
+				if (p.stats != null) {
+					for (Map.Entry<String, Double> e
+							: new TreeMap<>(p.stats).entrySet()) {
+						lines.add(p.resourceId + " S " + e.getKey() + "="
+								+ e.getValue());
 					}
 				}
 			}
-			java.util.Collections.sort(lines);
-			return lines;
 		}
+		java.util.Collections.sort(lines);
+		return lines;
 	}
 
 	/**
@@ -355,6 +367,172 @@ public final class Build103BulkPrimaryTest {
 			T.check(h.logged("1 control(s) read one at a time"),
 					"the bulk miss was read per object first");
 		}
+	}
+
+	/**
+	 * Review W3: the budget refuses a page's own RetrieveProperties. The
+	 * 12-host fixture reads hosts in two pages (host-100..109, then
+	 * host-110 and host-111). The clock jumps past the budget exactly when
+	 * the second page's call is checked (after walk.next has started
+	 * host-110), so the call is refused, host-110's per-object reads are
+	 * refused in turn, and host-110 is dropped: not pushed, no partial
+	 * score, Rollup|incomplete = 1, the summary counts the refused page.
+	 * The next cycle resumes at host-110 with a page that starts there,
+	 * and the two cycles together push all 12 hosts.
+	 */
+	static void refusedPageResumesThere() throws Exception {
+		try (AdapterHarness h = fixture()) {
+			AtomicLong now = new AtomicLong(0);
+			final boolean[] armed = {false};
+			final boolean[] jumped = {false};
+			h.adapter.budgetClock = () -> {
+				if (armed[0] && !jumped[0] && inRetrieveObjects()) {
+					now.addAndGet(300L * 1_000_000_000L);
+					jumped[0] = true;
+				}
+				return now.get();
+			};
+			h.cycle();
+			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"cycle 1 complete");
+
+			// Cycle 2: arm the jump once the first host page is answered,
+			// so the next bulk call (the second host page) is the one cut.
+			int before = h.suite.pushes.size();
+			int reqBefore = h.vc.requests.size();
+			h.override = r -> {
+				List<String[]> objs = FakeVCenter.objs(r.body);
+				if (objs.size() > 1 && objs.get(0)[1].equals("host-100")) {
+					armed[0] = true;
+				}
+				return null;
+			};
+			h.cycle();
+			T.check(jumped[0], "the clock jumped on a bulk page's budget check");
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req r : h.vc.requests.subList(reqBefore,
+						h.vc.requests.size())) {
+					T.check(!r.body.contains(">host-110<"), "nothing about "
+							+ "host-110 reached vCenter: " + r.action);
+				}
+			}
+			Map<String, Double> r2 = h.lastRollup();
+			T.eq(1.0, r2.get(ComplianceRollup.INCOMPLETE_KEY),
+					"ended early: incomplete = 1");
+			for (int i = 100; i < 110; i++) {
+				T.check(Build96BudgetTest.pushedTo(h, before, "r-host-" + i),
+						"host-" + i + " (page 1) pushed");
+			}
+			T.check(!Build96BudgetTest.pushedTo(h, before, "r-host-110"),
+					"host-110, its page refused, not pushed (no partial score)");
+			T.check(!Build96BudgetTest.pushedTo(h, before, "r-host-111"),
+					"host-111 not reached");
+			T.check(h.logged("Bulk read Host: 10 of 12 object(s) in 1 call(s)"),
+					"the summary counts the one page read");
+			T.check(h.logged("1 object(s) read one at a time (0 failed page(s), "
+					+ "1 refused by the cycle budget)"),
+					"the summary counts the refused page");
+			T.check(h.logged("Cycle ended early while reading host esx110"),
+					"the WARN names host-110");
+			T.eq("host-109", h.holder.resume.cursor(
+					BenchmarkSelector.Kind.HOST), "resume after host-109");
+			T.eq(BenchmarkSelector.Kind.HOST, h.holder.resume.startKind(),
+					"the next cycle starts at the hosts");
+
+			// Cycle 3: resumes at host-110, its page starts there.
+			h.override = null;
+			int before3 = h.suite.pushes.size();
+			int req3 = h.vc.requests.size();
+			h.cycle();
+			List<String> firstHostPage = null;
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req r : h.vc.requests.subList(req3,
+						h.vc.requests.size())) {
+					List<String[]> objs = FakeVCenter.objs(r.body);
+					if (objs.size() > 1 && objs.get(0)[0].equals("HostSystem")) {
+						firstHostPage = new ArrayList<>();
+						for (String[] o : objs) firstHostPage.add(o[1]);
+						break;
+					}
+				}
+			}
+			T.eq(Arrays.asList("host-110", "host-111"), firstHostPage,
+					"the next cycle's host page starts at host-110");
+			T.check(Build96BudgetTest.pushedTo(h, before3, "r-host-110"),
+					"host-110 read");
+			T.check(Build96BudgetTest.pushedTo(h, before3, "r-host-111"),
+					"host-111 read");
+			for (int i = 100; i < 110; i++) {
+				T.check(!Build96BudgetTest.pushedTo(h, before3, "r-host-" + i),
+						"host-" + i + ", read in cycle 2, not read again");
+			}
+			for (int i = 100; i < 112; i++) {
+				T.check(Build96BudgetTest.pushedTo(h, before, "r-host-" + i),
+						"two cycles push host-" + i);
+			}
+			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"the pass completed: incomplete cleared");
+			T.eq(12.0, h.lastRollup().get(P + "Host|scored"),
+					"Host over all 12 (cycle 2's share carried)");
+		}
+	}
+
+	/**
+	 * Review N5: a VM page over the response cap is not tried again for
+	 * every page of the kind: the rest of the VMs are read one at a time
+	 * this cycle (one bulk VM call instead of two), with one WARN, and the
+	 * pushes are the same as when every page is read.
+	 */
+	static void overCapPageRemembered() throws Exception {
+		List<String> expected = pushesOfOneCycle(false);
+		try (AdapterHarness h = fixture()) {
+			h.cycle();
+			h.client.setMaxResponseBytes(256 * 1024);
+			StringBuilder pad = new StringBuilder("<!--");
+			for (int i = 0; i < 300 * 1024; i++) pad.append('x');
+			String big = pad.append("-->").toString();
+			h.override = r -> {
+				List<String[]> objs = FakeVCenter.objs(r.body);
+				return objs.size() > 1 && objs.get(0)[0].equals("VirtualMachine")
+						? FakeVCenter.ok("RetrieveProperties", big) : null;
+			};
+			int before = h.suite.pushes.size();
+			int req = h.vc.requests.size();
+			h.cycle();
+			int vmPages = 0;
+			synchronized (h.vc.requests) {
+				for (FakeVCenter.Req r : h.vc.requests.subList(req,
+						h.vc.requests.size())) {
+					List<String[]> objs = FakeVCenter.objs(r.body);
+					if (objs.size() > 1 && objs.get(0)[0].equals("VirtualMachine")) {
+						vmPages++;
+					}
+				}
+			}
+			T.eq(1, vmPages, "the second VM page is not fetched after the "
+					+ "first was over the cap");
+			T.check(h.logged("the rest of the VM objects are read one at a "
+					+ "time this cycle"), "one WARN says so");
+			T.check(h.logged("60 object(s) read one at a time (1 failed "
+					+ "page(s), 0 refused by the cycle budget; over the "
+					+ "response cap, the rest of the kind read one at a time)"),
+					"the summary says so");
+			T.eq(0.0, h.lastRollup().get(ComplianceRollup.INCOMPLETE_KEY),
+					"complete: nothing lost");
+			List<String> lines = pushLines(h, before);
+			T.eq(expected, lines, "the same pushes as a cycle read in bulk");
+		}
+	}
+
+	/** True when the budget clock is read from inside a bulk page call. */
+	static boolean inRetrieveObjects() {
+		for (StackTraceElement e : Thread.currentThread().getStackTrace()) {
+			if (e.getClassName().endsWith(".VSphereClient")
+					&& e.getMethodName().equals("retrieveObjects")) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The esxcli client is made with the client's timeout and follows it. */

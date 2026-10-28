@@ -254,10 +254,15 @@ public final class Build95TriageTest {
 					+ "in its loop");
 		}
 		// runShadow does not swallow the stop; the cycle logs it. Build
-		// 103: it catches nothing at all (the per-object re-read folds a
-		// failed read into UNREADABLE itself), so the stop propagates.
-		T.check(!OverridesTest.body(ca, "private void runShadow(")
-				.contains("catch ("), "runShadow catches nothing");
+		// 103 review N4: its catch-all (dev preview only, the shadow never
+		// fails the cycle) comes after a catch that rethrows the stop.
+		String rs = OverridesTest.body(ca, "private void runShadow(");
+		int stopCatch = rs.indexOf(
+				"catch (InterruptedException e) { throw e; }");
+		int catchAll = rs.indexOf("catch (Exception e)");
+		T.check(stopCatch >= 0 && catchAll > stopCatch && rs.indexOf(
+				"catch (") == stopCatch, "runShadow rethrows the stop "
+				+ "before its catch-all");
 		// Review N4: an abandoned cycle logs ONE WARN carrying where it
 		// stopped and the timing summary; no second "failed" line.
 		String abandoned = ComplianceDecisions.cycleEndLine(false,

@@ -198,19 +198,6 @@ public final class ShadowComparator {
 		return out;
 	}
 
-	/**
-	 * The summary with the response sizes (review W5): total bytes over
-	 * the pages and the largest page, so devel can size the page size and
-	 * the response cap.
-	 */
-	public String summary(int pages, long bulkMillis, long bytes,
-			long maxPageBytes) {
-		String s = summary(pages, bulkMillis);
-		int at = s.lastIndexOf(" ms (");
-		return s.substring(0, at) + " ms, " + bytes + " bytes, largest page "
-				+ maxPageBytes + " bytes" + s.substring(at + 3);
-	}
-
 	/** The one INFO line per kind per cycle. */
 	public String summary(int pages, long bulkMillis) {
 		StringBuilder b = new StringBuilder();

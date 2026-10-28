@@ -858,6 +858,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		int refusedPages;
 		int perObject;
 		private boolean warned;
+		// Review N5: set when a page of this kind was over the response
+		// cap; no further page of the kind is fetched this cycle.
+		private String tooLarge;
 
 		/**
 		 * @param order the objects to read in bulk, in walk order (only
@@ -888,6 +891,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			if (paths.isEmpty() || moid == null || !index.containsKey(moid)) {
 				return null;
 			}
+			if (tooLarge != null && !pageMoids.contains(moid)) {
+				// Review N5: a page of this kind was over the response
+				// cap; the rest of the kind is read per object this cycle.
+				perObject++;
+				return null;
+			}
 			if (!pageMoids.contains(moid)) load(index.get(moid));
 			VSphereClient.BulkRow r = page.get(moid);
 			if (r == null) perObject++;
@@ -906,6 +915,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				// Refused by the cycle budget: the object being read is
 				// cut (the walk sees the refusal); no WARN of its own.
 				refusedPages++;
+			} catch (VSphereClient.BulkTooLarge e) {
+				// Review N5: remembered for the cycle, so the kind's later
+				// pages do not each download up to the cap again.
+				failedPages++;
+				tooLarge = e.getMessage();
+				logWarn("Bulk read of " + refs.size() + " " + label
+						+ " object(s) failed (" + e.getMessage() + "); the "
+						+ "rest of the " + label + " objects are read one at a "
+						+ "time this cycle (the same values, more calls; "
+						+ "page size " + pageSize + ").");
 			} catch (Exception e) {
 				failedPages++;
 				if (!warned) {
@@ -933,7 +952,10 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ ", " + stats.bytes + " bytes (largest page "
 					+ stats.maxPageBytes + "); " + perObject + " object(s) "
 					+ "read one at a time (" + failedPages + " failed page(s), "
-					+ refusedPages + " refused by the cycle budget), "
+					+ refusedPages + " refused by the cycle budget"
+					+ (tooLarge != null ? "; over the response cap, the "
+							+ "rest of the kind read one at a time" : "")
+					+ "), "
 					+ (cycle.vsphere.bulkFallbackReads() - fallbackAtStart)
 					+ " control(s) read one at a time (value not in the bulk "
 					+ "read)");
@@ -2577,10 +2599,25 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 							+ "during the per-object re-read");
 					break;
 				}
-				sh.comparator.compare(moid, cycle.vsphere.evaluatePerObject(
-						new VSphereClient.MoRef(sh.type, moid), e.getValue(),
-						sh.names.get(moid)));
+				java.util.List<ControlEvaluator.ControlResult> per =
+						cycle.vsphere.evaluatePerObject(new VSphereClient.MoRef(
+								sh.type, moid), e.getValue(), sh.names.get(moid));
+				if (budgetExhausted()) {
+					// Review N4: the budget ran out during this object's
+					// re-read, so its refused reads came back UNREADABLE;
+					// comparing them would log false disagreements.
+					sh.comparator.fail("the cycle time budget ran out "
+							+ "during the per-object re-read");
+					break;
+				}
+				sh.comparator.compare(moid, per);
 			}
+		} catch (InterruptedException e) {
+			throw e;
+		} catch (Exception e) {
+			// Review N4: dev-preview only; the shadow never fails the cycle.
+			sh.comparator.fail(e.getClass().getSimpleName() + ": "
+					+ e.getMessage());
 		}
 		long ms = (System.nanoTime() - t0) / 1_000_000L;
 		logInfo(sh.comparator.summary(-1, ms));
