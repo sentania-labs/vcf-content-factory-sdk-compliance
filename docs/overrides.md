@@ -52,7 +52,8 @@ the template itself.
 
 ## Step 2: Point the account at your copy
 
-1. Open **Administration > Integrations > Accounts** and edit the
+1. Open **Administration > Integrations > Accounts** (on 9.1.1,
+   **Operate > Administration > Integrations > Accounts**) and edit the
    compliance account.
 2. Set **Overrides file** to the name of your copy, without `.xml`. For
    example `compliance_overrides_vc01` for the file

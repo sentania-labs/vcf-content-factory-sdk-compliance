@@ -236,8 +236,8 @@ version, use the overrides file ([overrides.md](overrides.md)).
   interval stored on it when the pak is upgraded (seen on a lab upgrade,
   where instances at 60 stayed at 60). After upgrading, edit each
   compliance adapter instance under **Administration > Integrations >
-  Accounts** and set its collection interval to 5 minutes, or the value
-  you want.
+  Accounts** (on 9.1.1 Administration is under the **Operate** tab) and
+  set its collection interval to 5 minutes, or the value you want.
 - **Setting the interval through the Suite API.** To script the edit, `GET
   /api/adapters/{id}`, set `monitoringInterval` to 5 in that full body,
   and `PUT /api/adapters` with it. Remove `collectorId` from the body
