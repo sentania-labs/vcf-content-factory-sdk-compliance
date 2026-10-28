@@ -11,7 +11,9 @@ import java.util.function.BooleanSupplier;
  * per-object loop now calls {@link #check} before each object; once a stop
  * is requested the next check throws {@link InterruptedException}, the
  * cycle is abandoned within one object, and nothing more is read or
- * pushed. No time budget yet (that needs its own decision).
+ * pushed: since build 104 (review W2) the pushes the cycle still had queued
+ * are dropped, not sent, and a push flush checks the same condition before
+ * each Suite API request. The cycle's time budget is {@link CycleBudget}.
  *
  * <p>No SDK dependencies: the adapter supplies the flag.
  */

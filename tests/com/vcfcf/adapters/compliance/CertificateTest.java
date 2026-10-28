@@ -357,11 +357,14 @@ public final class CertificateTest {
 				"cycle.vsphere.beginCycle();");
 		OverridesTest.inOrder(ca, "the marker",
 				"private void markCycleNotCollected(Exception cause) {",
-				"ComplianceDecisions.markNotCollected(cycle.lastVcResourceId(),",
 				"st.loadVCenterAdapterInstance();",
+				"String cached = cycle.lastVcResourceId();",
+				"ComplianceDecisions.markNotCollected(cached,",
+				"st.vCenterResourceListed(rid);",
 				"st.matchVCenterAdapterInstance(",
 				"cycle.account.vcenterHost, null);",
 				"st.pushStats(rid, stats,",
+				"st.flushPushes();",
 				"} catch (RuntimeException e) {");
 		// Review W12: the id lives in the configuration's holder (a new
 		// holder starts empty); the cycle writes it only through its copy.

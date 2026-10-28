@@ -6,6 +6,7 @@ import com.vcfcf.adapter.json.SimpleJson;
 import com.vcfcf.adapter.spi.VcfCfCollector;
 import com.vcfcf.adapter.spi.VcfCfDiscoverer;
 import com.vcfcf.adapter.spi.VcfCfTester;
+import com.vcfcf.adapter.stitch.SuiteApiBatchResult;
 import com.vcfcf.adapter.stitch.SuiteApiStitcher;
 
 import com.integrien.alive.common.adapter3.AdapterBase;
@@ -518,7 +519,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * Build 96 (issue #27): the framework Suite API client as the SDK-free
 	 * {@link ComplianceStitcher.SuiteApi}, so the stitcher compiles and is
 	 * tested without the framework jar. Every call is passed through
-	 * unchanged.
+	 * unchanged (build 104: the batch result copied field for field).
 	 */
 	private static ComplianceStitcher.SuiteApi suiteApi(
 			final SuiteApiStitcher sas) {
@@ -529,18 +530,30 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				return sas.get(path);
 			}
 
+			// Build 104 (issue #17): buildkit 1.0.24 batch pushes, default
+			// caps (100 resources and about 1 MB per request). The stitcher
+			// calls stats first (review W1).
 			@Override
-			public void pushProperties(String resourceId,
-					java.util.Map<String, String> properties, long ts) {
-				sas.pushProperties(resourceId, properties, ts);
+			public ComplianceStitcher.BatchOutcome pushStatsBatch(
+					java.util.Map<String, java.util.Map<String, Double>> stats,
+					long ts) {
+				return outcome(sas.pushStatsBatch(stats, ts));
 			}
 
 			@Override
-			public void pushStats(String resourceId,
-					java.util.Map<String, Double> stats, long ts) {
-				sas.pushStats(resourceId, stats, ts);
+			public ComplianceStitcher.BatchOutcome pushPropertiesBatch(
+					java.util.Map<String, java.util.Map<String, String>> props,
+					long ts) {
+				return outcome(sas.pushPropertiesBatch(props, ts));
 			}
 		};
+	}
+
+	/** Build 104: the framework batch result, field for field. */
+	static ComplianceStitcher.BatchOutcome outcome(SuiteApiBatchResult r) {
+		return new ComplianceStitcher.BatchOutcome(r.getSent(),
+				r.getBatchesOk(), r.getBatchesFailed(), r.getFellBack(),
+				r.getSkipped(), r.getDropped(), r.isStopped());
 	}
 
 	/**
@@ -603,6 +616,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 */
 	private final StopCheck stop = StopCheck.orInterrupted(
 			this::isAbortRequested);
+
+	/** Build 104 review W2: the StopCheck condition, for the push flushes. */
+	private java.util.function.BooleanSupplier stopFlag() {
+		return () -> isAbortRequested()
+				|| Thread.currentThread().isInterrupted();
+	}
 
 	// Build 95 (issue #17): this cycle's measurement (phases and calls).
 	private volatile CycleMetrics cycleMetrics;
@@ -980,6 +999,16 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		return CycleMetrics.scope(cycleMetrics, p);
 	}
 
+	/**
+	 * Build 104 (issue #17): the timestamp every Suite API push of this
+	 * cycle carries (the cycle's start), so the cycle's pushes go out as one
+	 * batched push; now when there is no stitcher (nothing is pushed then).
+	 */
+	private long pushTs() {
+		ComplianceStitcher st = cycle == null ? null : cycle.stitcher;
+		return st != null ? st.pushTimestamp() : System.currentTimeMillis();
+	}
+
 	private void countSuiteCall() {
 		CycleMetrics m = cycleMetrics;
 		if (m != null) m.suiteCall();
@@ -1066,6 +1095,19 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		if (c.vsphere != null) c.vsphere.setCycleBudget(budget);
 		try {
+			if (c.stitcher != null) {
+				// Build 104 (issue #17): this cycle's pushes are queued and
+				// sent in batches, stats first: inside the walk at a size
+				// threshold, before the completion line, and in the finally
+				// below for a cycle that ends in an exception. Review N1:
+				// opened inside the try its finally closes. Review W2: a
+				// flush checks Stop Collecting before each request.
+				c.stitcher.setStopRequested(stopFlag());
+				// Codex P2 on PR #70: an in-walk flush checks the budget
+				// before each request; the end-of-cycle flush sends the rest.
+				c.stitcher.setBudgetExhausted(budget::exhausted);
+				c.stitcher.beginPushCycle(System.currentTimeMillis());
+			}
 			collectWorldCycle(worldRc, out);
 			completed = true;
 		} catch (InterruptedException e) {
@@ -1075,6 +1117,18 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			abandonedAt = String.valueOf(e.getMessage());
 			throw e;
 		} finally {
+			// Build 104: what the cycle still queued goes out, even when it
+			// ended in an exception (the not-reached marker included), but
+			// not after a stop (review W2): build 103 pushed nothing after
+			// Stop Collecting either. Never throws.
+			if (c.stitcher != null) {
+				if (abandonedAt != null) {
+					c.stitcher.abandonPushCycle("cycle stopped ("
+							+ abandonedAt + ")");
+				} else {
+					c.stitcher.endPushCycle();
+				}
+			}
 			if (c.vsphere != null) c.vsphere.setMetrics(null);
 			if (c.stitcher != null) c.stitcher.setMetrics(null);
 			if (c.vsphere != null) c.vsphere.setCycleBudget(null);
@@ -1128,16 +1182,40 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			return;
 		}
 		try {
-			String id = ComplianceDecisions.markNotCollected(cycle.lastVcResourceId(),
+			// Build 104 review N3: the VMwareAdapter Instance list is read
+			// once and the cached id checked against it, so a replaced
+			// vCenter object is not pushed to (a batch drops an unknown id
+			// silently).
+			boolean[] loaded = {false};
+			Runnable load = () -> {
+				if (!loaded[0]) {
+					st.loadVCenterAdapterInstance();
+					loaded[0] = true;
+				}
+			};
+			String cached = cycle.lastVcResourceId();
+			String id = ComplianceDecisions.markNotCollected(cached,
+					rid -> {
+						load.run();
+						return st.vCenterResourceListed(rid);
+					},
 					() -> {
-						st.loadVCenterAdapterInstance();
+						load.run();
 						ComplianceStitcher.HostEntry he =
 								st.matchVCenterAdapterInstance(
 										cycle.account.vcenterHost, null);
 						return he == null ? null : he.resourceId;
 					},
 					(rid, stats) -> st.pushStats(rid, stats,
-							System.currentTimeMillis()));
+							st.pushTimestamp()));
+			if (cached != null && id != null && !cached.equals(id)) {
+				logInfo("vCenter object " + cached + " (last resolved) is no "
+						+ "longer listed in VCF Ops; using " + id + ", "
+						+ "resolved by the entered host");
+			}
+			// Review N2: sent now, so the line below says what happened.
+			ComplianceStitcher.BatchOutcome sent = id == null ? null
+					: st.flushPushes();
 			if (id == null) {
 				logWarn("vCenter " + cycle.account.vcenterHost + " not reached this "
 						+ "cycle (" + cause.getClass().getSimpleName() + "), "
@@ -1145,12 +1223,20 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 						+ "resolved without vCenter (no VCURL equal to the "
 						+ "entered host): Rollup|incomplete is NOT pushed; "
 						+ "the last scores stay in place");
-			} else {
+			} else if (sent != null && sent.isClean()) {
 				logWarn("vCenter " + cycle.account.vcenterHost + " not reached this "
 						+ "cycle (" + cause.getClass().getSimpleName() + "): "
 						+ ComplianceRollup.INCOMPLETE_KEY + " = 1 pushed to "
 						+ "resource " + id + "; the compliance values shown "
 						+ "are from the last completed cycle");
+			} else {
+				logWarn("vCenter " + cycle.account.vcenterHost + " not reached this "
+						+ "cycle (" + cause.getClass().getSimpleName() + "), "
+						+ "and pushing " + ComplianceRollup.INCOMPLETE_KEY
+						+ " = 1 to resource " + id + " did not go through "
+						+ "cleanly (see the Suite API push WARN): the "
+						+ "compliance values shown are from the last "
+						+ "completed cycle");
 			}
 		} catch (RuntimeException e) {
 			logWarn("vCenter " + cycle.account.vcenterHost + " not reached this "
@@ -1317,6 +1403,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (vcEntry != null) {
 			cycle.rememberVcResourceId(vcEntry.resourceId);
 		}
+		rollupQueued = null;
 		pushRollup(vcEntry, rollup);
 		pushOverridesStatus(vcEntry, out);
 		// Known limitation: this edge is added, never removed. A vCenter whose
@@ -1336,6 +1423,23 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 
 		pushWorldProperty(out, "Summary|last_scan_timestamp",
 				Instant.now().toString());
+
+		// Build 104 (issue #17): the cycle's last batched push, before the
+		// completion line so its Suite API call count includes it.
+		if (cycle.stitcher != null) {
+			ComplianceStitcher.BatchOutcome sent = cycle.stitcher.flushPushes();
+			String r = rollupQueued;
+			rollupQueued = null;
+			if (r != null) {
+				if (sent.isClean()) {
+					logInfo("Pushed " + r);
+				} else {
+					logWarn("Rollup push of " + r + " was in a Suite API push "
+							+ "that was not clean (see the Suite API push "
+							+ "WARN): it may not have landed");
+				}
+			}
+		}
 
 		logInfo("ComplianceAdapter collection complete: "
 				+ cs.hosts + " hosts, "
@@ -1536,12 +1640,13 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					e.getValue()));
 		}
 		if (cycle.stitcher != null && vcEntry != null) {
+			long pts = pushTs();
 			cycle.stitcher.pushProperties(vcEntry.resourceId,
 					ComplianceDecisions.overridesProps(ComplianceDecisions.K,
-							snap.fileName, status), ts);
+							snap.fileName, status), pts);
 			cycle.stitcher.pushStats(vcEntry.resourceId,
 					ComplianceDecisions.overridesStats(ComplianceDecisions.K,
-							skipped, overridden, notLoaded), ts);
+							skipped, overridden, notLoaded), pts);
 		}
 	}
 
@@ -1579,16 +1684,21 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 					+ "pushed this cycle (previous values kept rather than "
 					+ "under-counted)");
 		}
-		cycle.stitcher.pushStats(vcEntry.resourceId, stats,
-				System.currentTimeMillis());
+		cycle.stitcher.pushStats(vcEntry.resourceId, stats, pushTs());
 		if (zeroedCustom) {
 			cycle.customBucketZeroed();
 			logInfo("Account stored as Custom: "
 					+ ComplianceRollup.RETIRED_CUSTOM_KEY + " set to 0 once");
 		}
-		logInfo("Pushed " + stats.size() + " rollup stat(s) to vCenter "
-				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")");
+		// Build 104 review N2: queued; logged after the cycle's last flush,
+		// with what happened to it.
+		rollupQueued = stats.size() + " rollup stat(s) to vCenter "
+				+ vcEntry.hostName + " (resource=" + vcEntry.resourceId + ")";
 	}
+
+	// Build 104 review N2: the rollup push queued this cycle, for the line
+	// logged once it was sent; null when none.
+	private volatile String rollupQueued;
 
 	/**
 	 * Build 82: assert ComplianceWorld (parent) to this instance's own
@@ -1773,7 +1883,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				+ " and no previous benchmark; nothing collected: only "
 				+ "has_unreadable=1 and the reason are pushed");
 		if (resourceId != null) {
-			long ts = System.currentTimeMillis();
+			long ts = pushTs();
 			// Build 95: nothing readable pushes the flag and the reason
 			// only; the last read values stay.
 			cycle.stitcher.pushProperties(resourceId,
@@ -1873,7 +1983,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// Codex P2 on PR #57: recorded as pending at this time, which the
 		// object's push then carries exactly, and counted only when a
 		// read-back returns a sample with it.
-		long ts = System.currentTimeMillis();
+		long ts = pushTs();
 		java.util.Set<String> due = cycle.retiredRepeats.fold(
 				LastBenchmarkMemory.key(kind, moid), live, ts);
 		return ComplianceDecisions.SkipPush.withRetired(skip, due,
@@ -1894,7 +2004,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 			ComplianceRollup rollup) {
 		rollup.recordEvaluated(kind, d.bucket, 0, 0, 0, 0.0);
 		if (resourceId == null || cycle.stitcher == null) return;
-		long ts = System.currentTimeMillis();
+		long ts = pushTs();
 		cycle.stitcher.pushProperties(resourceId,
 				ComplianceDecisions.withObjectKind(
 						ComplianceDecisions.cutTwiceProps(), kind), ts);
@@ -2147,7 +2257,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		}
 		java.util.Map<String, java.util.Map<String, Double>> latest =
 				read.values;
-		long ts = System.currentTimeMillis();
+		long ts = pushTs();
 		for (PendingCleanup p : batch) {
 			ComplianceDecisions.CleanupPlan plan = plans.get(p.resourceId);
 			if (plan == null) continue;
@@ -3526,9 +3636,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		props = ComplianceDecisions.withObjectKind(props, objectKind);
 		ComplianceDecisions.pushObject(cycle.stitcher, resourceId, props,
 				ComplianceDecisions.nothingEvaluatedStats(), skip,
-				System.currentTimeMillis());
-		logInfo("Pushed profile_name='" + profileName + "' to resource="
-				+ resourceId);
+				pushTs());
+		logInfo("Queued profile_name='" + profileName + "' for resource="
+				+ resourceId + " (sent with the cycle's Suite API push)");
 	}
 
 	/**
@@ -3538,7 +3648,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 	 * per-control results.
 	 */
 	private void pushNoBenchmark(String resourceId, String label) {
-		long ts = System.currentTimeMillis();
+		long ts = pushTs();
 		java.util.Map<String, String> props = new java.util.LinkedHashMap<>(
 				ComplianceDecisions.profileNameProps(label));
 		props.putAll(ComplianceDecisions.unreadableProps("", ""));
@@ -3570,7 +3680,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 								objectUnreadable.reasonText(cr.unreadableCount)),
 						objectKind),
 				ComplianceDecisions.complianceStats(cr), skip,
-				System.currentTimeMillis());
+				pushTs());
 	}
 
 	/** Per-cycle counters for the completion log line. */
