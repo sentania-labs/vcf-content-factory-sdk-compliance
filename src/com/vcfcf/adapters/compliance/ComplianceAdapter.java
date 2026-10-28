@@ -2969,8 +2969,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"VmwareDistributedVirtualSwitch", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("vDS", switches.get(0).moRef.type,
-				bulkShadow);
+		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = switches.get(0).moRef.type;
+		Shadow shadow = new Shadow("vDS", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.VDS, rollup, seen);
 		switches = walk.order(switches, o -> o.moid);   // build 96 (review B1)
 		java.util.List<VSphereClient.MoRef> bulkOrder =
@@ -2980,7 +2984,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkOrder.add(o.moRef);
 			}
 		}
-		BulkPager bulk = new BulkPager("vDS", switches.get(0).moRef.type,
+		BulkPager bulk = new BulkPager("vDS", vimType,
 				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.VDS));
 		for (VSphereClient.DvsInfo dvs : switches) {
 			stop.check("vDS " + dvs.name);
@@ -3026,8 +3030,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"DistributedVirtualPortgroup", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Portgroup", pgs.get(0).moRef.type,
-				bulkShadow);
+		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = pgs.get(0).moRef.type;
+		Shadow shadow = new Shadow("Portgroup", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.PORTGROUP, rollup, seen);
 		pgs = walk.order(pgs, o -> o.moid);   // build 96 (review B1)
 		java.util.List<VSphereClient.MoRef> bulkOrder =
@@ -3037,7 +3045,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkOrder.add(o.moRef);
 			}
 		}
-		BulkPager bulk = new BulkPager("Portgroup", pgs.get(0).moRef.type,
+		BulkPager bulk = new BulkPager("Portgroup", vimType,
 				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.PORTGROUP));
 		for (VSphereClient.DvpgInfo pg : pgs) {
 			stop.check("portgroup " + pg.name);
@@ -3091,8 +3099,12 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"ClusterComputeResource", rollup)) {
 			return;
 		}
-		Shadow shadow = new Shadow("Cluster", clusters.get(0).moRef.type,
-				bulkShadow);
+		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// listing, never the walk's tail, which is empty when the cursor
+		// sits on the last object (cut twice and stepped past); the empty
+		// walk must still reach finish() to clear the cursor.
+		String vimType = clusters.get(0).moRef.type;
+		Shadow shadow = new Shadow("Cluster", vimType, bulkShadow);
 		KindWalk walk = new KindWalk(BenchmarkSelector.Kind.CLUSTER, rollup, seen);
 		clusters = walk.order(clusters, o -> o.moid);   // build 96 (review B1)
 		java.util.List<VSphereClient.MoRef> bulkOrder =
@@ -3102,7 +3114,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				bulkOrder.add(o.moRef);
 			}
 		}
-		BulkPager bulk = new BulkPager("Cluster", clusters.get(0).moRef.type,
+		BulkPager bulk = new BulkPager("Cluster", vimType,
 				bulkOrder, slicesFor(selector, BenchmarkSelector.Kind.CLUSTER));
 		for (VSphereClient.ClusterInfo cluster : clusters) {
 			stop.check("cluster " + cluster.name);

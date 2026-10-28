@@ -45,6 +45,24 @@ final class AdapterHarness implements AutoCloseable {
 	/** Build 96 (review B1-r2): VM moid -> {name, host moid}; none by default. */
 	final Map<String, String[]> vms = new LinkedHashMap<>();
 
+	/**
+	 * Build 104 (PR #69 Codex P1): vim objects of the switch, portgroup and
+	 * cluster kinds, vim type -> (moid -> name); none by default.
+	 */
+	final Map<String, Map<String, String>> vimObjects = new LinkedHashMap<>();
+
+	/**
+	 * Add a {@code type} object (VmwareDistributedVirtualSwitch,
+	 * DistributedVirtualPortgroup or ClusterComputeResource) and list it
+	 * in VCF Ops too.
+	 */
+	AdapterHarness vim(String type, String moid, String name) {
+		vimObjects.computeIfAbsent(type, k -> new LinkedHashMap<>())
+				.put(moid, name);
+		listResources();
+		return this;
+	}
+
 	/** Add a VM on {@code hostMoid} and list it in VCF Ops too. */
 	AdapterHarness vm(String moid, String name, String hostMoid) {
 		vms.put(moid, new String[] {name, hostMoid});
@@ -95,6 +113,16 @@ final class AdapterHarness implements AutoCloseable {
 		}
 		suite.bodies.put("resourceKind=VirtualMachine&", FakeSuiteApi.page(
 				vmRows.size(), vmRows.toArray(new String[0])));
+		for (Map.Entry<String, Map<String, String>> k : vimObjects.entrySet()) {
+			List<String> kRows = new ArrayList<>();
+			for (Map.Entry<String, String> o : k.getValue().entrySet()) {
+				kRows.add(FakeSuiteApi.row("r-" + o.getKey(), o.getValue(),
+						o.getKey(), VC_UUID));
+			}
+			suite.bodies.put("resourceKind=" + k.getKey() + "&",
+					FakeSuiteApi.page(kRows.size(),
+							kRows.toArray(new String[0])));
+		}
 		suite.bodies.put("resourceKind=VMwareAdapter+Instance&",
 				"{\"pageInfo\":{\"totalCount\":1},\"resourceList\":[{"
 				+ "\"identifier\":\"" + VC_RESOURCE + "\",\"resourceKey\":{"
@@ -206,6 +234,14 @@ final class AdapterHarness implements AutoCloseable {
 								"runtime.host", "<val type=\"HostSystem\">"
 										+ v.getValue()[1] + "</val>",
 								"config.guestId", "<val>otherGuest64</val>")));
+			}
+		}
+		Map<String, String> objs = vimObjects.get(type);
+		if (objs != null) {
+			for (Map.Entry<String, String> o : objs.entrySet()) {
+				b.append(FakeVCenter.objectContent("returnval", type,
+						o.getKey(), FakeVCenter.vals("name",
+								"<val>" + o.getValue() + "</val>")));
 			}
 		}
 		return FakeVCenter.ok("RetrieveProperties", b.toString());
