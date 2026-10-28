@@ -74,7 +74,7 @@ widgets:
     # relationship_mode self, depth 1: only the selected object's own controls (vCenter, Cluster, vDS or Distributed Port Group); VM controls live on the VMs dashboard.
     relationship_mode: self
     depth: 1
-    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert definition is type 15 subType 21, so this lists every alert raised under them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out). Not listed: a Score Degraded alert raised before build 57 (definition then subType 20), which keeps subType 20 until it cancels (issue #64)
 
 interactions:
   - from: scope_picker
