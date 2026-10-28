@@ -143,7 +143,7 @@ public final class Build96StitcherTest {
 		T.eq(11, s.gets.size(), "11 page reads");
 		T.eq(105000, st.countOfKind(KIND), "every row indexed");
 		T.check(s.gets.get(10).endsWith("&page=10"), "last page is page 10");
-		T.eq("r-c104999", st.matchCluster("cl104999", null).resourceId,
+		T.eq("r-c104999", st.matchCluster("cl104999", "domain-c104999").resourceId,
 				"a row on the last page matches");
 	}
 

@@ -3,6 +3,8 @@ package com.vcfcf.adapters.compliance;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -121,6 +123,21 @@ public final class Build96BudgetTest {
 	static FakeVCenter.Resp late(long ms, FakeVCenter.Resp r) {
 		try {
 			Thread.sleep(ms);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		return r;
+	}
+
+	/**
+	 * Build 102 (issue #63): answer only once {@code release} is counted
+	 * down (bounded at 60 s so a failed test cannot hang the run). The
+	 * call is hung for as long as the test needs it to be, whatever the
+	 * machine's speed, so no real sleep races the client's timeout.
+	 */
+	static FakeVCenter.Resp held(CountDownLatch release, FakeVCenter.Resp r) {
+		try {
+			release.await(60, TimeUnit.SECONDS);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
@@ -732,8 +749,15 @@ public final class Build96BudgetTest {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
 				"host-11", "esx02")) {
 			h.cycle();
-			h.client.setReadTimeoutMs(200);
-			h.client.setShortReadTimeoutMs(200);
+			// Build 102 (issue #63): the hung call waits on a latch that is
+			// only released after the cycle, so it can never answer in
+			// time, and the timeout is wide enough that the calls vCenter
+			// does answer (the lockdown read the flake lost at 200 ms on a
+			// loaded runner) are never cut by it. The hung call costs one
+			// timeout of wall time, as before.
+			final CountDownLatch release = new CountDownLatch(1);
+			h.client.setReadTimeoutMs(2000);
+			h.client.setShortReadTimeoutMs(2000);
 			final int[] relayed = {0};
 			h.override = r -> {
 				boolean hostTen = r.body.contains(">host-10<")
@@ -743,13 +767,17 @@ public final class Build96BudgetTest {
 						|| r.action.endsWith("/RetrieveManagedMethodExecuter");
 				if (hostTen && hostRelayed) {
 					relayed[0]++;
-					return late(1000, FakeVCenter.ok("QueryOptions", ""));
+					return held(release, FakeVCenter.ok("QueryOptions", ""));
 				}
 				return null;
 			};
 			int reqBefore = h.vc.requests.size();
 			int before = h.suite.pushes.size();
-			h.cycle();
+			try {
+				h.cycle();
+			} finally {
+				release.countDown();   // free the held server thread
+			}
 			T.eq(1, relayed[0], "one host-relayed call to the hung host");
 			boolean lockdownRead = false;
 			synchronized (h.vc.requests) {

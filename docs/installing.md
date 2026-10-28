@@ -257,6 +257,16 @@ version, use the overrides file ([overrides.md](overrides.md)).
   definitions rather than adding new ones. Alerts already open when you
   upgrade stay open under the new name with their alert ids and start
   times kept (seen on a lab upgrade: every active alert carried over).
+- **Score Degraded alerts raised before build 57 stay hidden until they
+  cancel (issue #64).** Build 57 moved the Host Compliance Score Degraded
+  definition from subType 20 (Capacity) to 21 (Compliance). An alert
+  keeps the subType it was raised with, so a Score Degraded alert opened
+  before build 57 and still active is subType 20 and the dashboards'
+  alert lists (filter `15_21`) do not show it; it still shows under
+  **Alerts**. It changes on its own when it cancels and is raised again.
+  To bring it into the lists now, cancel it under **Alerts**: if the
+  host's score is still below the threshold, it is raised again at the
+  next cycle as subType 21.
 - **Definitions take the new cycles.** Existing symptom and alert
   definitions pick up the build 86 wait and cancel cycles on the upgrade
   (per-control and score ones wait 1 and cancel after 3; the collection

@@ -182,7 +182,10 @@ widgets:
   #     "Compliance data not collected" alerts and the aggregate "Host
   #     Compliance Score Degraded" alert. The type filter cannot separate
   #     them and pinning definition ids was ruled out; Score Degraded in
-  #     the list is accepted, owner decision 2026-10-13, PR #44)
+  #     the list is accepted, owner decision 2026-10-13, PR #44).
+  #     Exception (issue #64): a Score Degraded alert raised before build
+  #     57 keeps the subType it was raised with (20, Capacity) until it
+  #     cancels, so this 15_21 filter does not list it.
 
   - id: open_compliance_alerts
     type: AlertList
@@ -193,7 +196,7 @@ widgets:
     mode: all
     # depth 4: input is a VMwareAdapter Instance (vCenter); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
     depth: 4
-    alert_types: ["15_21"]  # Application / Compliance. Every pak alert is type 15 subType 21, so this lists all of them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out)
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert definition is type 15 subType 21, so this lists every alert raised under them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out). Not listed: a Score Degraded alert raised before build 57 (definition then subType 20), which keeps subType 20 until it cancels (issue #64)
 
 interactions:
   - from: vcenter_object_type_view

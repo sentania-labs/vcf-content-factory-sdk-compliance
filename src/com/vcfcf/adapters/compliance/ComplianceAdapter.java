@@ -1525,14 +1525,17 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		// so the loaders scope every vim25-backed kind by VMEntityVCID — a bare
 		// MOID (host-12, vm-42) is not unique across vCenters and would
 		// otherwise cross-stitch in a multi-vCenter VCF Ops (the MOID trap).
-		// A read failure degrades to the unscoped matcher (single-vCenter safe).
+		// Build 102 (issue #20): objects match on MOID plus this vCenter's
+		// UUID only, so a failed read holds every vim25-backed kind back
+		// (Rollup|incomplete = 1) instead of matching bare MOIDs.
 		try {
 			cycle.stitcher.setOwningVcUuid(cycle.vsphere.getVCenterInstanceUuid());
 		} catch (Exception e) {
 			cycle.stitcher.setOwningVcUuid(null);
-			logWarn("Stitcher owning-vCenter UUID unavailable — foreign "
-					+ "resource matching degrades to unscoped (single-vCenter "
-					+ "safe): " + e.getMessage());
+			logWarn("Stitcher owning-vCenter UUID unavailable; objects are "
+					+ "matched on MOID plus vCenter UUID only, so hosts, VMs, "
+					+ "clusters, switches and port groups are held back this "
+					+ "cycle: " + e.getMessage());
 		}
 		safeLoad(() -> cycle.stitcher.loadHostResources(),
 				() -> "Stitcher loaded: " + cycle.stitcher.size() + " hosts",
@@ -2073,8 +2076,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 		if (failed) {
 			logWarn(kind.rollupName + " objects not scored this cycle: the "
 					+ "VCF Ops " + resourceKind + " resource list could not "
-					+ "be read (see the ComplianceStitcher fetchResources WARN "
-					+ "above), so no object can be matched or pushed; "
+					+ "be read or scoped to this vCenter (see the "
+					+ "ComplianceStitcher WARN above), so no object can be "
+					+ "matched or pushed; "
 					+ "Rollup|" + kind.rollupName + " keys held back");
 		}
 		return false;

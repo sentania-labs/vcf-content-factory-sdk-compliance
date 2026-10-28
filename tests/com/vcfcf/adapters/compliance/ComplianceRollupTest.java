@@ -97,6 +97,52 @@ public final class ComplianceRollupTest {
 		}
 		T.near(10, objects, "buckets sum to all objects");
 
+		// Build 102 (issue #59): scored objects per benchmark. The SCG 9.1
+		// bucket holds 4 objects but 2 are scored: the all-unreadable host
+		// and the non-vSAN cluster (nothing applicable) are in objects only,
+		// which is the Objects by SCG vs Rollup|All|scored gap.
+		T.near(1, s.get(P + "Benchmark|SCG_7.0|scored_objects"), "7.0 scored");
+		T.near(3, s.get(P + "Benchmark|SCG_8.0|scored_objects"), "8.0 scored");
+		T.near(0, s.get(P + "Benchmark|SCG_9.0|scored_objects"),
+				"9.0 zero, pushed");
+		T.near(2, s.get(P + "Benchmark|SCG_9.1|scored_objects"),
+				"9.1: not the unreadable host, not the empty cluster");
+		T.near(0, s.get(P + "Benchmark|SCG_6.7|scored_objects"),
+				"6.7 zero, pushed");
+		T.near(0, s.get(P + "Benchmark|none|scored_objects"),
+				"none never scored");
+		T.near(0, s.get(P + "Benchmark|unknown|scored_objects"),
+				"unknown never scored");
+		double scoredObjects = 0;
+		for (String b : ComplianceRollup.FIXED_BUCKETS) {
+			scoredObjects += s.get(P + "Benchmark|" + b + "|scored_objects");
+		}
+		T.near(s.get(P + "All|scored"), scoredObjects,
+				"scored_objects sum to Rollup|All|scored");
+
+		// Build 102: a kind's share carried across cycles (Part) carries
+		// its scored buckets too.
+		ComplianceRollup carried = new ComplianceRollup();
+		ComplianceRollup early = new ComplianceRollup();
+		early.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 5, 0, 0,
+				ControlEvaluator.score(5, 0));
+		early.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 0, 0, 3,
+				ControlEvaluator.score(0, 0));
+		carried.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 4, 1,
+				0, ControlEvaluator.score(3, 1));
+		carried.addPart(BenchmarkSelector.Kind.HOST,
+				early.part(BenchmarkSelector.Kind.HOST));
+		Map<String, Double> cs = carried.toStats();
+		T.near(3, cs.get(P + "Benchmark|SCG_9.0|objects"), "carried objects");
+		T.near(2, cs.get(P + "Benchmark|SCG_9.0|scored_objects"),
+				"carried scored objects");
+
+		// Held back with objects when a kind is incomplete.
+		carried.markIncomplete(BenchmarkSelector.Kind.VM);
+		T.check(!carried.toStats().containsKey(
+				P + "Benchmark|SCG_9.0|scored_objects"),
+				"scored_objects held back on an incomplete cycle");
+
 		// Empty rollup: counts pushed as 0, no averages.
 		Map<String, Double> e = new ComplianceRollup().toStats();
 		T.near(0, e.get(P + "All|scored"), "empty scored");

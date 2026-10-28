@@ -158,7 +158,10 @@ so they list every pack alert of the Compliance type on the selected
 object and its children: the per-control alerts, the "Compliance data not
 collected" alerts and the Host Compliance Score Degraded alert alike. The
 widget has no filter that separates them, and pinning all 143 alert
-definitions per widget was ruled out.
+definitions per widget was ruled out. One exception after an upgrade: a
+Host Compliance Score Degraded alert raised before build 57 keeps
+subType 20 until it cancels and is not listed (issue #64; see
+[installing.md](installing.md#upgrading)).
 
 On the Environment Overview nothing is selected when the page opens
 (build 97, factory #177), so Open Compliance Alerts lists every
@@ -281,6 +284,20 @@ collection continues; compliance is never failed over a stitch error.
   in a cycle, that kind is not scored and its keys are held back with
   `Rollup|incomplete` = 1, exactly like a failed vCenter listing, rather
   than every object being reported as unmatched.
+- **Matched on MOID and vCenter only (build 102, issue #20).** An object
+  matches the VMWARE resource with the same MOID (`VMEntityObjectID`)
+  and this account's vCenter instance UUID (`VMEntityVCID`), the identity
+  the Broadcom vSphere packs use. There is no name match any more: the
+  old exact-name and FQDN / short-name fallbacks could pick a different
+  object that shared a name prefix, and the pick could change from cycle
+  to cycle. A VCF Ops resource row with no UUID, no MOID or no vCenter
+  UUID is not used, and two rows with the same MOID in this vCenter match
+  neither; the adapter counts those rows and names the first once per
+  cycle per kind at INFO (`<kind>: N row(s) not indexed`). The objects
+  they would have matched are counted unmatched. If the vCenter instance
+  UUID cannot be read in a cycle, hosts, VMs, clusters, switches and
+  port groups are held back with `Rollup|incomplete` = 1 instead of
+  matched on a bare MOID.
 - **vSphere Pods are skipped (build 88).** VMs whose guest id starts with
   `crx` (vSphere Pods, which VCF Ops lists as kind Pod) are out of scope:
   not scored, not unmatched, counted in

@@ -14,7 +14,7 @@ import java.util.Map;
  * are served through the real clients: the vim25 SOAP parser behind
  * VSphereClient, the esxcli parser behind EsxcliSoapClient (a get struct,
  * a list, an esxcli-level fault), and ComplianceStitcher's resource load
- * and matchResource (moid, exact name, FQDN / short-name tolerance,
+ * and matchResource (MOID plus vCenter UUID only since build 102,
  * cross-vCenter scoping). Run from the repo root.
  */
 public final class Build96FixtureTest {
@@ -171,30 +171,39 @@ public final class Build96FixtureTest {
 	}
 
 	/**
-	 * matchResource, scoped to vCenter uuid-1: moid first, then exact name,
-	 * then dot-prefix (FQDN against short name, either way); a row of
-	 * another vCenter is skipped; a row with no VMEntityVCID is kept.
+	 * matchResource, scoped to vCenter uuid-1. Build 102 (issue #20): MOID
+	 * plus vCenter UUID only. No exact-name or dot-prefix fallback; a row
+	 * of another vCenter, with no VMEntityVCID or with no identifier is not
+	 * indexed (counted and named once at INFO); a MOID on two rows matches
+	 * neither; an unknown owning vCenter holds the kind back.
 	 */
 	static void matchResourceTable() throws Exception {
 		FakeSuiteApi suite = new FakeSuiteApi();
 		suite.bodies.put("resourceKind=HostSystem",
 				fixture("suiteapi/resources-hostsystem.json"));
-		ComplianceStitcher st = new ComplianceStitcher(suite, null);
+		final List<String> info = new java.util.ArrayList<>();
+		VSphereClient.Log log = new VSphereClient.Log() {
+			@Override public void info(String m) { info.add(m); }
+			@Override public void debug(String m) {}
+			@Override public void warn(String m) { info.add("WARN " + m); }
+			@Override public boolean isDebugEnabled() { return false; }
+		};
+		ComplianceStitcher st = new ComplianceStitcher(suite, log);
 		st.setOwningVcUuid("uuid-1");
 		st.loadHostResources();
 		T.check(!st.loadFailed("HostSystem"), "complete list");
+		T.eq(2, st.countOfKind("HostSystem"), "two rows indexed");
 		Object[][] table = {
 			// name, moid, expected resource id (null: no match)
 			{"anything", "host-10", "r-esx01"},          // moid wins, other vCenter's host-10 skipped
-			{"esx02", null, "r-esx02"},                  // exact name
-			{"esx02.lab.example", null, "r-esx02"},      // FQDN against a short registered name
-			{"esx01", "host-99", "r-esx01"},             // short name against a registered FQDN
-			{"x", "host-15", "r-novcid"},                // no VMEntityVCID: kept (degrades to unscoped)
+			{"esx02", "host-11", "r-esx02"},             // moid
+			{"esx02", null, null},                       // no moid: no name match
+			{"esx02.lab.example", null, null},           // no FQDN/short-name prefix match
+			{"esx01", "host-99", null},                  // a name never rescues a wrong moid
+			{"x", "host-15", null},                      // no VMEntityVCID: not indexed
 			{"esx09.lab.example", "host-99", null},      // only in another vCenter
-			{"esx0", null, null},                        // not a dot prefix
 			{null, "host-1", null},                      // moid is exact, never a prefix
-			// A row with no identifier is pushed by name (existing behaviour).
-			{"esx06.lab.example", null, "esx06.lab.example"},
+			{"esx06.lab.example", "host-16", null},      // no identifier: never pushed by name
 		};
 		for (Object[] row : table) {
 			ComplianceStitcher.HostEntry he = st.matchHost((String) row[0],
@@ -202,14 +211,42 @@ public final class Build96FixtureTest {
 			T.eq(row[2], he == null ? null : he.resourceId,
 					"match " + Arrays.toString(row));
 		}
+		int lines = 0;
+		for (String m : info) {
+			if (m.contains("not indexed")) {
+				lines++;
+				T.check(m.contains("2 row(s) not indexed")
+						&& m.contains("1 no VMEntityVCID")
+						&& m.contains("1 no identifier")
+						&& m.contains("first: name=esx05.lab.example"),
+						"count and first unindexed row named: " + m);
+				T.check(!m.startsWith("WARN"), "logged at INFO");
+			}
+		}
+		T.eq(1, lines, "one line per load");
 
-		// Unscoped (vCenter UUID unknown): the bare moid host-10 resolves to
-		// the last row carrying it, another vCenter's host: the MOID trap
-		// that setOwningVcUuid exists to close.
+		// Two rows of the owning vCenter carry the same MOID: neither.
+		FakeSuiteApi dup = new FakeSuiteApi();
+		dup.bodies.put("resourceKind=HostSystem", FakeSuiteApi.page(3,
+				FakeSuiteApi.row("r-a", "esx01", "host-10", "uuid-1"),
+				FakeSuiteApi.row("r-b", "esx01.old", "host-10", "uuid-1"),
+				FakeSuiteApi.row("r-c", "esx02", "host-11", "uuid-1")));
+		ComplianceStitcher d = new ComplianceStitcher(dup, null);
+		d.setOwningVcUuid("uuid-1");
+		d.loadHostResources();
+		T.eq(null, d.matchHost("esx01", "host-10"), "ambiguous MOID: no match");
+		T.eq("r-c", d.matchHost("esx02", "host-11").resourceId,
+				"the other host still matches");
+
+		// Owning vCenter UUID unknown: no bare-MOID matching (the MOID trap
+		// the unscoped matcher had); the kind is held back, not read.
 		ComplianceStitcher open = new ComplianceStitcher(suite, null);
 		open.setOwningVcUuid(null);
+		int gets = suite.gets.size();
 		open.loadHostResources();
-		T.eq("r-other-vc", open.matchHost("anything", "host-10").resourceId,
-				"unscoped bare moid is last-writer-wins");
+		T.check(open.loadFailed("HostSystem"),
+				"unknown owning vCenter: held back");
+		T.eq(gets, suite.gets.size(), "nothing read");
+		T.eq(null, open.matchHost("anything", "host-10"), "no match");
 	}
 }
