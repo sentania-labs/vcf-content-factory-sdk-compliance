@@ -1055,9 +1055,9 @@ public final class ComplianceStitcher
 	 * cycle drops the queue ({@link #abandonPushCycle}).
 	 */
 	private void flushInWalk() {
-		if (stopRequested()) return;
+		if (stopRequested() || budgetExhausted() != null) return;
 		Map<Long, Queued> work = takeQueue();
-		if (work != null) sendAndCount(work);
+		if (work != null) sendAndCount(work, true);
 	}
 
 	private Map<Long, Queued> takeQueue() {
@@ -1086,7 +1086,7 @@ public final class ComplianceStitcher
 	 */
 	public BatchOutcome flushPushes() {
 		Map<Long, Queued> work = takeQueue();
-		if (work != null) sendAndCount(work);
+		if (work != null) sendAndCount(work, false);
 		return logCycleSummary();
 	}
 
@@ -1135,10 +1135,11 @@ public final class ComplianceStitcher
 	private void sendAtOnce(long timestamp, Queued one) {
 		// Build 104 review N5: outside a cycle (no production caller), the
 		// summary is DEBUG, a failure still WARN.
-		BatchOutcome o = send(java.util.Collections.singletonMap(timestamp,
-				one));
+		Sent r = send(java.util.Collections.singletonMap(timestamp, one),
+				false);
+		BatchOutcome o = r.outcome;
 		String line = pushSummary(o, one.props.size(), one.stats.size(),
-				valuesIn(one), 1, 0, lastFailure);
+				valuesIn(one), 1, 0, r.failure);
 		if (o.isClean()) {
 			logger.debug(line);
 		} else {
@@ -1153,23 +1154,15 @@ public final class ComplianceStitcher
 		return v;
 	}
 
-	private void sendAndCount(Map<Long, Queued> work) {
-		int p = 0;
-		int st = 0;
-		int v = 0;
-		for (Queued q : work.values()) {
-			p += q.props.size();
-			st += q.stats.size();
-			v += valuesIn(q);
-		}
-		BatchOutcome o = send(work);
+	private void sendAndCount(Map<Long, Queued> work, boolean inWalk) {
+		Sent r = send(work, inWalk);
 		synchronized (pushLock) {
-			cycleOutcome = cycleOutcome.plus(o);
-			cycleProps += p;
-			cycleStats += st;
-			cycleValues += v;
+			cycleOutcome = cycleOutcome.plus(r.outcome);
+			cycleProps += r.propResources;
+			cycleStats += r.statResources;
+			cycleValues += r.values;
 			cycleFlushes++;
-			if (lastFailure != null) cycleFailure = lastFailure;
+			if (r.failure != null) cycleFailure = r.failure;
 		}
 	}
 
@@ -1191,58 +1184,210 @@ public final class ComplianceStitcher
 		return total;
 	}
 
-	// The last send's thrown-push or stop text, for the summary.
-	private volatile String lastFailure;
+	/**
+	 * Codex P2 on PR #70: most resources in one slice, the framework's
+	 * per-request resource cap (100), so the framework sends a slice as
+	 * exactly one request.
+	 */
+	static final int SLICE_RESOURCES = 100;
+	/**
+	 * Codex P2 on PR #70: most estimated JSON bytes in one slice, well under
+	 * the framework's 1,000,000-byte request cap. The estimate
+	 * ({@link #jsonBytes}) is an upper bound on what the framework writes
+	 * (every escape and UTF-8 byte counted, generous per-item overhead), so
+	 * the framework never re-splits a slice. One resource over it goes
+	 * alone, as the framework would send it.
+	 */
+	static final long SLICE_BYTES = 600_000L;
+
+	/** Upper bound of a JSON string's UTF-8 bytes, quotes included. */
+	static long jsonBytes(String v) {
+		if (v == null) return 4;
+		long n = 2;
+		for (int i = 0; i < v.length(); i++) {
+			char c = v.charAt(i);
+			if (c < 0x20) n += 6;
+			else if (c == '"' || c == '\\') n += 2;
+			else if (c < 0x80) n += 1;
+			else if (c < 0x800) n += 2;
+			else n += 3;
+		}
+		return n;
+	}
+
+	private static <V> long entryBytes(String rid, Map<String, V> m) {
+		long n = 200 + jsonBytes(rid);
+		for (Map.Entry<String, V> e : m.entrySet()) {
+			Object v = e.getValue();
+			n += 100 + jsonBytes(e.getKey()) + (v instanceof String
+					? jsonBytes((String) v) : 32);
+		}
+		return n;
+	}
 
 	/**
-	 * Build 104 review W1: per timestamp, stats first (small, and every
-	 * alerting signal: score, has_unreadable, each |Compliant,
-	 * Rollup|incomplete), then properties. A stopped call (5xx, 429,
-	 * timeout, token failure, interrupt), a thrown push or Stop Collecting
-	 * sends nothing more; the rest counts as not delivered.
+	 * Codex P2 on PR #70: split one half (stats or properties) into slices
+	 * the framework sends as one request each.
 	 */
-	private BatchOutcome send(Map<Long, Queued> work) {
+	static <V> List<Map<String, Map<String, V>>> slices(
+			Map<String, Map<String, V>> half, int maxResources,
+			long maxBytes) {
+		List<Map<String, Map<String, V>>> out = new java.util.ArrayList<>();
+		Map<String, Map<String, V>> cur = new LinkedHashMap<>();
+		long bytes = 0;
+		for (Map.Entry<String, Map<String, V>> e : half.entrySet()) {
+			long b = entryBytes(e.getKey(), e.getValue());
+			if (!cur.isEmpty() && (cur.size() >= maxResources
+					|| bytes + b > maxBytes)) {
+				out.add(cur);
+				cur = new LinkedHashMap<>();
+				bytes = 0;
+			}
+			cur.put(e.getKey(), e.getValue());
+			bytes += b;
+		}
+		if (!cur.isEmpty()) out.add(cur);
+		return out;
+	}
+
+	/** Test seam: the slice caps. */
+	void setSliceCaps(int resources, long bytes) {
+		synchronized (pushLock) {
+			sliceResources = resources;
+			sliceBytes = bytes;
+		}
+	}
+
+	private int sliceResources = SLICE_RESOURCES;
+	private long sliceBytes = SLICE_BYTES;
+
+	/**
+	 * Codex P2 on PR #70: the cycle budget's reason to end, or null while
+	 * it may go on. The adapter passes its CycleBudget; null never ends.
+	 */
+	private volatile java.util.function.Supplier<String> budget;
+
+	public void setBudgetExhausted(java.util.function.Supplier<String> b) {
+		this.budget = b;
+	}
+
+	private String budgetExhausted() {
+		java.util.function.Supplier<String> b = budget;
+		return b == null ? null : b.get();
+	}
+
+	/** What one send did, for the cycle's summary. */
+	private static final class Sent {
+		BatchOutcome outcome = BatchOutcome.NONE;
+		int propResources;
+		int statResources;
+		int values;
+		String failure;
+	}
+
+	private static final class Slice {
+		final long ts;
+		final boolean stats;
+		final Map<String, Map<String, String>> props;
+		final Map<String, Map<String, Double>> statMap;
+
+		Slice(long ts, Map<String, Map<String, String>> props,
+				Map<String, Map<String, Double>> statMap) {
+			this.ts = ts;
+			this.stats = statMap != null;
+			this.props = props;
+			this.statMap = statMap;
+		}
+
+		int entries() {
+			return stats ? statMap.size() : props.size();
+		}
+
+		int values() {
+			int v = 0;
+			if (stats) {
+				for (Map<String, Double> m : statMap.values()) v += m.size();
+			} else {
+				for (Map<String, String> m : props.values()) v += m.size();
+			}
+			return v;
+		}
+	}
+
+	/**
+	 * Build 104 review W1, Codex P2 on PR #70: every stats slice of the
+	 * flush (all timestamps), then every properties slice; each slice is one
+	 * Suite API request. Before every slice: Stop Collecting (sends nothing
+	 * more; the rest counts as not delivered), and for a flush inside the
+	 * walk the cycle budget (the rest goes back to the queue for the
+	 * end-of-cycle flush, which sends regardless of the budget, as build
+	 * 103's pushes did, so the rollup and Rollup|incomplete still land). A
+	 * stopped call (5xx, 429, timeout, token failure, interrupt) or a
+	 * thrown push sends nothing more either.
+	 */
+	private Sent send(Map<Long, Queued> work, boolean inWalk) {
+		List<Slice> plan = new java.util.ArrayList<>();
+		int sr;
+		long sb;
+		synchronized (pushLock) {
+			sr = sliceResources;
+			sb = sliceBytes;
+		}
+		for (Map.Entry<Long, Queued> e : work.entrySet()) {
+			for (Map<String, Map<String, Double>> m
+					: slices(e.getValue().stats, sr, sb)) {
+				plan.add(new Slice(e.getKey(), null, m));
+			}
+		}
+		for (Map.Entry<Long, Queued> e : work.entrySet()) {
+			for (Map<String, Map<String, String>> m
+					: slices(e.getValue().props, sr, sb)) {
+				plan.add(new Slice(e.getKey(), m, null));
+			}
+		}
+		Sent r = new Sent();
 		BatchOutcome total = BatchOutcome.NONE;
 		int notTried = 0;
 		String failure = null;
+		List<Slice> deferred = new java.util.ArrayList<>();
 		synchronized (pushLock) {
 			sending = true;
 		}
-		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
+		try (CycleMetrics.Scope sc = CycleMetrics.scope(metrics,
 				CycleMetrics.Phase.PUSHES)) {
-			for (Map.Entry<Long, Queued> e : work.entrySet()) {
-				Queued q = e.getValue();
-				for (int half = 0; half < 2; half++) {
-					boolean stats = half == 0;
-					int entries = stats ? q.stats.size() : q.props.size();
-					if (entries == 0) continue;
-					if (failure == null && !total.stopped && stopRequested()) {
-						failure = "Stop Collecting was requested";
-					}
-					if (total.stopped || failure != null) {
-						notTried += entries;
-						continue;
-					}
-					BatchOutcome o;
-					try {
-						o = stats
-								? stitcher.pushStatsBatch(q.stats, e.getKey())
-								: stitcher.pushPropertiesBatch(q.props,
-										e.getKey());
-					} catch (RuntimeException ex) {
-						// The framework never throws; a fake or a drift might.
-						failure = "the push threw "
-								+ ex.getClass().getSimpleName() + ": "
-								+ ex.getMessage();
-						notTried += entries;
-						continue;
-					}
-					if (o == null) o = BatchOutcome.NONE;
-					total = total.plus(o);
-					CycleMetrics m = metrics;
-					if (m != null) {
-						for (int i = 0; i < o.requests(); i++) m.suiteCall();
-					}
+			for (Slice sl : plan) {
+				if (failure == null && !total.stopped && stopRequested()) {
+					failure = "Stop Collecting was requested";
+				}
+				if (failure == null && !total.stopped && inWalk
+						&& (!deferred.isEmpty()
+								|| budgetExhausted() != null)) {
+					deferred.add(sl);
+					continue;
+				}
+				if (sl.stats) r.statResources += sl.entries();
+				else r.propResources += sl.entries();
+				r.values += sl.values();
+				if (total.stopped || failure != null) {
+					notTried += sl.entries();
+					continue;
+				}
+				BatchOutcome o;
+				try {
+					o = sl.stats ? stitcher.pushStatsBatch(sl.statMap, sl.ts)
+							: stitcher.pushPropertiesBatch(sl.props, sl.ts);
+				} catch (RuntimeException ex) {
+					// The framework never throws; a fake or a drift might.
+					failure = "the push threw " + ex.getClass().getSimpleName()
+							+ ": " + ex.getMessage();
+					notTried += sl.entries();
+					continue;
+				}
+				if (o == null) o = BatchOutcome.NONE;
+				total = total.plus(o);
+				CycleMetrics m = metrics;
+				if (m != null) {
+					for (int i = 0; i < o.requests(); i++) m.suiteCall();
 				}
 			}
 		} finally {
@@ -1250,12 +1395,46 @@ public final class ComplianceStitcher
 				sending = false;
 			}
 		}
+		if (!deferred.isEmpty()) requeue(deferred);
 		if (notTried > 0) {
 			total = total.plus(new BatchOutcome(0, 0, 0, 0, notTried, 0,
 					true));
 		}
-		lastFailure = failure;
-		return total;
+		r.outcome = total;
+		r.failure = failure;
+		return r;
+	}
+
+	/**
+	 * Codex P2 on PR #70: slices an in-walk flush did not send because the
+	 * cycle budget ran out go back to the queue (a value pushed since keeps
+	 * precedence), for the end-of-cycle flush.
+	 */
+	private void requeue(List<Slice> deferred) {
+		synchronized (pushLock) {
+			for (Slice sl : deferred) {
+				Queued q = queuedAt(sl.ts);
+				if (sl.stats) {
+					for (Map.Entry<String, Map<String, Double>> e
+							: sl.statMap.entrySet()) {
+						Map<String, Double> m = new LinkedHashMap<>(e.getValue());
+						Map<String, Double> later = q.stats.get(e.getKey());
+						if (later != null) m.putAll(later);
+						else queuedEntries++;
+						q.stats.put(e.getKey(), m);
+					}
+				} else {
+					for (Map.Entry<String, Map<String, String>> e
+							: sl.props.entrySet()) {
+						Map<String, String> m = new LinkedHashMap<>(e.getValue());
+						Map<String, String> later = q.props.get(e.getKey());
+						if (later != null) m.putAll(later);
+						else queuedEntries++;
+						q.props.put(e.getKey(), m);
+					}
+				}
+			}
+		}
 	}
 
 	/**

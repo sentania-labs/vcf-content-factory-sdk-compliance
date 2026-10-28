@@ -1103,6 +1103,9 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				// opened inside the try its finally closes. Review W2: a
 				// flush checks Stop Collecting before each request.
 				c.stitcher.setStopRequested(stopFlag());
+				// Codex P2 on PR #70: an in-walk flush checks the budget
+				// before each request; the end-of-cycle flush sends the rest.
+				c.stitcher.setBudgetExhausted(budget::exhausted);
 				c.stitcher.beginPushCycle(System.currentTimeMillis());
 			}
 			collectWorldCycle(worldRc, out);

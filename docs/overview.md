@@ -415,7 +415,10 @@ collection continues; compliance is never failed over a stitch error.
   NOT clean: ...` (WARN) with the counts and the reason when a request
   failed, was refused or the call stopped: the values not delivered keep
   their last value until the next cycle, and scoring is never affected.
-  Stop Collecting is checked before each request; after a stop nothing
+  Each request is a slice the adapter cuts itself (at most 100 resources
+  and an estimated 600 KB), so Stop Collecting is checked before each
+  request; a flush inside the walk also stops at the cycle budget and
+  leaves the rest for the end of the cycle. After a stop nothing
   more is sent and what was still queued is dropped (one WARN), as build
   103 pushed nothing after a stop. A cycle that cannot reach vCenter
   sends `Rollup|incomplete` = 1 at once. A 2xx means accepted, not landed

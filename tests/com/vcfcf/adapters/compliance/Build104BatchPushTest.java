@@ -44,6 +44,9 @@ public final class Build104BatchPushTest {
 		byteThresholdFlush();
 		stopSkipsFlushAndDropsQueue();
 		stopBetweenHalves();
+		slicesAreOneRequestEach();
+		stopAfterFirstSlice();
+		budgetDefersInWalkSlices();
 		cycleIsOnePushAtOneTimestamp();
 		cycleSurvivesNotCleanBatch();
 		notReachedMarkerDelivered();
@@ -334,6 +337,109 @@ public final class Build104BatchPushTest {
 		T.eq(1, o.skipped, "properties counted not delivered");
 		T.check(lines.get(0).contains("Stop Collecting was requested"),
 				lines.get(0));
+	}
+
+	/**
+	 * Codex P2 on PR #70: a half is split into slices of at most 100
+	 * resources and the byte cap, each one framework request; the byte
+	 * estimate is an upper bound of the framework's JSON.
+	 */
+	static void slicesAreOneRequestEach() {
+		Map<String, Map<String, String>> half = new LinkedHashMap<>();
+		for (int i = 0; i < 250; i++) half.put("r-" + i, props("a|x", "v"));
+		List<Map<String, Map<String, String>>> sl = ComplianceStitcher.slices(
+				half, ComplianceStitcher.SLICE_RESOURCES,
+				ComplianceStitcher.SLICE_BYTES);
+		T.eq(3, sl.size(), "250 small resources: 100, 100, 50");
+		T.eq(100, sl.get(0).size(), "first slice at the resource cap");
+		T.eq(50, sl.get(2).size(), "last slice");
+		StringBuilder big = new StringBuilder();
+		for (int i = 0; i < 250_000; i++) big.append('x');
+		Map<String, Map<String, String>> heavy = new LinkedHashMap<>();
+		for (int i = 0; i < 5; i++) {
+			heavy.put("r-" + i, props("a|Description", big.toString()));
+		}
+		sl = ComplianceStitcher.slices(heavy, 100,
+				ComplianceStitcher.SLICE_BYTES);
+		T.eq(3, sl.size(), "5 x 250 KB: two per slice under 600 KB");
+		for (Map<String, Map<String, String>> m : sl) {
+			long bytes = 0;
+			for (Map.Entry<String, Map<String, String>> e : m.entrySet()) {
+				bytes += e.getKey().length() + 80;
+				for (Map.Entry<String, String> v : e.getValue().entrySet()) {
+					bytes += v.getKey().length() + v.getValue().length() + 60;
+				}
+			}
+			T.check(bytes < 1_000_000, "a slice fits one framework request");
+		}
+		T.eq(16L, ComplianceStitcher.jsonBytes("a\"\u00e9\u20ac\n"),
+				"quotes 2, a 1, \\\" 2, e-acute 2, euro 3, newline 6");
+		T.check(ComplianceStitcher.SLICE_RESOURCES == 100
+				&& ComplianceStitcher.SLICE_BYTES == 600_000L,
+				"production slice caps");
+	}
+
+	/**
+	 * Codex P2 on PR #70: a stop that arrives after the first slice of a
+	 * multi-slice flush sends no further request.
+	 */
+	static void stopAfterFirstSlice() {
+		FakeSuiteApi s = new FakeSuiteApi();
+		List<String> lines = new ArrayList<>();
+		ComplianceStitcher st = logging(s, lines);
+		st.setSliceCaps(2, Long.MAX_VALUE);
+		boolean[] stop = {false};
+		st.setStopRequested(() -> stop[0]);
+		s.beforeBatch = () -> stop[0] = true;
+		st.beginPushCycle(8L);
+		for (int i = 1; i <= 5; i++) {
+			st.pushStats("r-" + i, stats("a|s", i), 8L);
+			st.pushProperties("r-" + i, props("a|x", "v"), 8L);
+		}
+		ComplianceStitcher.BatchOutcome o = st.endPushCycle();
+		T.eq(1, s.batches.size(), "only the first slice went out");
+		T.check(s.batches.get(0).isStats(), "a stats slice");
+		T.eq(2, s.batches.get(0).stats.size(), "two resources in it");
+		T.eq(8, o.skipped, "1 stats slice and 5 properties not delivered");
+		T.check(lines.get(0).contains("Stop Collecting was requested"),
+				lines.get(0));
+	}
+
+	/**
+	 * Codex P2 on PR #70: the budget runs out during an in-walk flush. The
+	 * rest goes back to the queue and the end-of-cycle flush sends it
+	 * (stats before properties), so nothing is lost and the rollup lands.
+	 */
+	static void budgetDefersInWalkSlices() {
+		FakeSuiteApi s = new FakeSuiteApi();
+		List<String> lines = new ArrayList<>();
+		ComplianceStitcher st = logging(s, lines);
+		st.setSliceCaps(2, Long.MAX_VALUE);
+		st.setFlushThresholds(8, Long.MAX_VALUE);
+		String[] over = {null};
+		st.setBudgetExhausted(() -> over[0]);
+		s.beforeBatch = () -> over[0] = "budget used up";
+		st.beginPushCycle(8L);
+		for (int i = 1; i <= 4; i++) {
+			st.pushStats("r-" + i, stats("a|s", i), 8L);
+			st.pushProperties("r-" + i, props("a|x", "v" + i), 8L);
+		}
+		T.eq(1, s.batches.size(), "the in-walk flush stopped at the budget");
+		T.eq(6, st.queuedEntries(), "the rest back in the queue");
+		st.pushStats(AdapterHarness.VC_RESOURCE,
+				stats(ComplianceRollup.INCOMPLETE_KEY, 1), 8L);
+		ComplianceStitcher.BatchOutcome o = st.endPushCycle();
+		T.check(o.isClean(), "clean: " + o);
+		T.eq(4, s.batchedStats().size() - 1, "every object's stats");
+		T.eq(4, s.batchedProps().size(), "every object's properties");
+		T.near(1.0, s.stored(AdapterHarness.VC_RESOURCE,
+				ComplianceRollup.INCOMPLETE_KEY), "the rollup landed");
+		boolean propsSeen = false;
+		for (int i = 1; i < s.batches.size(); i++) {
+			if (!s.batches.get(i).isStats()) propsSeen = true;
+			else T.check(!propsSeen, "stats before properties at the end");
+		}
+		T.eq(1, lines.size(), "one summary: " + lines);
 	}
 
 	/**
