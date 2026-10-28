@@ -733,7 +733,7 @@ public final class Build95CollectionTest {
 		// Decision point 6: the switch follows the build's version stamp
 		// (Build95UnreadableTest.shadowMode runs ShadowMode itself).
 		T.check(!ca.contains("BULK_SHADOW"), "no compiled-in default");
-		T.check(ca.contains("new ShadowComparator(kind, enabled)"),
+		T.check(ca.contains("ShadowComparator.perObjectCheck(kind, enabled)"),
 				"every kind's comparator follows the switch");
 		T.eq(5, OverridesTest.count(ca, "bulkShadow);"),
 				"every kind's shadow is built from the per-cycle switch");

@@ -398,6 +398,30 @@ collection continues; compliance is never failed over a stitch error.
   next cycle never scores the new vCenter against the old one's
   benchmark or flags "not collected" on the old vCenter.
 
+- **Each kind is read in bulk (build 103, issue #17).** Hosts, VMs,
+  distributed switches, portgroups and clusters are each read with one
+  `RetrieveProperties` per page of objects (hosts 10, VMs and clusters
+  50, switches and portgroups 100), asking for every property any
+  benchmark the kind can be scored against needs (the paths come from
+  the benchmarks' read recipes, plus a host's version and connection
+  state and a cluster's vSAN configuration). The controls are then
+  evaluated from that data with the same readers as before. A host's
+  advanced settings come from its `config.option` in the page instead of
+  a `QueryOptions` call to the host (the same list: compared on all
+  three devel vCenters before the switch). Pages follow the walk's order,
+  so the time limit, the resume point and the cuts below work as before.
+  Fallback, per object: when a page's call fails (a fault, the response
+  size cap, an object deleted meanwhile) its objects are read one at a
+  time as in build 102, with one WARN per kind; when a value is not in an
+  object's row (unset, faulted or a rejected path) that control is read
+  one at a time, so its value, or UNREADABLE with the per-object reason,
+  is what build 102 would have produced; a missing value is never a pass.
+  esxcli and the vCenter object's own reads stay per object. One INFO
+  line per kind, `Bulk read <kind>: ...`, gives the objects, calls, paths,
+  bytes and what was read one at a time. Measured on devel (three
+  vCenters, 2 to 6 hosts and 25 to 45 VMs each): about 520 to 710 vCenter
+  calls per cycle before, 34 to 62 after, nearly all of the rest esxcli.
+
 - **Stop Collecting stops within one object (build 95, issue #16).**
   Stopping collection on the account abandons the running cycle before the
   next host, VM, switch, portgroup or cluster, instead of after the whole
@@ -412,7 +436,9 @@ collection continues; compliance is never failed over a stitch error.
   uses 5 minutes, clamps it to 60 s to 24 h, and logs one "Cycle limits:"
   INFO line saying which). The limit is checked before each call and
   does not cut a call in flight, so the worst case is the budget plus one
-  call (30 s connect plus 120 s read): 435 s on a 5 minute interval. A
+  call (30 s connect plus 120 s read): 435 s on a 5 minute interval.
+  Build 103: esxcli calls take the same read timeout as every other
+  vCenter call (they had their own fixed 120 s, the same value). A
   walk that took up to 95% of the interval completed in build 95 and
   still does; a longer one ends early every cycle and keeps the alert
   raised, and the remedy is a longer collection interval. A
@@ -464,7 +490,10 @@ collection continues; compliance is never failed over a stitch error.
     host's advanced-settings read or an esxcli command (both relayed by
     vCenter to the host) times out, the rest of that host's host-relayed
     reads (advanced settings and esxcli) are skipped for the cycle
-    (UNREADABLE, reason "host not answering"). Properties vCenter answers
+    (UNREADABLE, reason "host not answering"). Since build 103 a host's
+    advanced settings normally come from the bulk read (vCenter's
+    inventory), so the host-relayed call is usually its first esxcli
+    command. Properties vCenter answers
     from its own inventory are still read, as in build 95, so the host is
     scored over what was read and flagged Not Read. The mark lasts one
     cycle, so the host costs one timeout each time the walk reaches it.
@@ -475,19 +504,21 @@ collection continues; compliance is never failed over a stitch error.
     name, a connection state or a version) wait 30 s for an answer, not
     120 s.
 
-- **Bulk read shadow (build 95).** After each kind is scored, the adapter
-  also reads that kind's objects in a few paged bulk calls, evaluates the
-  same controls from that data and compares. Nothing it finds changes a
-  score, a push or an alert. Each cycle logs one INFO line per kind,
-  starting `Bulk shadow <kind>:`, with the controls compared and the
-  disagreements, the pages read and their size (total bytes and the
-  largest page; each page's size is at DEBUG), and one
-  `Bulk shadow disagreement:` line per difference (object, control,
-  per-object value, bulk value; the first 25 per kind). VMs are read 50
-  per page, hosts 10.
-  Zero disagreements across every vCenter is what lets a later build
-  score from the bulk reads, which grow with pages instead of objects.
-  Shadow mode runs only in a dev-preview build (version 0.0.0.N) and is
+- **Bulk read shadow (build 95; reversed in build 103).** Build 95 to
+  102 scored from the per-object reads and, after each kind, read it
+  again in bulk and compared. Zero disagreements on devel (build 95's
+  proxy log, then build 103's read-only comparison on all three devel
+  vCenters: 3,380 outcomes, every kind) let build 103 score from the bulk
+  read. The shadow now runs the other way: after each kind, the objects
+  scored from the bulk read are read again one at a time (advanced
+  settings and vim properties, not esxcli) and compared. Nothing it finds
+  changes a score, a push or an alert. Each cycle logs one INFO line per
+  kind, starting `Bulk shadow <kind>:`, with the controls compared and
+  the disagreements, and one `Bulk shadow disagreement:` line per
+  difference (object, control, bulk value, per-object value; the first
+  25 per kind). It costs what a build 102 cycle cost, so it is skipped
+  when the cycle's time budget is used up and stops if the budget runs
+  out during it. Shadow mode runs only in a dev-preview build (version 0.0.0.N) and is
   off in a tagged release (1.0.0.N), decided each cycle from the build's
   own version stamp (`conf/version.txt` beside describe.xml; no file or an
   unreadable one is off). It is not a user setting. The decision is logged

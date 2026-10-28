@@ -189,11 +189,40 @@ final class EsxcliSoapClient {
 		this.budget = b;
 	}
 
+	/**
+	 * Build 103 (issue #17, folded from the build 102 review): the read
+	 * timeout of an esxcli call. It was a fixed 120 s that ignored the
+	 * vCenter client's own setting; the client now passes its timeout in
+	 * when it makes this client and whenever it changes
+	 * ({@link #setReadTimeoutMs}), so an esxcli call is bounded exactly
+	 * like every other vCenter call (the cycle budget's "budget plus one
+	 * call") and a hung host is testable.
+	 */
+	static final int DEFAULT_READ_TIMEOUT_MS = 120000;
+
+	private volatile int readTimeoutMs = DEFAULT_READ_TIMEOUT_MS;
+
+	/** Build 103: the read timeout of every later esxcli call. */
+	void setReadTimeoutMs(int ms) {
+		this.readTimeoutMs = ms;
+	}
+
+	int readTimeoutMs() {
+		return readTimeoutMs;
+	}
+
 	EsxcliSoapClient(String sdkUrl, String sessionCookie,
 			SSLSocketFactory sslFactory) {
+		this(sdkUrl, sessionCookie, sslFactory, DEFAULT_READ_TIMEOUT_MS);
+	}
+
+	/** Build 103: with the vCenter client's read timeout. */
+	EsxcliSoapClient(String sdkUrl, String sessionCookie,
+			SSLSocketFactory sslFactory, int readTimeoutMs) {
 		this.sdkUrl = sdkUrl;
 		this.sessionCookie = sessionCookie;
 		this.sslFactory = sslFactory;
+		this.readTimeoutMs = readTimeoutMs;
 		this.transport = new Transport() {
 			@Override
 			public String lookupExecuter(String hostMoid) throws Exception {
@@ -702,7 +731,7 @@ final class EsxcliSoapClient {
 			conn.setRequestMethod("POST");
 			conn.setDoOutput(true);
 			conn.setConnectTimeout(30000);
-			conn.setReadTimeout(120000);
+			conn.setReadTimeout(readTimeoutMs);   // build 103 (issue #17)
 			conn.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
 			conn.setRequestProperty("SOAPAction", soapAction);
 			if (sessionCookie != null && !sessionCookie.isEmpty()) {
@@ -734,6 +763,13 @@ final class EsxcliSoapClient {
 				VSphereClient.readCapped(conn.getErrorStream(),
 						VSphereClient.MAX_FAULT_BODY_BYTES);
 			}
+		} catch (RuntimeException e) {
+			// Build 103 (issue #17): a RuntimeException while the request
+			// is sent or the response read (a provider or parser bug) also
+			// releases the connection (disconnect closes the response
+			// stream), so it is never left open and unreferenced.
+			conn.disconnect();
+			throw e;
 		} catch (java.io.IOException e) {
 			// Build 95 (issue #17): connections are reused after a good
 			// call (no disconnect); a failed one is dropped, never reused.

@@ -26,6 +26,11 @@ import java.util.Map;
  * {@code "(unreadable)"} for an unreadable control, else the Actual value
  * followed by {@code " pass"} or {@code " fail"}, so a different value
  * with the same verdict still shows. No SDK dependencies.
+ *
+ * <p>Build 103 (issue #17 build 2): the bulk read is primary, so the
+ * adapter records the bulk result and compares the per-object one
+ * ({@link #perObjectCheck}); the labels in the lines and the summary say
+ * which side is which.
  */
 public final class ShadowComparator {
 
@@ -37,6 +42,11 @@ public final class ShadowComparator {
 
 	private final String kind;
 	private final int cap;
+	// Build 103: the recorded side, the compared side, and where scores
+	// come from, for the lines and the summary.
+	private final String recordedLabel;
+	private final String comparedLabel;
+	private final String scoresFrom;
 	// Review W5: false when shadow mode is off; nothing is recorded, so
 	// nothing is held in memory and the bulk read is not made.
 	private final boolean enabled;
@@ -68,9 +78,28 @@ public final class ShadowComparator {
 	}
 
 	ShadowComparator(String kind, int cap, boolean enabled) {
+		this(kind, cap, enabled, "per-object", "bulk",
+				"scores still come from the per-object path");
+	}
+
+	private ShadowComparator(String kind, int cap, boolean enabled,
+			String recordedLabel, String comparedLabel, String scoresFrom) {
 		this.kind = kind;
 		this.cap = cap;
 		this.enabled = enabled;
+		this.recordedLabel = recordedLabel;
+		this.comparedLabel = comparedLabel;
+		this.scoresFrom = scoresFrom;
+	}
+
+	/**
+	 * Build 103: the comparator of a cycle scored from the bulk read: the
+	 * bulk result is recorded, the per-object re-read compared.
+	 */
+	public static ShadowComparator perObjectCheck(String kind,
+			boolean enabled) {
+		return new ShadowComparator(kind, DISAGREEMENT_LOG_CAP, enabled,
+				"bulk", "per-object", "scores come from the bulk read");
 	}
 
 	public boolean isEnabled() {
@@ -137,8 +166,9 @@ public final class ShadowComparator {
 				disagreements++;
 				if (lines.size() < cap) {
 					lines.add(kind + " " + names.get(moid) + " (" + moid
-							+ ") " + e.getKey() + ": per-object '"
-							+ e.getValue() + "', bulk '" + bulk + "'");
+							+ ") " + e.getKey() + ": " + recordedLabel + " '"
+							+ e.getValue() + "', " + comparedLabel + " '"
+							+ bulk + "'");
 				}
 			}
 		}
@@ -176,7 +206,7 @@ public final class ShadowComparator {
 	public String summary(int pages, long bulkMillis, long bytes,
 			long maxPageBytes) {
 		String s = summary(pages, bulkMillis);
-		int at = s.lastIndexOf(" ms (scores still come");
+		int at = s.lastIndexOf(" ms (");
 		return s.substring(0, at) + " ms, " + bytes + " bytes, largest page "
 				+ maxPageBytes + " bytes" + s.substring(at + 3);
 	}
@@ -186,17 +216,20 @@ public final class ShadowComparator {
 		StringBuilder b = new StringBuilder();
 		b.append("Bulk shadow ").append(kind).append(": ");
 		if (failure != null) {
-			b.append("bulk read FAILED (").append(failure).append("), ");
+			b.append(comparedLabel).append(" read FAILED (").append(failure)
+					.append("), ");
 		}
 		b.append(controlsCompared).append(" control(s) compared on ")
 				.append(objectsCompared).append(" object(s), ")
 				.append(disagreements).append(" disagreement(s); ")
 				.append(recorded.size()).append(" scored object(s) not "
-						+ "returned by the bulk read, ")
-				.append(bulkObjectsWithoutRecord).append(" bulk object(s) "
-						+ "not scored per object; ")
-				.append(pages).append(" page(s), ").append(bulkMillis)
-				.append(" ms (scores still come from the per-object path)");
+						+ "returned by the " + comparedLabel + " read, ")
+				.append(bulkObjectsWithoutRecord).append(" " + comparedLabel
+						+ " object(s) not scored " + ("bulk".equals(
+								recordedLabel) ? "from the bulk read"
+								: "per object") + "; ");
+		if (pages >= 0) b.append(pages).append(" page(s), ");
+		b.append(bulkMillis).append(" ms (").append(scoresFrom).append(")");
 		return b.toString();
 	}
 }

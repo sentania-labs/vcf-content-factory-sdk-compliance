@@ -51,6 +51,13 @@ final class AdapterHarness implements AutoCloseable {
 		listResources();
 		return this;
 	}
+	/**
+	 * Build 103: (MOID, path) pairs the fake vCenter does not have a value
+	 * for, in a bulk read and a per-object read alike (an unset property).
+	 */
+	volatile java.util.function.BiPredicate<String, String> hidden =
+			(moid, path) -> false;
+
 	/** A test's answer first; null falls through to the inventory. */
 	volatile Function<FakeVCenter.Req, FakeVCenter.Resp> override;
 
@@ -156,17 +163,27 @@ final class AdapterHarness implements AutoCloseable {
 			if (obj != null && "ContainerView".equals(obj[0])) {
 				return listing(FakeVCenter.tag(r.body, "type"));
 			}
-			return property(obj, FakeVCenter.pathSets(r.body).get(0));
+			// Build 103: one ObjectContent per requested object with every
+			// requested path it has, as vCenter answers a bulk read (an
+			// unset path is simply absent); a single-object, single-path
+			// read is the same thing with one of each.
+			StringBuilder b = new StringBuilder();
+			for (String[] ob : FakeVCenter.objs(r.body)) {
+				Map<String, String> v = new LinkedHashMap<>();
+				for (String path : FakeVCenter.pathSets(r.body)) {
+					if (!hidden.test(ob[1], path)) v.putAll(property(ob, path));
+				}
+				b.append(FakeVCenter.objectContent("returnval", ob[0], ob[1],
+						v));
+			}
+			return FakeVCenter.ok("RetrieveProperties", b.toString());
 		}
 		if (op.equals("QueryOptions")) {
 			if (r.body.contains(">VpxSettings<")) {
 				return FakeVCenter.ok(op, "");
 			}
-			return FakeVCenter.ok(op,
-					"<returnval><key>UserVars.ESXiShellTimeOut</key>"
-					+ "<value xsi:type=\"xsd:long\">900</value></returnval>"
-					+ "<returnval><key>Security.AccountLockFailures</key>"
-					+ "<value xsi:type=\"xsd:int\">5</value></returnval>");
+			return FakeVCenter.ok(op, HOST_OPTIONS.replace("<item>",
+					"<returnval>").replace("</item>", "</returnval>"));
 		}
 		// esxcli and anything else: a fault (those reads are UNREADABLE).
 		return FakeVCenter.fault("NotSupported", "not in the fake");
@@ -194,13 +211,64 @@ final class AdapterHarness implements AutoCloseable {
 		return FakeVCenter.ok("RetrieveProperties", b.toString());
 	}
 
-	private FakeVCenter.Resp property(String[] obj, String path) {
+	/**
+	 * Every host's advanced options: QueryOptions returns them as
+	 * returnvals, {@code config.option} (build 103's bulk read) as the
+	 * items of one ArrayOfOptionValue, the same keys and values.
+	 */
+	static final String HOST_OPTIONS =
+			"<item><key>UserVars.ESXiShellTimeOut</key>"
+			+ "<value xsi:type=\"xsd:long\">900</value></item>"
+			+ "<item><key>Security.AccountLockFailures</key>"
+			+ "<value xsi:type=\"xsd:int\">5</value></item>";
+
+	/**
+	 * Build 103: the SCG 9.0 host vim_property values (the service list
+	 * for the four service_state controls, the firewall default policy).
+	 */
+	static final Map<String, String> HOST_PROPS = FakeVCenter.map(
+			"config.service", "<val xsi:type=\"HostServiceInfo\">"
+					+ service("TSM", false) + service("snmpd", false)
+					+ service("TSM-SSH", true) + service("ntpd", true)
+					+ "</val>",
+			"config.firewall.defaultPolicy.incomingBlocked",
+			"<val xsi:type=\"xsd:boolean\">true</val>");
+
+	/** Build 103: the SCG 9.0 VM vim_property values. */
+	static final Map<String, String> VM_PROPS = FakeVCenter.map(
+			"config.ftEncryptionMode", "<val xsi:type=\"xsd:string\">"
+					+ "ftEncryptionOpportunistic</val>",
+			"config.flags.enableLogging", "<val xsi:type=\"xsd:boolean\">"
+					+ "true</val>",
+			"config.hardware", "<val xsi:type=\"VirtualHardware\">"
+					+ "<numCPU>2</numCPU><device xsi:type=\"VirtualDisk\">"
+					+ "<key>2000</key></device></val>",
+			"config.bootOptions.efiSecureBootEnabled",
+			"<val xsi:type=\"xsd:boolean\">false</val>",
+			"config.version", "<val xsi:type=\"xsd:string\">vmx-21</val>",
+			"config.migrateEncryption", "<val xsi:type=\"xsd:string\">"
+					+ "opportunistic</val>");
+
+	private static String service(String key, boolean running) {
+		return "<service><key>" + key + "</key><label>" + key + "</label>"
+				+ "<required>false</required><uninstallable>false</uninstallable>"
+				+ "<running>" + running + "</running><policy>off</policy>"
+				+ "</service>";
+	}
+
+	/** The value of {@code path} on {@code obj}: one entry, or none. */
+	private Map<String, String> property(String[] obj, String path) {
 		String moid = obj == null ? "" : obj[1];
 		Map<String, String> v = FakeVCenter.vals();
 		if (vms.containsKey(moid) && path.equals("config.extraConfig")) {
 			v = FakeVCenter.vals(path, "<val xsi:type=\"ArrayOfOptionValue\">"
 					+ "</val>");
 		}
+		// Build 103: a value for every SCG 9.0 VM vim_property recipe, so
+		// a fixture cycle reads what a vCenter would (some pass, some
+		// fail), per object and in bulk alike.
+		String vmVal = vms.containsKey(moid) ? VM_PROPS.get(path) : null;
+		if (vmVal != null) v = FakeVCenter.vals(path, vmVal);
 		if (hosts.containsKey(moid)) {
 			switch (path) {
 				case "summary.config.product.version":
@@ -220,12 +288,22 @@ final class AdapterHarness implements AutoCloseable {
 					v = FakeVCenter.vals(path, "<val type=\"OptionManager\">"
 							+ "EsxHostAdvSettings-" + moid + "</val>");
 					break;
+				case "config.service":
+				case "config.firewall.defaultPolicy.incomingBlocked":
+					// Build 103: the SCG 9.0 host vim_property values.
+					v = FakeVCenter.vals(path, HOST_PROPS.get(path));
+					break;
+				case "config.option":
+					v = FakeVCenter.vals(path, "<val xsi:type="
+							+ "\"ArrayOfOptionValue\">" + HOST_OPTIONS
+							.replace("<item>", "<OptionValue>")
+							.replace("</item>", "</OptionValue>") + "</val>");
+					break;
 				default:
 					break;
 			}
 		}
-		return FakeVCenter.ok("RetrieveProperties", FakeVCenter.objectContent(
-				"returnval", obj == null ? "ManagedEntity" : obj[0], moid, v));
+		return v;
 	}
 
 	@Override

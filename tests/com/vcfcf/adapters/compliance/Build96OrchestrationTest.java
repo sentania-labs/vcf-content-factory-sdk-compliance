@@ -92,15 +92,17 @@ public final class Build96OrchestrationTest {
 	static void reuseWarnWording() throws Exception {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01")) {
 			h.cycle();
+			// Build 103: any read that asks for a product version (the
+			// bulk host page, then the per-object fallback) answers the
+			// objects with nothing, so the version is unreadable.
 			h.override = r -> {
-				java.util.List<String> paths = FakeVCenter.pathSets(r.body);
-				if (!paths.isEmpty() && paths.get(0).endsWith("product.version")) {
-					String[] o = FakeVCenter.obj(r.body);
-					return FakeVCenter.ok("RetrieveProperties",
-							FakeVCenter.objectContent("returnval", o[0], o[1],
-									FakeVCenter.vals()));
+				if (!r.body.contains("product.version")) return null;
+				StringBuilder b = new StringBuilder();
+				for (String[] o : FakeVCenter.objs(r.body)) {
+					b.append(FakeVCenter.objectContent("returnval", o[0], o[1],
+							FakeVCenter.vals()));
 				}
-				return null;
+				return FakeVCenter.ok("RetrieveProperties", b.toString());
 			};
 			h.cycle();
 			T.check(h.logged("scoring against the benchmark it was last scored "

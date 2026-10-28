@@ -286,6 +286,14 @@ final class FakeVCenter implements AutoCloseable {
 		return m.find() ? new String[] {m.group(1), m.group(2)} : null;
 	}
 
+	/** Build 103: {type, value} of every objectSet obj, in order. */
+	static List<String[]> objs(String body) {
+		List<String[]> out = new ArrayList<>();
+		Matcher m = OBJ.matcher(body);
+		while (m.find()) out.add(new String[] {m.group(1), m.group(2)});
+		return out;
+	}
+
 	static String tag(String body, String name) {
 		Matcher m = TAG.matcher(body);
 		while (m.find()) {

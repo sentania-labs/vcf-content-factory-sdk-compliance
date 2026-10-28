@@ -239,8 +239,10 @@ public final class Build95TriageTest {
 				{"private void collectClusters(",
 						"for (VSphereClient.ClusterInfo cluster : clusters) { "
 						+ "stop.check(\"cluster \" + cluster.name);"},
+				// Build 103: the shadow re-reads the bulk-scored objects
+				// per object; the stop check comes first in that loop.
 				{"private void runShadow(",
-						"for (VSphereClient.BulkRow row : rows) { "
+						": sh.controls.entrySet()) { String moid = e.getKey(); "
 						+ "stop.check(\"bulk shadow \""},
 				{"private void cleanStaleControls(",
 						"i += CLEANUP_BATCH) { stop.check(\"per-control "
@@ -251,10 +253,11 @@ public final class Build95TriageTest {
 			T.check(b.contains(l[1]), l[0] + " checks the stop flag first "
 					+ "in its loop");
 		}
-		// runShadow does not swallow the stop; the cycle logs it.
-		OverridesTest.inOrder(OverridesTest.body(ca, "private void runShadow("),
-				"runShadow", "catch (InterruptedException e) { throw e; }",
-				"catch (Exception e) {");
+		// runShadow does not swallow the stop; the cycle logs it. Build
+		// 103: it catches nothing at all (the per-object re-read folds a
+		// failed read into UNREADABLE itself), so the stop propagates.
+		T.check(!OverridesTest.body(ca, "private void runShadow(")
+				.contains("catch ("), "runShadow catches nothing");
 		// Review N4: an abandoned cycle logs ONE WARN carrying where it
 		// stopped and the timing summary; no second "failed" line.
 		String abandoned = ComplianceDecisions.cycleEndLine(false,
