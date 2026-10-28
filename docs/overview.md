@@ -398,21 +398,32 @@ collection continues; compliance is never failed over a stitch error.
   next cycle never scores the new vCenter against the old one's
   benchmark or flags "not collected" on the old vCenter.
 
-- **One batched Suite API push per cycle (build 104, issue #17).** Every
-  value a cycle pushes onto VMWARE resources (each object's properties
-  and stats, the cleanup's -1 keys, the vCenter rollup and overrides
-  status) is queued and sent at the end of the cycle with the buildkit
-  1.0.24 batch push: properties for every resource, then stats, in
-  requests of at most 100 resources and about 1 MB each. Same resources,
+- **Batched Suite API pushes (build 104, issue #17).** Every value a
+  cycle pushes onto VMWARE resources (each object's properties and stats,
+  the cleanup's -1 keys, the vCenter rollup and overrides status) is
+  queued and sent with the buildkit 1.0.24 batch pushes, stats first, then
+  properties, in requests of at most 100 resources and about 1 MB each.
+  The queue is sent inside the walk whenever it reaches 500 resource
+  entries or about 16 MB, so it stays bounded and its time counts against
+  the cycle budget, and the rest at the end of the cycle. Same resources,
   keys and values as the per-object pushes of build 103 (two calls per
   object); every value of a cycle carries one timestamp, the cycle's
-  start. One log line per cycle says what went out (`Suite API push: ...`,
-  INFO), or `Suite API push NOT clean: ...` (WARN) with the counts and the
-  reason when a request failed, was refused or the call stopped: the
-  values not delivered keep their last value until the next cycle, and
-  scoring is never affected. A 2xx means accepted, not landed (VCF
-  Operations drops an id that matches no resource without an error);
-  stale ids are caught by the per-cycle resource list, as before.
+  start. Stats go first because they carry every alerting signal (scores,
+  `has_unreadable`, each `|Compliant`, `Rollup|incomplete`), so a failed
+  properties request never leaves those stale. One log line per cycle
+  says what went out (`Suite API push: ...`, INFO), or `Suite API push
+  NOT clean: ...` (WARN) with the counts and the reason when a request
+  failed, was refused or the call stopped: the values not delivered keep
+  their last value until the next cycle, and scoring is never affected.
+  Stop Collecting is checked before each request; after a stop nothing
+  more is sent and what was still queued is dropped (one WARN), as build
+  103 pushed nothing after a stop. A cycle that cannot reach vCenter
+  sends `Rollup|incomplete` = 1 at once. A 2xx means accepted, not landed
+  (VCF Operations drops an id that matches no resource without an
+  error): the per-cycle resource lists keep the ids current, and the
+  not-reached marker checks the vCenter object id it remembered against
+  the current VMwareAdapter Instance list first (a replaced object is
+  resolved again by the entered host).
 
 - **Each kind is read in bulk (build 103, issue #17).** Hosts, VMs,
   distributed switches, portgroups and clusters are each read with one

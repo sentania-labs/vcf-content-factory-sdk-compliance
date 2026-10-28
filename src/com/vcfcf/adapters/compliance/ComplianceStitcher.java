@@ -27,8 +27,9 @@ import java.util.Map;
  * which acquires/releases a Suite API token per call as {@code
  * maintenanceAdmin}. Resource resolution is now a plain authenticated
  * {@code GET /api/resources?...} parsed with {@link SimpleJson}. Build 104
- * (issue #17): pushes are queued for the cycle and go out through
- * {@code SuiteApiStitcher#pushBatch} ({@link #flushPushes}).
+ * (issue #17): pushes are queued and go out through the framework batch
+ * pushes, stats first, inside the walk at a size threshold and at the end
+ * of the cycle ({@link #flushPushes}).
  *
  * <p><b>Identity (build 102, issue #20).</b> Every vim25-backed VMWARE kind
  * resolves on {@code VMEntityObjectID} (MOID) plus {@code VMEntityVCID}
@@ -83,18 +84,21 @@ public final class ComplianceStitcher
 	 * Build 96 (issue #27): the Suite API calls this class makes, so it
 	 * needs no framework type. The adapter passes its
 	 * {@code SuiteApiStitcher}; tests pass a fake. Same contract as the
-	 * framework methods: {@link #get} throws on a failed read, the push logs
-	 * and swallows its own failures. Build 104 (issue #17): the two per-id
-	 * pushes are replaced by the buildkit 1.0.24 batch push
-	 * ({@code SuiteApiStitcher.pushBatch}: properties for every resource,
-	 * then stats, chunked by count and bytes), whose result comes back as
-	 * the SDK-free {@link BatchOutcome}.
+	 * framework methods: {@link #get} throws on a failed read, the pushes
+	 * log and swallow their own failures. Build 104 (issue #17): the two
+	 * per-id pushes are replaced by the buildkit 1.0.24 batch pushes
+	 * ({@code SuiteApiStitcher.pushStatsBatch} and
+	 * {@code pushPropertiesBatch}, chunked by count and bytes), called
+	 * stats first (review W1), whose results come back as the SDK-free
+	 * {@link BatchOutcome}.
 	 */
 	public interface SuiteApi {
 		String get(String path) throws java.io.IOException,
 				InterruptedException;
-		BatchOutcome pushBatch(Map<String, Map<String, String>> properties,
-				Map<String, Map<String, Double>> stats, long timestamp);
+		BatchOutcome pushStatsBatch(Map<String, Map<String, Double>> stats,
+				long timestamp);
+		BatchOutcome pushPropertiesBatch(
+				Map<String, Map<String, String>> properties, long timestamp);
 	}
 
 	/**
@@ -177,6 +181,10 @@ public final class ComplianceStitcher
 	// VMEntityVCID (vCenter Instance UUID).
 	private final Map<String, HostEntry> vcByHost = new HashMap<>();
 	private final Map<String, HostEntry> vcByVcUuid = new HashMap<>();
+	// Build 104 review N3: every VMwareAdapter Instance resource id of the
+	// last list, to check a cached vCenter object id still exists.
+	private final java.util.Set<String> vcResourceIds =
+			java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
 	// The vCenter Instance UUID this adapter instance monitors. The
 	// vim25-backed loaders keep only foreign resources whose VMEntityVCID
@@ -278,6 +286,7 @@ public final class ComplianceStitcher
 		resourcesByMoid.put(resourceKind, byMoid);
 		vcByHost.clear();
 		vcByVcUuid.clear();
+		vcResourceIds.clear();
 
 		List<SimpleJson> resources = fetchResources(resourceKind);
 		if (resources.isEmpty()) {
@@ -297,6 +306,7 @@ public final class ComplianceStitcher
 				noUuid++;
 				continue;
 			}
+			vcResourceIds.add(uuid);
 			SimpleJson key = r.get("resourceKey");
 			String displayName = key.get("name").asString(null);
 			String vcurl = getIdValue(key, "VCURL");
@@ -571,6 +581,18 @@ public final class ComplianceStitcher
 	 * Build 88: true when the last read of the VCF Ops resource list for
 	 * {@code resourceKind} failed (not merely returned 0 resources).
 	 */
+	/**
+	 * Build 104 review N3: whether the last VMwareAdapter Instance list
+	 * ({@link #loadVCenterAdapterInstance}) has a resource with this id:
+	 * TRUE or FALSE from a complete list, null when that list did not load
+	 * (unknown). A batch push to an id that matches no resource is dropped
+	 * silently, so a cached id is checked before it is used.
+	 */
+	public Boolean vCenterResourceListed(String resourceId) {
+		if (loadFailed("VMwareAdapter Instance")) return null;
+		return vcResourceIds.contains(resourceId);
+	}
+
 	public boolean loadFailed(String resourceKind) {
 		return failedLoads.contains(resourceKind);
 	}
@@ -807,45 +829,115 @@ public final class ComplianceStitcher
 		return index == null ? 0 : index.size();
 	}
 
-	// ----- build 104 (issue #17): one batched push per cycle -------------
+	// ----- build 104 (issue #17): batched pushes ---------------------------
+
+	/**
+	 * Build 104 review W2/W3: queued resource entries (a resource with
+	 * properties and stats counts twice) at which the queue is sent inside
+	 * the walk. About 500 VM-sized entries hold some 19 MB of heap.
+	 */
+	static final int FLUSH_ENTRIES = 500;
+	/**
+	 * Build 104 review W2/W3: estimated JSON bytes at which the queue is
+	 * sent inside the walk (about 16 requests at the framework's 1 MB cap).
+	 */
+	static final long FLUSH_BYTES = 16L * 1024 * 1024;
+	/** Per-value JSON overhead in the estimate (statKey, timestamps, braces). */
+	private static final int VALUE_OVERHEAD = 60;
 
 	/** One timestamp's queued values: resource id to key to value. */
 	private static final class Queued {
 		final Map<String, Map<String, String>> props = new LinkedHashMap<>();
 		final Map<String, Map<String, Double>> stats = new LinkedHashMap<>();
+
+		int entries() {
+			return props.size() + stats.size();
+		}
 	}
 
 	// Guarded by pushLock. While a cycle is open (beginPushCycle), every
-	// push is queued by timestamp and sent by flushPushes; outside a cycle a
-	// push is sent at once, as a one-resource batch.
+	// push is queued by timestamp and sent by flushPushes: inside the walk
+	// once the queue reaches the entry or byte threshold, and at the end of
+	// the cycle. Outside a cycle a push is sent at once.
 	private final Object pushLock = new Object();
 	private boolean pushCycleOpen;
 	private long pushCycleTs;
 	private final java.util.TreeMap<Long, Queued> queued =
 			new java.util.TreeMap<>();
+	private int queuedEntries;
+	private long queuedBytes;
 	private int replacedValues;
+	private int flushEntries = FLUSH_ENTRIES;
+	private long flushBytes = FLUSH_BYTES;
+	// The cycle's totals across its flushes, for the one summary line.
+	private BatchOutcome cycleOutcome = BatchOutcome.NONE;
+	private int cycleProps;
+	private int cycleStats;
+	private int cycleValues;
+	private int cycleFlushes;
+	private int cycleReplaced;
+	private String cycleFailure;
+	// Set while a send runs, so a push from inside it (none today) queues.
+	private boolean sending;
+
+	/**
+	 * Build 104 review W2: Stop Collecting, checked before each Suite API
+	 * request of a flush. The adapter passes its StopCheck condition; null
+	 * (tests, outside the adapter) never stops.
+	 */
+	private volatile java.util.function.BooleanSupplier stopRequested;
+
+	public void setStopRequested(java.util.function.BooleanSupplier s) {
+		this.stopRequested = s;
+	}
+
+	private boolean stopRequested() {
+		java.util.function.BooleanSupplier s = stopRequested;
+		return s != null && s.getAsBoolean();
+	}
+
+	/** Test seam: the in-walk flush thresholds. */
+	void setFlushThresholds(int entries, long bytes) {
+		synchronized (pushLock) {
+			flushEntries = entries;
+			flushBytes = bytes;
+		}
+	}
 
 	/**
 	 * Build 104: open a push cycle. Every push until {@link #endPushCycle}
-	 * is queued and sent by {@link #flushPushes} as one batched push
-	 * (properties, then stats) per timestamp. The callers stamp their pushes
-	 * with {@link #pushTimestamp()}, so a cycle is one timestamp and one
-	 * batched push. Anything still queued from an earlier cycle (none: the
-	 * adapter ends every cycle in a finally) is dropped.
+	 * or {@link #abandonPushCycle} is queued; the queue is sent inside the
+	 * walk when it reaches {@link #FLUSH_ENTRIES} entries or about
+	 * {@link #FLUSH_BYTES} bytes, and by {@link #flushPushes} at the end.
+	 * The callers stamp their pushes with {@link #pushTimestamp()}, so a
+	 * cycle is one timestamp. Anything left from an earlier cycle (none: the
+	 * adapter closes every cycle in a finally) is dropped.
 	 */
 	public void beginPushCycle(long timestamp) {
 		synchronized (pushLock) {
 			queued.clear();
+			queuedEntries = 0;
+			queuedBytes = 0;
 			replacedValues = 0;
+			resetCycleTotals();
 			pushCycleOpen = true;
 			pushCycleTs = timestamp;
 		}
 	}
 
+	private void resetCycleTotals() {
+		cycleOutcome = BatchOutcome.NONE;
+		cycleProps = 0;
+		cycleStats = 0;
+		cycleValues = 0;
+		cycleFlushes = 0;
+		cycleReplaced = 0;
+		cycleFailure = null;
+	}
+
 	/**
 	 * Build 104: the timestamp this cycle's pushes carry (the cycle's start),
-	 * or now when no cycle is open. One per cycle, so the queued pushes go
-	 * out in one batched push; the retired-key read-back
+	 * or now when no cycle is open. The retired-key read-back
 	 * ({@link RetiredKeyRepeats}) matches on it exactly.
 	 */
 	public long pushTimestamp() {
@@ -858,71 +950,144 @@ public final class ComplianceStitcher
 	public void pushProperties(String resourceId,
 			Map<String, String> properties, long timestamp) {
 		if (properties.isEmpty()) return;
+		boolean full;
+		boolean queuedIt;
 		synchronized (pushLock) {
+			queuedIt = pushCycleOpen;
 			if (pushCycleOpen) {
-				Map<String, String> m = queuedAt(timestamp).props
-						.computeIfAbsent(resourceId,
-								k -> new LinkedHashMap<>());
+				Queued q = queuedAt(timestamp);
+				Map<String, String> m = q.props.get(resourceId);
+				if (m == null) {
+					m = new LinkedHashMap<>();
+					q.props.put(resourceId, m);
+					queuedEntries++;
+					queuedBytes += resourceId.length() + VALUE_OVERHEAD;
+				}
 				for (Map.Entry<String, String> e : properties.entrySet()) {
 					String old = m.put(e.getKey(), e.getValue());
 					if (old != null && !old.equals(e.getValue())) {
 						replacedValues++;
 					}
+					if (old == null) {
+						queuedBytes += len(e.getKey()) + len(e.getValue())
+								+ VALUE_OVERHEAD;
+					}
 				}
-				return;
+				full = isFull();
+			} else {
+				full = false;
 			}
 		}
-		Queued one = new Queued();
-		one.props.put(resourceId, new LinkedHashMap<>(properties));
-		send(java.util.Collections.singletonMap(timestamp, one), 0);
+		if (!queuedIt) {
+			Queued one = new Queued();
+			one.props.put(resourceId, new LinkedHashMap<>(properties));
+			sendAtOnce(timestamp, one);
+			return;
+		}
+		if (full) flushInWalk();
 	}
 
 	@Override
 	public void pushStats(String resourceId,
 			Map<String, Double> stats, long timestamp) {
 		if (stats.isEmpty()) return;
+		boolean full;
+		boolean queuedIt;
 		synchronized (pushLock) {
+			queuedIt = pushCycleOpen;
 			if (pushCycleOpen) {
-				Map<String, Double> m = queuedAt(timestamp).stats
-						.computeIfAbsent(resourceId,
-								k -> new LinkedHashMap<>());
+				Queued q = queuedAt(timestamp);
+				Map<String, Double> m = q.stats.get(resourceId);
+				if (m == null) {
+					m = new LinkedHashMap<>();
+					q.stats.put(resourceId, m);
+					queuedEntries++;
+					queuedBytes += resourceId.length() + VALUE_OVERHEAD;
+				}
 				for (Map.Entry<String, Double> e : stats.entrySet()) {
 					Double old = m.put(e.getKey(), e.getValue());
 					if (old != null && !old.equals(e.getValue())) {
 						replacedValues++;
 					}
+					if (old == null) {
+						queuedBytes += len(e.getKey()) + 24 + VALUE_OVERHEAD;
+					}
 				}
-				return;
+				full = isFull();
+			} else {
+				full = false;
 			}
 		}
-		Queued one = new Queued();
-		one.stats.put(resourceId, new LinkedHashMap<>(stats));
-		send(java.util.Collections.singletonMap(timestamp, one), 0);
+		if (!queuedIt) {
+			Queued one = new Queued();
+			one.stats.put(resourceId, new LinkedHashMap<>(stats));
+			sendAtOnce(timestamp, one);
+			return;
+		}
+		if (full) flushInWalk();
+	}
+
+	private static int len(String s) {
+		return s == null ? 4 : s.length();
+	}
+
+	private boolean isFull() {
+		return !sending && (queuedEntries >= flushEntries
+				|| queuedBytes >= flushBytes);
 	}
 
 	private Queued queuedAt(long timestamp) {
 		return queued.computeIfAbsent(timestamp, k -> new Queued());
 	}
 
+	/** Queued resource entries not yet sent (tests). */
+	int queuedEntries() {
+		synchronized (pushLock) {
+			return queuedEntries;
+		}
+	}
+
 	/**
-	 * Build 104: send everything queued so far, one batched push per
-	 * timestamp (normally one: the cycle's), and log one summary line: INFO
-	 * when clean, WARN with the counts and the reason when not. Nothing
-	 * queued: nothing sent, nothing logged. Never throws; a failed push
-	 * leaves the last values in place, as a failed per-id push did. The
-	 * cycle stays open.
+	 * Build 104 review W2/W3: the queue reached a threshold inside the walk.
+	 * Sent now, so its time counts against the cycle budget (the walk's next
+	 * vCenter call sees it) and the queue stays bounded. Skipped when Stop
+	 * Collecting was requested: the walk stops at its next check and the
+	 * cycle drops the queue ({@link #abandonPushCycle}).
+	 */
+	private void flushInWalk() {
+		if (stopRequested()) return;
+		Map<Long, Queued> work = takeQueue();
+		if (work != null) sendAndCount(work);
+	}
+
+	private Map<Long, Queued> takeQueue() {
+		synchronized (pushLock) {
+			if (queued.isEmpty()) return null;
+			Map<Long, Queued> work = new java.util.TreeMap<>(queued);
+			queued.clear();
+			queuedEntries = 0;
+			queuedBytes = 0;
+			cycleReplaced += replacedValues;
+			replacedValues = 0;
+			return work;
+		}
+	}
+
+	/**
+	 * Build 104: send everything still queued (normally one timestamp: the
+	 * cycle's) and log the cycle's one summary line, which covers every
+	 * flush of the cycle: INFO when clean, WARN with the counts and the
+	 * reason when not. Nothing sent this cycle: nothing logged. Never
+	 * throws; a value not delivered keeps its last value, as a failed per-id
+	 * push did. The cycle stays open (a later push queues again and the
+	 * finally's {@link #endPushCycle} sends it).
+	 *
+	 * @return the cycle's outcome so far, all flushes summed
 	 */
 	public BatchOutcome flushPushes() {
-		Map<Long, Queued> work;
-		int replaced;
-		synchronized (pushLock) {
-			if (queued.isEmpty()) return BatchOutcome.NONE;
-			work = new java.util.TreeMap<>(queued);
-			queued.clear();
-			replaced = replacedValues;
-			replacedValues = 0;
-		}
-		return send(work, replaced);
+		Map<Long, Queued> work = takeQueue();
+		if (work != null) sendAndCount(work);
+		return logCycleSummary();
 	}
 
 	/** Build 104: flush, then close the cycle (pushes go out at once again). */
@@ -936,52 +1101,88 @@ public final class ComplianceStitcher
 		}
 	}
 
-	private BatchOutcome send(Map<Long, Queued> work, int replaced) {
-		BatchOutcome total = BatchOutcome.NONE;
-		int propRes = 0;
-		int statRes = 0;
+	/**
+	 * Build 104 review W2: the cycle was stopped (Stop Collecting or an
+	 * interrupt). What is still queued is dropped, not sent: nothing more
+	 * goes to the Suite API after a stop, as in build 103, where the walk
+	 * stopped and nothing after it was pushed. The values sent by the
+	 * cycle's in-walk flushes stay sent. One WARN names what was dropped.
+	 */
+	public void abandonPushCycle(String why) {
+		int entries;
 		int values = 0;
-		int notTried = 0;
-		String failure = null;
-		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
-				CycleMetrics.Phase.PUSHES)) {
-			for (Map.Entry<Long, Queued> e : work.entrySet()) {
-				Queued q = e.getValue();
-				int entries = q.props.size() + q.stats.size();
-				propRes += q.props.size();
-				statRes += q.stats.size();
+		synchronized (pushLock) {
+			entries = queuedEntries;
+			for (Queued q : queued.values()) {
 				for (Map<String, String> m : q.props.values()) values += m.size();
 				for (Map<String, Double> m : q.stats.values()) values += m.size();
-				if (total.stopped || failure != null) {
-					// The Suite API refused or failed the call: one request
-					// per cycle to a struggling server, as the framework does.
-					notTried += entries;
-					continue;
-				}
-				BatchOutcome o;
-				try {
-					o = stitcher.pushBatch(q.props, q.stats, e.getKey());
-				} catch (RuntimeException ex) {
-					// The framework never throws; a fake or a drift might.
-					failure = ex.getClass().getSimpleName() + ": "
-							+ ex.getMessage();
-					notTried += entries;
-					continue;
-				}
-				if (o == null) o = BatchOutcome.NONE;
-				total = total.plus(o);
-				CycleMetrics m = metrics;
-				if (m != null) {
-					for (int i = 0; i < o.requests(); i++) m.suiteCall();
-				}
 			}
+			queued.clear();
+			queuedEntries = 0;
+			queuedBytes = 0;
+			replacedValues = 0;
+			pushCycleOpen = false;
 		}
-		if (notTried > 0) {
-			total = total.plus(new BatchOutcome(0, 0, 0, 0, notTried, 0,
-					true));
+		logCycleSummary();
+		if (entries > 0) {
+			logger.warn("Suite API push: " + why + ": " + entries
+					+ " queued resource entr(ies) (" + values + " value(s)) "
+					+ "were not sent; those values keep their last value "
+					+ "until the next cycle");
 		}
-		String line = pushSummary(total, propRes, statRes, values,
-				work.size(), replaced, failure);
+	}
+
+	private void sendAtOnce(long timestamp, Queued one) {
+		// Build 104 review N5: outside a cycle (no production caller), the
+		// summary is DEBUG, a failure still WARN.
+		BatchOutcome o = send(java.util.Collections.singletonMap(timestamp,
+				one));
+		String line = pushSummary(o, one.props.size(), one.stats.size(),
+				valuesIn(one), 1, 0, lastFailure);
+		if (o.isClean()) {
+			logger.debug(line);
+		} else {
+			logger.warn(line);
+		}
+	}
+
+	private static int valuesIn(Queued q) {
+		int v = 0;
+		for (Map<String, String> m : q.props.values()) v += m.size();
+		for (Map<String, Double> m : q.stats.values()) v += m.size();
+		return v;
+	}
+
+	private void sendAndCount(Map<Long, Queued> work) {
+		int p = 0;
+		int st = 0;
+		int v = 0;
+		for (Queued q : work.values()) {
+			p += q.props.size();
+			st += q.stats.size();
+			v += valuesIn(q);
+		}
+		BatchOutcome o = send(work);
+		synchronized (pushLock) {
+			cycleOutcome = cycleOutcome.plus(o);
+			cycleProps += p;
+			cycleStats += st;
+			cycleValues += v;
+			cycleFlushes++;
+			if (lastFailure != null) cycleFailure = lastFailure;
+		}
+	}
+
+	private BatchOutcome logCycleSummary() {
+		BatchOutcome total;
+		String line;
+		synchronized (pushLock) {
+			if (cycleFlushes == 0) return BatchOutcome.NONE;
+			total = cycleOutcome;
+			line = pushSummary(total, cycleProps, cycleStats, cycleValues,
+					cycleFlushes, cycleReplaced, cycleFailure);
+			resetCycleTotals();
+		}
 		if (total.isClean()) {
 			logger.info(line);
 		} else {
@@ -990,21 +1191,89 @@ public final class ComplianceStitcher
 		return total;
 	}
 
+	// The last send's thrown-push or stop text, for the summary.
+	private volatile String lastFailure;
+
 	/**
-	 * Build 104: the one line a flush logs. Package-private for the tests.
+	 * Build 104 review W1: per timestamp, stats first (small, and every
+	 * alerting signal: score, has_unreadable, each |Compliant,
+	 * Rollup|incomplete), then properties. A stopped call (5xx, 429,
+	 * timeout, token failure, interrupt), a thrown push or Stop Collecting
+	 * sends nothing more; the rest counts as not delivered.
+	 */
+	private BatchOutcome send(Map<Long, Queued> work) {
+		BatchOutcome total = BatchOutcome.NONE;
+		int notTried = 0;
+		String failure = null;
+		synchronized (pushLock) {
+			sending = true;
+		}
+		try (CycleMetrics.Scope s = CycleMetrics.scope(metrics,
+				CycleMetrics.Phase.PUSHES)) {
+			for (Map.Entry<Long, Queued> e : work.entrySet()) {
+				Queued q = e.getValue();
+				for (int half = 0; half < 2; half++) {
+					boolean stats = half == 0;
+					int entries = stats ? q.stats.size() : q.props.size();
+					if (entries == 0) continue;
+					if (failure == null && !total.stopped && stopRequested()) {
+						failure = "Stop Collecting was requested";
+					}
+					if (total.stopped || failure != null) {
+						notTried += entries;
+						continue;
+					}
+					BatchOutcome o;
+					try {
+						o = stats
+								? stitcher.pushStatsBatch(q.stats, e.getKey())
+								: stitcher.pushPropertiesBatch(q.props,
+										e.getKey());
+					} catch (RuntimeException ex) {
+						// The framework never throws; a fake or a drift might.
+						failure = "the push threw "
+								+ ex.getClass().getSimpleName() + ": "
+								+ ex.getMessage();
+						notTried += entries;
+						continue;
+					}
+					if (o == null) o = BatchOutcome.NONE;
+					total = total.plus(o);
+					CycleMetrics m = metrics;
+					if (m != null) {
+						for (int i = 0; i < o.requests(); i++) m.suiteCall();
+					}
+				}
+			}
+		} finally {
+			synchronized (pushLock) {
+				sending = false;
+			}
+		}
+		if (notTried > 0) {
+			total = total.plus(new BatchOutcome(0, 0, 0, 0, notTried, 0,
+					true));
+		}
+		lastFailure = failure;
+		return total;
+	}
+
+	/**
+	 * Build 104: the one line a cycle's pushes log. Package-private for the
+	 * tests.
 	 */
 	static String pushSummary(BatchOutcome o, int propResources,
-			int statResources, int values, int timestamps, int replaced,
+			int statResources, int values, int flushes, int replaced,
 			String failure) {
 		StringBuilder b = new StringBuilder();
 		b.append(o.isClean() ? "Suite API push: "
 				: "Suite API push NOT clean: ");
-		b.append(propResources).append(" resource(s) with properties and ")
-				.append(statResources).append(" with stats, ").append(values)
-				.append(" value(s), in ").append(o.requests())
+		b.append(statResources).append(" resource(s) with stats and ")
+				.append(propResources).append(" with properties, ")
+				.append(values).append(" value(s), in ").append(o.requests())
 				.append(" request(s)");
-		if (timestamps > 1) {
-			b.append(" (").append(timestamps).append(" timestamps)");
+		if (flushes > 1) {
+			b.append(" (").append(flushes).append(" flushes)");
 		}
 		b.append(" [").append(o).append("]");
 		if (replaced > 0) {
@@ -1014,7 +1283,7 @@ public final class ComplianceStitcher
 		if (o.isClean()) return b.toString();
 		java.util.List<String> why = new java.util.ArrayList<>();
 		if (failure != null) {
-			why.add("the push threw " + failure);
+			why.add(failure);
 		} else if (o.stopped) {
 			why.add("the call stopped early (a server error, 429, timeout, "
 					+ "token failure or interrupt; see the "

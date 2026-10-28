@@ -139,7 +139,10 @@ final class FakeSuiteApi implements ComplianceStitcher.SuiteApi {
 		return EMPTY;
 	}
 
-	/** Build 104: one batched push as the stitcher sent it. */
+	/**
+	 * Build 104: one batch call as the stitcher made it: stats or
+	 * properties (the other map empty), at one timestamp.
+	 */
 	static final class Batch {
 		final Map<String, Map<String, String>> props;
 		final Map<String, Map<String, Double>> stats;
@@ -151,43 +154,45 @@ final class FakeSuiteApi implements ComplianceStitcher.SuiteApi {
 			this.stats = stats;
 			this.ts = ts;
 		}
+
+		boolean isStats() {
+			return !stats.isEmpty();
+		}
 	}
 
-	/** Build 104: every batched push, in order. */
+	/** Build 104: every batch call, in order. */
 	final List<Batch> batches = Collections.synchronizedList(new ArrayList<>());
 	/**
-	 * Build 104: what the next batched pushes answer (null: a clean result,
-	 * one request per non-empty half). A non-clean answer still records the
-	 * attempt; with {@link #failPushes} nothing lands.
+	 * Build 104: what the next batch calls answer (null: a clean result, one
+	 * request). The attempt is recorded either way; with {@link #failPushes}
+	 * nothing lands.
 	 */
 	volatile ComplianceStitcher.BatchOutcome batchAnswer;
-	/** Build 104: when set, pushBatch throws it (the framework never does). */
+	/** Build 104: answers properties calls only (null: as batchAnswer). */
+	volatile ComplianceStitcher.BatchOutcome propsAnswer;
+	/** Build 104: when set, a batch call throws it (the framework never does). */
 	volatile RuntimeException batchThrows;
+	/** Build 104: run before each batch call is recorded (tests). */
+	volatile Runnable beforeBatch;
 
 	/**
-	 * Build 104 (issue #17): the batched push. Each resource's properties
-	 * and stats are also recorded in {@link #pushes} (properties first, as
-	 * the framework sends them), so the per-object assertions read the same
+	 * Build 104 (issue #17): the stats batch. Each resource's stats are also
+	 * recorded in {@link #pushes}, so the per-object assertions read the same
 	 * records the per-id pushes made before.
 	 */
 	@Override
-	public ComplianceStitcher.BatchOutcome pushBatch(
-			Map<String, Map<String, String>> p,
+	public ComplianceStitcher.BatchOutcome pushStatsBatch(
 			Map<String, Map<String, Double>> s, long ts) {
-		Map<String, Map<String, String>> pc = new LinkedHashMap<>();
-		for (Map.Entry<String, Map<String, String>> e : p.entrySet()) {
-			pc.put(e.getKey(), new LinkedHashMap<>(e.getValue()));
-		}
+		Runnable r = beforeBatch;
+		if (r != null) r.run();
 		Map<String, Map<String, Double>> sc = new LinkedHashMap<>();
 		for (Map.Entry<String, Map<String, Double>> e : s.entrySet()) {
 			sc.put(e.getKey(), new LinkedHashMap<>(e.getValue()));
 		}
-		batches.add(new Batch(pc, sc, ts));
+		batches.add(new Batch(new LinkedHashMap<String, Map<String, String>>(),
+				sc, ts));
 		RuntimeException t = batchThrows;
 		if (t != null) throw t;
-		for (Map.Entry<String, Map<String, String>> e : pc.entrySet()) {
-			pushes.add(new Push(e.getKey(), e.getValue(), null));
-		}
 		for (Map.Entry<String, Map<String, Double>> e : sc.entrySet()) {
 			pushes.add(new Push(e.getKey(), null, e.getValue()));
 			if (failPushes) continue;   // swallowed, as the framework does
@@ -196,10 +201,61 @@ final class FakeSuiteApi implements ComplianceStitcher.SuiteApi {
 			}
 		}
 		ComplianceStitcher.BatchOutcome a = batchAnswer;
-		if (a != null) return a;
-		int req = (pc.isEmpty() ? 0 : 1) + (sc.isEmpty() ? 0 : 1);
-		return new ComplianceStitcher.BatchOutcome(pc.size() + sc.size(),
-				req, 0, 0, 0, 0, false);
+		return a != null ? a : new ComplianceStitcher.BatchOutcome(sc.size(),
+				1, 0, 0, 0, 0, false);
+	}
+
+	/** Build 104 (issue #17): the properties batch, recorded the same way. */
+	@Override
+	public ComplianceStitcher.BatchOutcome pushPropertiesBatch(
+			Map<String, Map<String, String>> p, long ts) {
+		Runnable r = beforeBatch;
+		if (r != null) r.run();
+		Map<String, Map<String, String>> pc = new LinkedHashMap<>();
+		for (Map.Entry<String, Map<String, String>> e : p.entrySet()) {
+			pc.put(e.getKey(), new LinkedHashMap<>(e.getValue()));
+		}
+		batches.add(new Batch(pc, new LinkedHashMap<String, Map<String,
+				Double>>(), ts));
+		RuntimeException t = batchThrows;
+		if (t != null) throw t;
+		for (Map.Entry<String, Map<String, String>> e : pc.entrySet()) {
+			pushes.add(new Push(e.getKey(), e.getValue(), null));
+		}
+		ComplianceStitcher.BatchOutcome a = propsAnswer != null ? propsAnswer
+				: batchAnswer;
+		return a != null ? a : new ComplianceStitcher.BatchOutcome(pc.size(),
+				1, 0, 0, 0, 0, false);
+	}
+
+	/** Build 104: the properties of every batch call, merged per resource. */
+	Map<String, Map<String, String>> batchedProps() {
+		Map<String, Map<String, String>> out = new LinkedHashMap<>();
+		synchronized (batches) {
+			for (Batch b : batches) {
+				for (Map.Entry<String, Map<String, String>> e
+						: b.props.entrySet()) {
+					out.computeIfAbsent(e.getKey(),
+							k -> new LinkedHashMap<>()).putAll(e.getValue());
+				}
+			}
+		}
+		return out;
+	}
+
+	/** Build 104: the stats of every batch call, merged per resource. */
+	Map<String, Map<String, Double>> batchedStats() {
+		Map<String, Map<String, Double>> out = new LinkedHashMap<>();
+		synchronized (batches) {
+			for (Batch b : batches) {
+				for (Map.Entry<String, Map<String, Double>> e
+						: b.stats.entrySet()) {
+					out.computeIfAbsent(e.getKey(),
+							k -> new LinkedHashMap<>()).putAll(e.getValue());
+				}
+			}
+		}
+		return out;
 	}
 
 	/** Every stat pushed to {@code id}, merged in push order. */

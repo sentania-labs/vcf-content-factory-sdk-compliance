@@ -1260,7 +1260,27 @@ public final class ComplianceDecisions {
 	public static String markNotCollected(String lastResolvedId,
 			java.util.function.Supplier<String> resolveByHost,
 			java.util.function.BiConsumer<String, Map<String, Double>> push) {
+		return markNotCollected(lastResolvedId, id -> null, resolveByHost,
+				push);
+	}
+
+	/**
+	 * Build 104 review N3: as above, but the cached id is first checked
+	 * against the current VMwareAdapter Instance list ({@code listed}: TRUE,
+	 * FALSE, or null when the list could not be read). An id the list no
+	 * longer has is not used (a batch push to it would be dropped without
+	 * an error); the entered host is resolved instead. Unknown keeps the
+	 * cached id, as before.
+	 */
+	public static String markNotCollected(String lastResolvedId,
+			java.util.function.Function<String, Boolean> listed,
+			java.util.function.Supplier<String> resolveByHost,
+			java.util.function.BiConsumer<String, Map<String, Double>> push) {
 		String id = lastResolvedId;
+		if (id != null && !id.trim().isEmpty()
+				&& Boolean.FALSE.equals(listed.apply(id))) {
+			id = null;
+		}
 		if (id == null || id.trim().isEmpty()) {
 			id = resolveByHost.get();
 		}

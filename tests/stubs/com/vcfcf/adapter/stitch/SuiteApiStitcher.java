@@ -22,26 +22,28 @@ public final class SuiteApiStitcher {
 		default void pushStats(String id, java.util.Map<String, Double> s,
 				long ts) {}
 		/**
-		 * Build 104: the 1.0.24 batch push. Default: each resource's
-		 * properties, then each resource's stats, through the per-id hooks.
+		 * Build 104: the 1.0.24 batch pushes. Default: each resource
+		 * through the per-id hook, one accepted request per call.
 		 */
-		default SuiteApiBatchResult pushBatch(
-				java.util.Map<String, ? extends java.util.Map<String, String>> p,
+		default SuiteApiBatchResult pushStatsBatch(
 				java.util.Map<String, ? extends java.util.Map<String, Double>> s,
 				long ts) {
-			int sent = 0;
-			for (java.util.Map.Entry<String, ? extends java.util.Map<String,
-					String>> e : p.entrySet()) {
-				pushProperties(e.getKey(), e.getValue(), ts);
-				sent++;
-			}
 			for (java.util.Map.Entry<String, ? extends java.util.Map<String,
 					Double>> e : s.entrySet()) {
 				pushStats(e.getKey(), e.getValue(), ts);
-				sent++;
 			}
-			int batches = (p.isEmpty() ? 0 : 1) + (s.isEmpty() ? 0 : 1);
-			return new SuiteApiBatchResult(sent, batches, 0, 0, 0, 0, false);
+			return new SuiteApiBatchResult(s.size(), s.isEmpty() ? 0 : 1, 0,
+					0, 0, 0, false);
+		}
+		default SuiteApiBatchResult pushPropertiesBatch(
+				java.util.Map<String, ? extends java.util.Map<String, String>> p,
+				long ts) {
+			for (java.util.Map.Entry<String, ? extends java.util.Map<String,
+					String>> e : p.entrySet()) {
+				pushProperties(e.getKey(), e.getValue(), ts);
+			}
+			return new SuiteApiBatchResult(p.size(), p.isEmpty() ? 0 : 1, 0,
+					0, 0, 0, false);
 		}
 		default boolean addChild(String parent, String child) { return true; }
 		default String findSingletonResourceId(String ak, String rk) {
@@ -84,11 +86,16 @@ public final class SuiteApiStitcher {
 		b.pushStats(id, s, ts);
 	}
 
-	public SuiteApiBatchResult pushBatch(
-			java.util.Map<String, ? extends java.util.Map<String, String>> p,
+	public SuiteApiBatchResult pushStatsBatch(
 			java.util.Map<String, ? extends java.util.Map<String, Double>> s,
 			long ts) {
-		return b.pushBatch(p, s, ts);
+		return b.pushStatsBatch(s, ts);
+	}
+
+	public SuiteApiBatchResult pushPropertiesBatch(
+			java.util.Map<String, ? extends java.util.Map<String, String>> p,
+			long ts) {
+		return b.pushPropertiesBatch(p, ts);
 	}
 
 	public boolean addChild(String parent, String child) {
