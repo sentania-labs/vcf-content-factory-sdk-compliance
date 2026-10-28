@@ -136,6 +136,35 @@ public final class ComplianceRollupTest {
 		T.near(3, cs.get(P + "Benchmark|SCG_9.0|objects"), "carried objects");
 		T.near(2, cs.get(P + "Benchmark|SCG_9.0|scored_objects"),
 				"carried scored objects");
+		T.near(cs.get(P + "All|scored"), sumScored(cs),
+				"after a carry, scored_objects sum to Rollup|All|scored");
+
+		// Review N2: a kind cut in two consecutive cycles carries both
+		// shares (Part.plus) into the cycle that completes it.
+		ComplianceRollup first = new ComplianceRollup();
+		first.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 5, 0, 0,
+				ControlEvaluator.score(5, 0));
+		ComplianceRollup second = new ComplianceRollup();
+		second.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 2, 2, 0,
+				ControlEvaluator.score(2, 2));
+		second.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_8.0", 0, 0, 4,
+				ControlEvaluator.score(0, 0));
+		ComplianceRollup.Part both = first.part(BenchmarkSelector.Kind.HOST)
+				.plus(second.part(BenchmarkSelector.Kind.HOST));
+		ComplianceRollup last = new ComplianceRollup();
+		last.recordEvaluated(BenchmarkSelector.Kind.HOST, "SCG_9.0", 1, 0, 0,
+				ControlEvaluator.score(1, 0));
+		last.addPart(BenchmarkSelector.Kind.HOST, both);
+		Map<String, Double> ps = last.toStats();
+		T.near(2, ps.get(P + "Benchmark|SCG_9.0|objects"), "plus: 9.0 objects");
+		T.near(2, ps.get(P + "Benchmark|SCG_9.0|scored_objects"),
+				"plus: 9.0 scored objects");
+		T.near(2, ps.get(P + "Benchmark|SCG_8.0|objects"), "plus: 8.0 objects");
+		T.near(1, ps.get(P + "Benchmark|SCG_8.0|scored_objects"),
+				"plus: 8.0 scored objects, not the nothing-applicable one");
+		T.near(3, ps.get(P + "All|scored"), "plus: All scored");
+		T.near(ps.get(P + "All|scored"), sumScored(ps),
+				"after Part.plus, scored_objects sum to Rollup|All|scored");
 
 		// Held back with objects when a kind is incomplete.
 		carried.markIncomplete(BenchmarkSelector.Kind.VM);
@@ -622,5 +651,15 @@ public final class ComplianceRollupTest {
 					+ "object mean %.2f%n", env, envPassed, envEval,
 					envSum / envScored);
 		}
+	}
+
+	/** Sum of Benchmark|<B>|scored_objects over the fixed buckets. */
+	static double sumScored(Map<String, Double> stats) {
+		double n = 0;
+		for (String b : ComplianceRollup.FIXED_BUCKETS) {
+			Double v = stats.get(P + "Benchmark|" + b + "|scored_objects");
+			n += v == null ? 0 : v;
+		}
+		return n;
 	}
 }

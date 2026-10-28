@@ -276,11 +276,13 @@ public final class ComplianceStitcher
 	 * such row is logged once at INFO. A MOID on two of the owning
 	 * vCenter's rows is ambiguous: neither is indexed. With the owning
 	 * vCenter UUID unknown nothing is read and the kind is held back.
+	 * Build 102 (review W1): so is a list with rows but no row of the owning
+	 * vCenter and at least one row with no {@code VMEntityVCID}, since its
+	 * objects may be among the rows that cannot be scoped. The load line
+	 * records, for every kind, how many rows carry {@code VMEntityVCID}.
 	 */
 	private void loadResourcesForKind(String resourceKind) {
-		Map<String, HostEntry> byName = new HashMap<>();
 		Map<String, HostEntry> byMoid = new HashMap<>();
-		resourcesByName.put(resourceKind, byName);
 		resourcesByMoid.put(resourceKind, byMoid);
 
 		String owner = owningVcUuid;
@@ -308,6 +310,7 @@ public final class ComplianceStitcher
 				+ " — processing " + resources.size() + " resource(s)");
 
 		int skippedForeignVc = 0;
+		int ownerRows = 0;
 		int noUuid = 0;
 		int noMoid = 0;
 		int noVcid = 0;
@@ -329,12 +332,15 @@ public final class ComplianceStitcher
 				// multi-vCenter VCF Ops, counted in the load line only.
 				skippedForeignVc++;
 				continue;
-			} else if (uuid == null) {
-				noUuid++;
-				reason = "no identifier (UUID)";
-			} else if (moid == null || moid.isEmpty()) {
-				noMoid++;
-				reason = "no VMEntityObjectID";
+			} else {
+				ownerRows++;
+				if (uuid == null) {
+					noUuid++;
+					reason = "no identifier (UUID)";
+				} else if (moid == null || moid.isEmpty()) {
+					noMoid++;
+					reason = "no VMEntityObjectID";
+				}
 			}
 			if (reason != null) {
 				if (firstSkipped == null) {
@@ -351,6 +357,24 @@ public final class ComplianceStitcher
 				continue;
 			}
 			byMoid.put(moid, new HostEntry(uuid, name, moid));
+		}
+
+		int withVcid = resources.size() - noVcid;
+		if (noVcid > 0 && ownerRows == 0) {
+			// Review W1: rows exist, none is the owning vCenter's, and some
+			// cannot be scoped at all. This vCenter's objects may be among
+			// them, so reporting every object unmatched would zero the
+			// kind's counts. Held back like a failed list read: the kind's
+			// keys keep their values and Rollup|incomplete = 1.
+			failedLoads.add(resourceKind);
+			logger.warn("ComplianceStitcher: " + resourceKind + " not "
+					+ "matched: " + noVcid + " of " + resources.size()
+					+ " row(s) carry no VMEntityVCID and none belongs to "
+					+ "vCenter " + owner + " (" + skippedForeignVc
+					+ " from other vCenters)"
+					+ (firstSkipped != null ? "; first: " + firstSkipped : "")
+					+ "; this kind is held back this cycle");
+			return;
 		}
 
 		int notIndexed = noVcid + noUuid + noMoid;
@@ -370,7 +394,8 @@ public final class ComplianceStitcher
 		logger.info("ComplianceStitcher: loaded "
 				+ byMoid.size() + " " + resourceKind + " by MOID"
 				+ " (scoped to vCenter " + owner + "; skipped "
-				+ skippedForeignVc + " from other vCenters)");
+				+ skippedForeignVc + " from other vCenters; " + withVcid
+				+ " of " + resources.size() + " row(s) carry VMEntityVCID)");
 	}
 
 	/**

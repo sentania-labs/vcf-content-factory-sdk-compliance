@@ -531,11 +531,13 @@ and recommendation names carry no prefix.
   says how to tell which and what to fix. Alert id
   `vcfcf_compliance_overrides_vcenter`; raises and cancels after 1 cycle.
 
-All compliance alert definitions are type Compliance (subType 21). An
-alert keeps the subType it was raised with: a Host Compliance Score
-Degraded alert raised before build 57, when that definition was subType
-20 (Capacity), stays subType 20 until it cancels, so the dashboards'
-Compliance-type alert lists do not show it (issue #64; see
+All compliance alert definitions are type Compliance (subType 21). A
+Host Compliance Score Degraded alert raised before build 57, when that
+definition was subType 20 (Capacity), was seen to stay subType 20 while
+active, so the dashboards' Compliance-type alert lists do not show it
+until it cancels: on the devel lab the three missing alerts appeared only
+under alert type filter `15_20`, and the widget's criticality filter was
+ruled out ([#64, comment of 2026-10-28](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/64#issuecomment-6461812901); see
 [installing.md](installing.md#upgrading)).
 
 Wait and cancel cycles (build 86): the per-control alerts and the score

@@ -159,8 +159,10 @@ object and its children: the per-control alerts, the "Compliance data not
 collected" alerts and the Host Compliance Score Degraded alert alike. The
 widget has no filter that separates them, and pinning all 143 alert
 definitions per widget was ruled out. One exception after an upgrade: a
-Host Compliance Score Degraded alert raised before build 57 keeps
-subType 20 until it cancels and is not listed (issue #64; see
+Host Compliance Score Degraded alert raised before build 57 can keep
+subType 20 until it cancels and is not listed (seen on the devel lab, the
+alerts listed only under `15_20`:
+[#64, comment of 2026-10-28](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/64#issuecomment-6461812901); see
 [installing.md](installing.md#upgrading)).
 
 On the Environment Overview nothing is selected when the page opens
@@ -297,7 +299,13 @@ collection continues; compliance is never failed over a stitch error.
   they would have matched are counted unmatched. If the vCenter instance
   UUID cannot be read in a cycle, hosts, VMs, clusters, switches and
   port groups are held back with `Rollup|incomplete` = 1 instead of
-  matched on a bare MOID.
+  matched on a bare MOID. A kind is held back the same way when its list
+  has rows but none of this vCenter and at least one with no vCenter
+  UUID, since this vCenter's objects may be among those rows; the
+  stitcher logs a WARN (`<kind> not matched: N of M row(s) carry no
+  VMEntityVCID`) instead of the kind's counts dropping to 0. Every load
+  line records how many rows carry the vCenter UUID (`... ; N of M row(s)
+  carry VMEntityVCID`), for each of the five kinds.
 - **vSphere Pods are skipped (build 88).** VMs whose guest id starts with
   `crx` (vSphere Pods, which VCF Ops lists as kind Pod) are out of scope:
   not scored, not unmatched, counted in
@@ -324,8 +332,9 @@ collection continues; compliance is never failed over a stitch error.
   kind (build 78).** If vCenter fails to list the hosts (build 95,
   issue #18; before, a failed host listing failed the whole cycle with no
   signal), VMs, distributed switches, portgroups or clusters in a cycle, the adapter does not push
-  that kind's `Rollup|<K>|*` keys, nor the cross-kind `Rollup|All|*` and
-  `Rollup|Benchmark|*|objects` keys, for that vCenter that cycle. The
+  that kind's `Rollup|<K>|*` keys, nor the cross-kind `Rollup|All|*`,
+  `Rollup|Benchmark|*|objects` and (build 102) `Rollup|Benchmark|*|scored_objects`
+  keys, for that vCenter that cycle. The
   previous values stay, so the environment totals do not suddenly lose,
   for example, every VM of one vCenter. So a listing that keeps failing
   cannot freeze the rollup unnoticed, the vCenter object also carries

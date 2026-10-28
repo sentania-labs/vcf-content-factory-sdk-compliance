@@ -146,7 +146,7 @@ widgets:
     mode: all
     # depth 4: input is the selected vCenter row of the view above (select_first_row, so never the ComplianceWorld itself); vCenter > Datacenter > Cluster > HostSystem > VirtualMachine is 4 levels (vDS and port group chains are shorter).
     depth: 4
-    alert_types: ["15_21"]  # Application / Compliance. Every pak alert definition is type 15 subType 21, so this lists every alert raised under them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out). Not listed: a Score Degraded alert raised before build 57 (definition then subType 20), which keeps subType 20 until it cancels (issue #64)
+    alert_types: ["15_21"]  # Application / Compliance. Every pak alert definition is type 15 subType 21, so this lists every alert raised under them: per-control, "Compliance data not collected" and "Host Compliance Score Degraded" alike (no widget filter separates them; pinning the 143 definition ids was ruled out). Not listed: a Score Degraded alert raised before build 57 (definition then subType 20), which stays subType 20 until it cancels (seen on devel: listed only under 15_20, criticality filter ruled out; issue #64 comment of 2026-10-28)
 
 interactions:
   - from: vcenter_object_type_view

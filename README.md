@@ -126,8 +126,8 @@ must be on for each install or upgrade of an unsigned pak:
 2. Administrator Settings, Security Settings: click **Activate Unsigned PAK
    Installation** on 9.1 (**Enable Unsigned PAK Installation** on 9.0). The
    change is refused while any cluster node is down.
-3. When uploading the pak (**Administration > Integrations > Repository >
-   Add**), tick **Ignore the PAK file signature checking**. The box only
+3. When uploading the pak (the **Repository** tab of Integrations, then
+   **Add**; menu paths in Getting started), tick **Ignore the PAK file signature checking**. The box only
    appears once the setting is on.
 
 With the setting off, the install fails with
@@ -141,10 +141,16 @@ keep whatever state the setting had before the upgrade.
 
 1. Download the latest `.pak` from this repo's
    [Releases](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/releases).
-2. In VCF Operations, install it from **Administration > Integrations >
-   Repository > Add**.
-3. Add an account for **VCF Content Factory Compliance** under
-   **Administration > Integrations > Accounts > Add**. Give it your
+2. In VCF Operations, open the **Repository** tab of Integrations and
+   click **Add**: on 9.1.1, **Operate** tab > **Administration** >
+   **Integrations** > **Repository**; on 9.0.2 and 8.18.7,
+   **Administration** > **Integrations** > **Repository** (checked in the
+   UI 2026-10-28; no supported line has a "Data Sources" menu).
+3. Add an account for **VCF Content Factory Compliance** from the
+   **Accounts** tab of Integrations (the default tab), **Add**: on 9.1.1,
+   **Operate** tab > **Administration** > **Integrations** > **Accounts**;
+   on 9.0.2 and 8.18.7, **Administration** > **Integrations** >
+   **Accounts**. Give it your
    vCenter address, using the name on the vCenter's certificate rather
    than its IP, and a vCenter account with read access (see
    [installing.md](docs/installing.md) for the exact privileges). The
