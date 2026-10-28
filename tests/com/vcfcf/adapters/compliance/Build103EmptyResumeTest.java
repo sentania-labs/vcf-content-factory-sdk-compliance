@@ -3,7 +3,7 @@ package com.vcfcf.adapters.compliance;
 import java.util.Map;
 
 /**
- * Build 104 (PR #69 Codex P1): a resume cursor on the LAST object of a kind
+ * Build 103 (PR #69 Codex P1): a resume cursor on the LAST object of a kind
  * (left there when that object was cut by the cycle budget twice and the
  * walk stepped past it) makes the next cycle's walk of the kind empty while
  * the inventory is not. The vDS, portgroup and cluster collectors read the
@@ -14,7 +14,7 @@ import java.util.Map;
  * pushed, and the next cycle a full pass. Host and VM (fixed types) are
  * checked the same way. Run from the repo root.
  */
-public final class Build104EmptyResumeTest {
+public final class Build103EmptyResumeTest {
 
 	private static final String P = ComplianceRollup.PREFIX;
 
@@ -27,7 +27,7 @@ public final class Build104EmptyResumeTest {
 				"domain-c1", "domain-c2");
 		hosts();
 		vms();
-		System.out.println("Build104EmptyResumeTest: all assertions passed");
+		System.out.println("Build103EmptyResumeTest: all assertions passed");
 	}
 
 	static void vim(BenchmarkSelector.Kind kind, String type, String first,
@@ -70,7 +70,7 @@ public final class Build104EmptyResumeTest {
 		h.holder.resume.startAt(kind);
 		T.eq(lastMoid, h.holder.resume.cursor(kind), what + "cursor set");
 
-		h.cycle();   // threw IndexOutOfBoundsException before build 104
+		h.cycle();   // threw IndexOutOfBoundsException before this fix
 		Map<String, Double> r2 = h.lastRollup();
 		T.check(r2 != null, what + "cycle 2 pushed a rollup");
 		T.eq(null, h.holder.resume.cursor(kind),

@@ -2969,7 +2969,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"VmwareDistributedVirtualSwitch", rollup)) {
 			return;
 		}
-		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
 		// listing, never the walk's tail, which is empty when the cursor
 		// sits on the last object (cut twice and stepped past); the empty
 		// walk must still reach finish() to clear the cursor.
@@ -3030,7 +3030,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"DistributedVirtualPortgroup", rollup)) {
 			return;
 		}
-		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
 		// listing, never the walk's tail, which is empty when the cursor
 		// sits on the last object (cut twice and stepped past); the empty
 		// walk must still reach finish() to clear the cursor.
@@ -3099,7 +3099,7 @@ public final class ComplianceAdapter extends VcfCfAdapter<ComplianceConfig> {
 				"ClusterComputeResource", rollup)) {
 			return;
 		}
-		// Build 104 (PR #69 Codex P1): the vim type comes from the full
+		// Build 103 (PR #69 Codex P1): the vim type comes from the full
 		// listing, never the walk's tail, which is empty when the cursor
 		// sits on the last object (cut twice and stepped past); the empty
 		// walk must still reach finish() to clear the cursor.

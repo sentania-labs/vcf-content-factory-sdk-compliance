@@ -46,7 +46,7 @@ final class AdapterHarness implements AutoCloseable {
 	final Map<String, String[]> vms = new LinkedHashMap<>();
 
 	/**
-	 * Build 104 (PR #69 Codex P1): vim objects of the switch, portgroup and
+	 * Build 103 (PR #69 Codex P1): vim objects of the switch, portgroup and
 	 * cluster kinds, vim type -> (moid -> name); none by default.
 	 */
 	final Map<String, Map<String, String>> vimObjects = new LinkedHashMap<>();
