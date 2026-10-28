@@ -195,8 +195,12 @@ version, use the overrides file ([overrides.md](overrides.md)).
 
 ## Step-by-Step Installation
 
-1. Install the `.pak` file via **Administration > Integrations > Repository > Add**.
-2. After installation, open **Administration > Integrations > Accounts**.
+1. Install the `.pak` file from the **Repository** tab of Integrations, **Add**:
+   on 9.1.1, **Operate** tab > **Administration** > **Integrations** >
+   **Repository**; on 9.0.2 and 8.18.7, **Administration** >
+   **Integrations** > **Repository** (checked in the UI 2026-10-28).
+2. After installation, open the **Accounts** tab of Integrations (the
+   default tab; same paths, ending in **Accounts**).
 3. Click **Add Account** and select **VCF Content Factory Compliance**.
 4. Fill in the configuration fields above, entering vCenter by the name
    on its certificate. To tune controls or pin a guide version, set
@@ -232,8 +236,8 @@ version, use the overrides file ([overrides.md](overrides.md)).
   interval stored on it when the pak is upgraded (seen on a lab upgrade,
   where instances at 60 stayed at 60). After upgrading, edit each
   compliance adapter instance under **Administration > Integrations >
-  Accounts** and set its collection interval to 5 minutes, or the value
-  you want.
+  Accounts** (on 9.1.1 Administration is under the **Operate** tab) and
+  set its collection interval to 5 minutes, or the value you want.
 - **Setting the interval through the Suite API.** To script the edit, `GET
   /api/adapters/{id}`, set `monitoringInterval` to 5 in that full body,
   and `PUT /api/adapters` with it. Remove `collectorId` from the body
@@ -257,6 +261,21 @@ version, use the overrides file ([overrides.md](overrides.md)).
   definitions rather than adding new ones. Alerts already open when you
   upgrade stay open under the new name with their alert ids and start
   times kept (seen on a lab upgrade: every active alert carried over).
+- **Score Degraded alerts raised before build 57 stay hidden until they
+  cancel (issue #64).** Build 57 moved the Host Compliance Score Degraded
+  definition from subType 20 (Capacity) to 21 (Compliance). On the devel
+  9.0.2 lab the three Score Degraded alerts missing from the dashboards'
+  alert lists were the three oldest active ones, and each appeared only
+  under alert type filter `15_20`, while a newer one appeared under
+  `15_21`; widening the widget's criticality filter did not bring them
+  back ([#64, comment of 2026-10-28](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/64#issuecomment-6461812901)). So an alert
+  appears to keep the subType it was raised with: a Score Degraded alert
+  opened before build 57 and still active can be subType 20, and the
+  dashboards' alert lists (filter `15_21`) do not show it; it still shows
+  under **Alerts**. It changes on its own when it cancels and is raised again.
+  To bring it into the lists now, cancel it under **Alerts**: if the
+  host's score is still below the threshold, it is raised again at the
+  next cycle as subType 21.
 - **Definitions take the new cycles.** Existing symptom and alert
   definitions pick up the build 86 wait and cancel cycles on the upgrade
   (per-control and score ones wait 1 and cancel after 3; the collection

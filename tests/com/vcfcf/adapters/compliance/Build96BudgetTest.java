@@ -3,6 +3,8 @@ package com.vcfcf.adapters.compliance;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -121,6 +123,21 @@ public final class Build96BudgetTest {
 	static FakeVCenter.Resp late(long ms, FakeVCenter.Resp r) {
 		try {
 			Thread.sleep(ms);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		return r;
+	}
+
+	/**
+	 * Build 102 (issue #63): answer only once {@code release} is counted
+	 * down (bounded at 60 s so a failed test cannot hang the run). The
+	 * call is hung for as long as the test needs it to be, whatever the
+	 * machine's speed, so no real sleep races the client's timeout.
+	 */
+	static FakeVCenter.Resp held(CountDownLatch release, FakeVCenter.Resp r) {
+		try {
+			release.await(60, TimeUnit.SECONDS);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
@@ -732,8 +749,15 @@ public final class Build96BudgetTest {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
 				"host-11", "esx02")) {
 			h.cycle();
-			h.client.setReadTimeoutMs(200);
-			h.client.setShortReadTimeoutMs(200);
+			// Build 102 (issue #63): the hung call waits on a latch that is
+			// only released after the cycle, so it can never answer in
+			// time, and the timeout is wide enough that the calls vCenter
+			// does answer (the lockdown read the flake lost at 200 ms on a
+			// loaded runner) are never cut by it. The hung call costs one
+			// timeout of wall time, as before.
+			final CountDownLatch release = new CountDownLatch(1);
+			h.client.setReadTimeoutMs(2000);
+			h.client.setShortReadTimeoutMs(2000);
 			final int[] relayed = {0};
 			h.override = r -> {
 				boolean hostTen = r.body.contains(">host-10<")
@@ -743,13 +767,17 @@ public final class Build96BudgetTest {
 						|| r.action.endsWith("/RetrieveManagedMethodExecuter");
 				if (hostTen && hostRelayed) {
 					relayed[0]++;
-					return late(1000, FakeVCenter.ok("QueryOptions", ""));
+					return held(release, FakeVCenter.ok("QueryOptions", ""));
 				}
 				return null;
 			};
 			int reqBefore = h.vc.requests.size();
 			int before = h.suite.pushes.size();
-			h.cycle();
+			try {
+				h.cycle();
+			} finally {
+				release.countDown();   // free the held server thread
+			}
 			T.eq(1, relayed[0], "one host-relayed call to the hung host");
 			boolean lockdownRead = false;
 			synchronized (h.vc.requests) {
@@ -819,8 +847,22 @@ public final class Build96BudgetTest {
 	static void adapterBreakerEndsCycle() throws Exception {
 		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
 				"host-11", "esx02", "host-12", "esx03")) {
+			int reqBefore = h.vc.requests.size();
 			h.cycle();   // logs in, normal cycle
-			h.client.setReadTimeoutMs(150);
+			int normalCalls = h.vc.requests.size() - reqBefore;
+			// Review N5 (the #63 pattern): the per-object reads wait on a
+			// latch released only after the cycle, so they can never answer
+			// in time, and the timeout is wide enough that the calls vCenter
+			// does answer (listing, CurrentTime, CreateContainerView) are
+			// never cut by it on a loaded runner. The esxcli executer and
+			// ExecuteSoap calls go through EsxcliSoapClient, whose read
+			// timeout is not the client's; they are answered at once (empty),
+			// as the 1 s sleep answered them before.
+			final int timeoutMs = 2000;
+			final CountDownLatch release = new CountDownLatch(1);
+			final java.util.concurrent.atomic.AtomicInteger heldCalls =
+					new java.util.concurrent.atomic.AtomicInteger();
+			h.client.setReadTimeoutMs(timeoutMs);
 			// vCenter stops answering per-object reads (the listing still
 			// answers, so the loop starts).
 			h.override = r -> {
@@ -830,10 +872,19 @@ public final class Build96BudgetTest {
 						|| r.action.endsWith("/CreateContainerView")) {
 					return null;
 				}
-				return late(1000, FakeVCenter.ok("RetrieveProperties", ""));
+				if (r.action.endsWith("/RetrieveManagedMethodExecuter")
+						|| r.action.endsWith("/ExecuteSoap")) {
+					return FakeVCenter.ok("RetrieveProperties", "");
+				}
+				heldCalls.incrementAndGet();
+				return held(release, FakeVCenter.ok("RetrieveProperties", ""));
 			};
 			long t0 = System.nanoTime();
-			h.cycle();
+			try {
+				h.cycle();
+			} finally {
+				release.countDown();   // free the held server threads
+			}
 			long ms = (System.nanoTime() - t0) / 1_000_000L;
 			Map<String, Double> r = h.lastRollup();
 			T.eq(1.0, r.get(ComplianceRollup.INCOMPLETE_KEY),
@@ -841,7 +892,16 @@ public final class Build96BudgetTest {
 			T.check(!r.containsKey(P + "Host|scored"), "Host held back");
 			T.check(h.logged("vCenter calls in a row timed out"),
 					"the breaker is named");
-			T.check(ms < 10_000, "ended in seconds (" + ms + " ms)");
+			int held = heldCalls.get();
+			T.check(held >= CycleBudget.BREAKER_TIMEOUTS,
+					"at least the breaker's run of timeouts (" + held + ")");
+			T.check(held < normalCalls, "the walk ends before every read: "
+					+ held + " timed out, a full cycle makes " + normalCalls
+					+ " calls");
+			// Each unanswered call costs one timeout, no more.
+			long bound = (held + 2L) * timeoutMs;
+			T.check(ms < bound, "ended after the breaker (" + ms + " ms, bound "
+					+ bound + " ms)");
 		}
 	}
 }

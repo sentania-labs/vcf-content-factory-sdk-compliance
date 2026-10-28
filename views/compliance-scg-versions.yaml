@@ -8,21 +8,24 @@ description: >
   benchmark (never a guess, never "no benchmark"). Feeds Environment
   Overview W4 (Objects by SCG Version). Build 95 (issue #32): newest
   guide first, so the versions in use on a current estate (9.1, 9.0) are
-  the first columns, and every bucket is listed.
+  the first columns, and every bucket is listed. Build 102 (issue #59):
+  the per-SCG columns count scored objects only (scored_objects), so the
+  table agrees with Rollup|All|scored; objects with no applicable control
+  are not counted. The totals row sums the five SCG columns.
 subject:
   adapter_kind: VMWARE
   resource_kind: VMwareAdapter Instance
 columns:
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.1|objects
-    display_name: "SCG 9.1"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.0|objects
-    display_name: "SCG 9.0"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_8.0|objects
-    display_name: "SCG 8.0"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_7.0|objects
-    display_name: "SCG 7.0"
-  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_6.7|objects
-    display_name: "SCG 6.7"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.1|scored_objects
+    display_name: "SCG 9.1 Scored Objects"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_9.0|scored_objects
+    display_name: "SCG 9.0 Scored Objects"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_8.0|scored_objects
+    display_name: "SCG 8.0 Scored Objects"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_7.0|scored_objects
+    display_name: "SCG 7.0 Scored Objects"
+  - attribute: VCF-CF Compliance|Rollup|Benchmark|SCG_6.7|scored_objects
+    display_name: "SCG 6.7 Scored Objects"
   - attribute: VCF-CF Compliance|Rollup|Benchmark|none|objects
     display_name: "No Benchmark"
   - attribute: VCF-CF Compliance|Rollup|Benchmark|unknown|objects
@@ -31,6 +34,7 @@ columns:
 summary:
   display_name: "Environment Totals"
   aggregation: SUM
+  columns: [0, 1, 2, 3, 4]
 
 released: false
 version: "1.0.0"

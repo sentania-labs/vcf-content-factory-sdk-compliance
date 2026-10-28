@@ -32,6 +32,8 @@ public final class Build96StitcherTest {
 		elevenPages();
 		emptyListRule();
 		adapterHoldsBackUnconfirmedEmpty();
+		noVcidHoldsBack();
+		adapterHoldsBackNoVcid();
 		System.out.println("Build96StitcherTest: all assertions passed");
 	}
 
@@ -143,7 +145,7 @@ public final class Build96StitcherTest {
 		T.eq(11, s.gets.size(), "11 page reads");
 		T.eq(105000, st.countOfKind(KIND), "every row indexed");
 		T.check(s.gets.get(10).endsWith("&page=10"), "last page is page 10");
-		T.eq("r-c104999", st.matchCluster("cl104999", null).resourceId,
+		T.eq("r-c104999", st.matchCluster("cl104999", "domain-c104999").resourceId,
 				"a row on the last page matches");
 	}
 
@@ -232,6 +234,125 @@ public final class Build96StitcherTest {
 					"cycle 3: empty again, accepted");
 			T.eq(2.0, r3.get(P + "Host|unmatched"),
 					"cycle 3: both hosts now unmatched");
+		}
+	}
+
+	/** A stitcher that records WARN and INFO lines. */
+	static ComplianceStitcher logging(FakeSuiteApi s, List<String> lines) {
+		VSphereClient.Log log = new VSphereClient.Log() {
+			@Override public void info(String m) { lines.add(m); }
+			@Override public void debug(String m) {}
+			@Override public void warn(String m) { lines.add("WARN " + m); }
+			@Override public boolean isDebugEnabled() { return false; }
+		};
+		ComplianceStitcher st = new ComplianceStitcher(s, log);
+		st.setOwningVcUuid("uuid-1");
+		return st;
+	}
+
+	static String line(List<String> lines, String needle) {
+		for (String m : lines) if (m.contains(needle)) return m;
+		return null;
+	}
+
+	/**
+	 * Build 102 (review W1), for the three kinds with no recorded
+	 * VMEntityVCID evidence (DVS, port group, cluster) and the stitcher's
+	 * shared loader: rows that cannot be scoped hold the kind back unless
+	 * the owning vCenter has rows of its own.
+	 */
+	static void noVcidHoldsBack() {
+		String[][] kinds = {
+			{"VmwareDistributedVirtualSwitch", "dvs-1"},
+			{"DistributedVirtualPortgroup", "dvportgroup-1"},
+			{"ClusterComputeResource", "domain-c1"},
+		};
+		for (String[] k : kinds) {
+			String kind = k[0];
+			String moid = k[1];
+			java.util.function.Consumer<ComplianceStitcher> load = st -> {
+				switch (kind) {
+					case "VmwareDistributedVirtualSwitch":
+						st.loadDvsResources(); break;
+					case "DistributedVirtualPortgroup":
+						st.loadDvpgResources(); break;
+					default: st.loadClusterResources();
+				}
+			};
+
+			// Every row lacks VMEntityVCID: held back, WARN names the cause.
+			FakeSuiteApi s = new FakeSuiteApi();
+			s.answer = p -> FakeSuiteApi.page(2,
+					FakeSuiteApi.row("r-1", "a", moid, ""),
+					FakeSuiteApi.row("r-2", "b", moid + "0", ""));
+			List<String> lines = new ArrayList<>();
+			ComplianceStitcher st = logging(s, lines);
+			load.accept(st);
+			T.check(st.loadFailed(kind), kind + ": no VCID on any row, held");
+			T.eq(0, st.countOfKind(kind), kind + ": nothing indexed");
+			String w = line(lines, "not matched");
+			T.check(w != null && w.startsWith("WARN")
+					&& w.contains("2 of 2 row(s) carry no VMEntityVCID"),
+					kind + ": WARN names the cause: " + w);
+
+			// Rows with no VCID beside other vCenters' rows only: held.
+			s.answer = p -> FakeSuiteApi.page(2,
+					FakeSuiteApi.row("r-1", "a", moid, ""),
+					FakeSuiteApi.row("r-9", "z", moid, "uuid-2"));
+			st = logging(s, new ArrayList<>());
+			load.accept(st);
+			T.check(st.loadFailed(kind),
+					kind + ": no VCID plus foreign rows only, held");
+
+			// The owning vCenter has rows: a stray no-VCID row is counted,
+			// the kind is complete, the owner's row matches.
+			s.answer = p -> FakeSuiteApi.page(3,
+					FakeSuiteApi.row("r-1", "a", moid, "uuid-1"),
+					FakeSuiteApi.row("r-2", "b", moid + "0", ""),
+					FakeSuiteApi.row("r-9", "z", moid, "uuid-2"));
+			lines = new ArrayList<>();
+			st = logging(s, lines);
+			load.accept(st);
+			T.check(!st.loadFailed(kind), kind + ": owner rows present");
+			T.eq(1, st.countOfKind(kind), kind + ": owner row indexed");
+			String loaded = line(lines, "loaded 1 " + kind);
+			T.check(loaded != null
+					&& loaded.contains("2 of 3 row(s) carry VMEntityVCID"),
+					kind + ": load line records VCID presence: " + loaded);
+
+			// Only other vCenters' rows, all with VCID: a genuine 0, not held.
+			s.answer = p -> FakeSuiteApi.page(1,
+					FakeSuiteApi.row("r-9", "z", moid, "uuid-2"));
+			st = logging(s, new ArrayList<>());
+			load.accept(st);
+			T.check(!st.loadFailed(kind), kind + ": foreign only, complete");
+			T.eq(0, st.countOfKind(kind), kind + ": foreign only, 0 indexed");
+		}
+	}
+
+	/**
+	 * Through the adapter: HostSystem rows with no VMEntityVCID after a
+	 * complete cycle hold the Host kind back (Rollup|incomplete = 1, Host
+	 * keys not pushed) instead of pushing Host|scored 0 and 2 unmatched.
+	 */
+	static void adapterHoldsBackNoVcid() throws Exception {
+		try (AdapterHarness h = new AdapterHarness("host-10", "esx01",
+				"host-11", "esx02")) {
+			h.cycle();
+			T.eq(2.0, h.lastRollup().get(P + "Host|scored"), "cycle 1 hosts");
+
+			h.suite.bodies.put("resourceKind=HostSystem&",
+					FakeSuiteApi.page(2,
+							FakeSuiteApi.row("r-esx01", "esx01", "host-10", ""),
+							FakeSuiteApi.row("r-esx02", "esx02", "host-11", "")));
+			h.cycle();
+			Map<String, Double> r2 = h.lastRollup();
+			T.eq(1.0, r2.get(ComplianceRollup.INCOMPLETE_KEY),
+					"no VCID: incomplete = 1");
+			T.check(!r2.containsKey(P + "Host|scored")
+					&& !r2.containsKey(P + "Host|unmatched")
+					&& !r2.containsKey(P + "All|scored"),
+					"no VCID: Host and All keys held back, not zeroed");
 		}
 	}
 }

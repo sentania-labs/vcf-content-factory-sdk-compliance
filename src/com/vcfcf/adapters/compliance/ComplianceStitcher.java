@@ -29,13 +29,20 @@ import java.util.Map;
  * through {@code SuiteApiStitcher#pushProperties}/{@code
  * SuiteApiStitcher#pushStats}.
  *
- * <p>The identity rules are preserved from v1 (the MOID trap): all vim25-backed
- * VMWARE kinds resolve by {@code VMEntityName} (name) +
- * {@code VMEntityObjectID} (moid); the non-vim25 {@code VMwareAdapter Instance}
- * resolves by {@code VMEntityVCID} (vCenter Instance UUID), or an exact
- * {@code VCURL} (vCenter FQDN) only when the UUID is unreadable. moid is tried
- * first (most authoritative), then exact name, then dot-prefix fuzzy match
- * (FQDN/shortname tolerance).
+ * <p><b>Identity (build 102, issue #20).</b> Every vim25-backed VMWARE kind
+ * resolves on {@code VMEntityObjectID} (MOID) plus {@code VMEntityVCID}
+ * (vCenter Instance UUID) only, the identity the Broadcom vSphere-based
+ * packs stitch on. There is no name match: the exact-name and dot-prefix
+ * fallbacks (inherited from v1, "FQDN/shortname tolerance", walked a
+ * {@code HashMap} so a shared prefix resolved at random) are gone. A row
+ * with no {@code identifier} (UUID), no MOID or no {@code VMEntityVCID} is
+ * not indexed, and a MOID carried by two rows of the owning vCenter is
+ * ambiguous and indexed by neither; those rows are counted and named once
+ * per load at INFO. An object with no match is not pushed (the adapter
+ * counts it in Rollup|&lt;K&gt;|unmatched). The non-vim25
+ * {@code VMwareAdapter Instance} resolves by {@code VMEntityVCID}, or an
+ * exact {@code VCURL} (vCenter FQDN) only when the UUID is unreadable
+ * (build 58, unchanged).
  *
  * <p><b>Cross-vCenter MOID scoping (the MOID trap — fix, build 51).</b> A bare
  * MOID like {@code host-12} / {@code vm-42} is <b>NOT unique across
@@ -48,11 +55,13 @@ import java.util.Map;
  * {@code VSphereClient.getVCenterInstanceUuid()}, called once per cycle before
  * the {@code load*} calls), and every loaded vim25-backed foreign resource is
  * filtered to that UUID by its {@code VMEntityVCID}. A resource belonging to a
- * different vCenter is skipped; a row whose {@code VMEntityVCID} is unknown, or
- * when the owning UUID itself is unknown, degrades to the unscoped behaviour
- * (logged) rather than dropping the resource. Single-vCenter deployments are
- * unaffected either way. (sdk-adapter-reviewer, vcommunity build 1 —
- * MOID-trap WARNING; same defect confirmed corpus-wide.)
+ * different vCenter is skipped. (sdk-adapter-reviewer, vcommunity build 1 —
+ * MOID-trap WARNING; same defect confirmed corpus-wide.) Build 102 (issue
+ * #20): a row with no {@code VMEntityVCID} is no longer kept unscoped, and
+ * when the owning UUID itself is unknown the kind is not loaded at all and
+ * is held back like a failed list read ({@link #loadFailed}: the adapter
+ * sets Rollup|incomplete = 1 and the kind's rollup keeps its values),
+ * rather than matched on a bare MOID.
  *
  * <p>The Suite API {@code /api/resources} response shape consumed here:
  * <pre>
@@ -96,7 +105,9 @@ public final class ComplianceStitcher
 	private final SuiteApi stitcher;
 	private final VSphereClient.Log logger;
 
-	// Per-VMWARE-resource-kind name/moid lookup tables.
+	// Per-VMWARE-resource-kind lookup tables. Build 102 (issue #20): the
+	// vim25-backed kinds index by MOID only (scoped to the owning vCenter);
+	// byName holds the VMwareAdapter Instance display names only.
 	private final Map<String, Map<String, HostEntry>> resourcesByName =
 			new HashMap<>();
 	private final Map<String, Map<String, HostEntry>> resourcesByMoid =
@@ -107,11 +118,11 @@ public final class ComplianceStitcher
 	private final Map<String, HostEntry> vcByHost = new HashMap<>();
 	private final Map<String, HostEntry> vcByVcUuid = new HashMap<>();
 
-	// The vCenter Instance UUID this adapter instance monitors. When set, the
+	// The vCenter Instance UUID this adapter instance monitors. The
 	// vim25-backed loaders keep only foreign resources whose VMEntityVCID
 	// matches it, so a bare MOID can never resolve to a same-MOID resource in
-	// another vCenter (the MOID trap). Null disables scoping (degrades to the
-	// unscoped matcher — single-vCenter safe).
+	// another vCenter (the MOID trap). Build 102 (issue #20): null means no
+	// vim25-backed kind can be matched; each is held back (loadFailed).
 	private volatile String owningVcUuid;
 
 	// Build 88: resource kinds whose /api/resources read did not end in a
@@ -159,8 +170,9 @@ public final class ComplianceStitcher
 	/**
 	 * Pin the owning vCenter Instance UUID (from
 	 * {@code VSphereClient.getVCenterInstanceUuid()}). Call once per cycle
-	 * BEFORE the {@code load*} calls. A null/blank value disables scoping
-	 * (degrades to the unscoped matcher — single-vCenter safe).
+	 * BEFORE the {@code load*} calls. Build 102 (issue #20): a null/blank
+	 * value holds every vim25-backed kind back this cycle (no bare-MOID
+	 * matching).
 	 */
 	public void setOwningVcUuid(String vcUuid) {
 		this.owningVcUuid = (vcUuid != null && !vcUuid.isEmpty()) ? vcUuid : null;
@@ -218,9 +230,13 @@ public final class ComplianceStitcher
 		logger.info("ComplianceStitcher: " + resourceKind
 				+ " — processing " + resources.size() + " resource(s)");
 
+		int noUuid = 0;
 		for (SimpleJson r : resources) {
 			String uuid = findUuid(r);
-			if (uuid == null) continue;
+			if (uuid == null) {
+				noUuid++;
+				continue;
+			}
 			SimpleJson key = r.get("resourceKey");
 			String displayName = key.get("name").asString(null);
 			String vcurl = getIdValue(key, "VCURL");
@@ -247,19 +263,40 @@ public final class ComplianceStitcher
 		logger.info("ComplianceStitcher: loaded "
 				+ byName.size() + " " + resourceKind + " by displayName, "
 				+ vcByHost.size() + " by VCURL, "
-				+ vcByVcUuid.size() + " by VMEntityVCID");
+				+ vcByVcUuid.size() + " by VMEntityVCID"
+				+ (noUuid > 0 ? "; " + noUuid + " row(s) with no identifier "
+						+ "(UUID) skipped" : ""));
 	}
 
 	/**
-	 * Shared loader for any vim25-backed VMWARE resource kind. All such
-	 * kinds share the {@code VMEntityName} + {@code VMEntityObjectID}
-	 * identity tuple.
+	 * Shared loader for any vim25-backed VMWARE resource kind. Build 102
+	 * (issue #20): indexes {@code VMEntityObjectID} (MOID) for the rows of
+	 * the owning vCenter ({@code VMEntityVCID}) that carry a platform UUID;
+	 * every other row is counted by reason and the count with the first
+	 * such row is logged once at INFO. A MOID on two of the owning
+	 * vCenter's rows is ambiguous: neither is indexed. With the owning
+	 * vCenter UUID unknown nothing is read and the kind is held back.
+	 * Build 102 (review W1): so is a list with rows but no row of the owning
+	 * vCenter and at least one row with no {@code VMEntityVCID}, since its
+	 * objects may be among the rows that cannot be scoped. The load line
+	 * records, for every kind, how many rows carry {@code VMEntityVCID}.
 	 */
 	private void loadResourcesForKind(String resourceKind) {
-		Map<String, HostEntry> byName = new HashMap<>();
 		Map<String, HostEntry> byMoid = new HashMap<>();
-		resourcesByName.put(resourceKind, byName);
 		resourcesByMoid.put(resourceKind, byMoid);
+
+		String owner = owningVcUuid;
+		if (owner == null) {
+			// Held back like a failed list read: Rollup|incomplete = 1 and
+			// the kind's keys keep their values, rather than a bare MOID
+			// matched across vCenters or every object reported unmatched.
+			failedLoads.add(resourceKind);
+			logger.warn("ComplianceStitcher: " + resourceKind + " not "
+					+ "loaded: the owning vCenter instance UUID is unknown, "
+					+ "and objects are matched on MOID plus vCenter UUID only; "
+					+ "this kind is held back this cycle");
+			return;
+		}
 
 		List<SimpleJson> resources = fetchResources(resourceKind);
 		if (resources.isEmpty()) {
@@ -273,6 +310,12 @@ public final class ComplianceStitcher
 				+ " — processing " + resources.size() + " resource(s)");
 
 		int skippedForeignVc = 0;
+		int ownerRows = 0;
+		int noUuid = 0;
+		int noMoid = 0;
+		int noVcid = 0;
+		String firstSkipped = null;
+		java.util.Set<String> ambiguous = new java.util.TreeSet<>();
 		for (SimpleJson r : resources) {
 			String uuid = findUuid(r);
 			SimpleJson key = r.get("resourceKey");
@@ -280,40 +323,79 @@ public final class ComplianceStitcher
 			String moid = getIdValue(key, "VMEntityObjectID");
 			String vcUuid = getIdValue(key, "VMEntityVCID");
 
-			// vCenter scoping (the MOID-trap fix): when this instance's owning
-			// vCenter UUID is known AND the resource carries a VMEntityVCID that
-			// does NOT match it, the resource belongs to a DIFFERENT vCenter —
-			// skip it so a bare MOID cannot resolve across vCenters. A resource
-			// with no VMEntityVCID is kept (degrade to unscoped — never drop a
-			// resource we cannot disambiguate).
-			if (owningVcUuid != null && vcUuid != null && !vcUuid.isEmpty()
-					&& !owningVcUuid.equals(vcUuid)) {
+			String reason = null;
+			if (vcUuid == null || vcUuid.isEmpty()) {
+				noVcid++;
+				reason = "no VMEntityVCID";
+			} else if (!owner.equals(vcUuid)) {
+				// Another vCenter's object (the MOID trap): expected in a
+				// multi-vCenter VCF Ops, counted in the load line only.
 				skippedForeignVc++;
 				continue;
+			} else {
+				ownerRows++;
+				if (uuid == null) {
+					noUuid++;
+					reason = "no identifier (UUID)";
+				} else if (moid == null || moid.isEmpty()) {
+					noMoid++;
+					reason = "no VMEntityObjectID";
+				}
 			}
-
-			// resourceId prefers the platform UUID; fall back to name only
-			// so a malformed row never produces a null push target.
-			String resourceId = uuid != null ? uuid : name;
-			if (resourceId == null) continue;
-
-			HostEntry entry = new HostEntry(resourceId, name, moid);
-
-			if (name != null && !name.isEmpty()) {
-				byName.put(name, entry);
+			if (reason != null) {
+				if (firstSkipped == null) {
+					firstSkipped = "name=" + name + " moid=" + moid
+							+ " VMEntityVCID=" + vcUuid + " identifier=" + uuid
+							+ " (" + reason + ")";
+				}
+				continue;
 			}
-			if (moid != null && !moid.isEmpty()) {
-				byMoid.put(moid, entry);
+			if (ambiguous.contains(moid)) continue;
+			if (byMoid.containsKey(moid)) {
+				byMoid.remove(moid);
+				ambiguous.add(moid);
+				continue;
 			}
+			byMoid.put(moid, new HostEntry(uuid, name, moid));
+		}
+
+		int withVcid = resources.size() - noVcid;
+		if (noVcid > 0 && ownerRows == 0) {
+			// Review W1: rows exist, none is the owning vCenter's, and some
+			// cannot be scoped at all. This vCenter's objects may be among
+			// them, so reporting every object unmatched would zero the
+			// kind's counts. Held back like a failed list read: the kind's
+			// keys keep their values and Rollup|incomplete = 1.
+			failedLoads.add(resourceKind);
+			logger.warn("ComplianceStitcher: " + resourceKind + " not "
+					+ "matched: " + noVcid + " of " + resources.size()
+					+ " row(s) carry no VMEntityVCID and none belongs to "
+					+ "vCenter " + owner + " (" + skippedForeignVc
+					+ " from other vCenters)"
+					+ (firstSkipped != null ? "; first: " + firstSkipped : "")
+					+ "; this kind is held back this cycle");
+			return;
+		}
+
+		int notIndexed = noVcid + noUuid + noMoid;
+		if (notIndexed > 0 || !ambiguous.isEmpty()) {
+			logger.info("ComplianceStitcher: " + resourceKind + ": "
+					+ notIndexed + " row(s) not indexed (" + noVcid
+					+ " no VMEntityVCID, " + noUuid + " no identifier, "
+					+ noMoid + " no VMEntityObjectID)"
+					+ (firstSkipped != null ? "; first: " + firstSkipped : "")
+					+ (ambiguous.isEmpty() ? "" : "; " + ambiguous.size()
+							+ " MOID(s) on more than one row, matched to "
+							+ "neither; first: " + ambiguous.iterator().next())
+					+ ". Objects they would match are counted unmatched, "
+					+ "not pushed.");
 		}
 
 		logger.info("ComplianceStitcher: loaded "
-				+ byName.size() + " " + resourceKind + " by name, "
-				+ byMoid.size() + " by MOID"
-				+ (owningVcUuid != null
-						? " (scoped to vCenter " + owningVcUuid + "; skipped "
-						  + skippedForeignVc + " from other vCenters)"
-						: " (unscoped — owning vCenter UUID unknown)"));
+				+ byMoid.size() + " " + resourceKind + " by MOID"
+				+ " (scoped to vCenter " + owner + "; skipped "
+				+ skippedForeignVc + " from other vCenters; " + withVcid
+				+ " of " + resources.size() + " row(s) carry VMEntityVCID)");
 	}
 
 	/**
@@ -485,30 +567,18 @@ public final class ComplianceStitcher
 	}
 
 	/**
-	 * Generic resource matcher: moid first (most authoritative), then exact
-	 * name, then dot-prefix fuzzy match (FQDN vs shortname tolerance).
+	 * Generic resource matcher. Build 102 (issue #20): MOID only, within the
+	 * owning vCenter (the index holds no other vCenter's rows). No name or
+	 * prefix fallback: no match is null (not pushed, counted unmatched by
+	 * the adapter). {@code name} is for the DEBUG line only.
 	 */
 	private HostEntry matchResource(String resourceKind, String name,
 			String moid) {
 		Map<String, HostEntry> byMoid = resourcesByMoid.get(resourceKind);
-		Map<String, HostEntry> byName = resourcesByName.get(resourceKind);
 
 		if (moid != null && byMoid != null) {
 			HostEntry m = byMoid.get(moid);
 			if (m != null) return m;
-		}
-
-		if (name != null && byName != null) {
-			HostEntry n = byName.get(name);
-			if (n != null) return n;
-
-			for (Map.Entry<String, HostEntry> e : byName.entrySet()) {
-				String registered = e.getKey();
-				if (registered.startsWith(name + ".")
-						|| name.startsWith(registered + ".")) {
-					return e.getValue();
-				}
-			}
 		}
 
 		// Build 88: DEBUG. The adapter names a kind's unmatched objects in
@@ -670,8 +740,11 @@ public final class ComplianceStitcher
 	}
 
 	public int countOfKind(String resourceKind) {
-		Map<String, HostEntry> byName = resourcesByName.get(resourceKind);
-		return byName == null ? 0 : byName.size();
+		// Build 102: the vim25-backed kinds are indexed by MOID only.
+		Map<String, HostEntry> index = "VMwareAdapter Instance".equals(
+				resourceKind) ? resourcesByName.get(resourceKind)
+				: resourcesByMoid.get(resourceKind);
+		return index == null ? 0 : index.size();
 	}
 
 	@Override
@@ -704,17 +777,13 @@ public final class ComplianceStitcher
 	 * Extract the platform resource UUID from a {@code /api/resources} entry.
 	 * The public Suite API exposes it as the top-level {@code identifier}
 	 * field (mirrors v1's {@code ResourceDto.getIdentifier()}). Returns null
-	 * when absent / blank.
+	 * when absent / blank. Build 102: the callers count such rows and log
+	 * them once per load (it was a WARN per row per cycle).
 	 */
-	private String findUuid(SimpleJson resource) {
+	private static String findUuid(SimpleJson resource) {
 		if (resource == null) return null;
 		String s = resource.get("identifier").asString(null);
-		if (s == null || s.isEmpty()) {
-			logger.warn("ComplianceStitcher: resource entry has no "
-					+ "'identifier' (UUID) field");
-			return null;
-		}
-		return s;
+		return s == null || s.isEmpty() ? null : s;
 	}
 
 	/**

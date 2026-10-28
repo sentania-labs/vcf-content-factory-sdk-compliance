@@ -240,6 +240,15 @@ VCF-CF Compliance|Rollup|incomplete           0/1, every cycle: 1 when rollup ke
                                                only key pushed then)
 VCF-CF Compliance|Rollup|Benchmark|<B>|objects B in SCG_6.7, SCG_7.0, SCG_8.0,
                                                SCG_9.0, SCG_9.1, none, unknown
+VCF-CF Compliance|Rollup|Benchmark|<B>|scored_objects  build 102 (#59): of
+                                               those objects, the ones scored
+                                               (same rule as Rollup|<K>|scored);
+                                               same buckets, sums to
+                                               Rollup|All|scored; 0 for none
+                                               and unknown. objects also counts
+                                               an object with nothing read or
+                                               nothing applicable (a non-vSAN
+                                               cluster); scored_objects does not
 ```
 
 Overrides file status, per vCenter (build 90), pushed every cycle:
@@ -522,7 +531,14 @@ and recommendation names carry no prefix.
   says how to tell which and what to fix. Alert id
   `vcfcf_compliance_overrides_vcenter`; raises and cancels after 1 cycle.
 
-All compliance alerts are type Compliance (subType 21).
+All compliance alert definitions are type Compliance (subType 21). A
+Host Compliance Score Degraded alert raised before build 57, when that
+definition was subType 20 (Capacity), was seen to stay subType 20 while
+active, so the dashboards' Compliance-type alert lists do not show it
+until it cancels: on the devel lab the three missing alerts appeared only
+under alert type filter `15_20`, and the widget's criticality filter was
+ruled out ([#64, comment of 2026-10-28](https://github.com/sentania-labs/vcf-content-factory-sdk-compliance/issues/64#issuecomment-6461812901); see
+[installing.md](installing.md#upgrading)).
 
 Wait and cancel cycles (build 86): the per-control alerts and the score
 alert, and their symptoms, raise after 1 cycle and cancel after 3

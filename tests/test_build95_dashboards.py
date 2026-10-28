@@ -74,12 +74,23 @@ class Build95DashboardTest(unittest.TestCase):
             self.assertIn('display_name: "%s Not in VCF Ops"' % kind, text)
 
     def test_scg_versions_newest_first(self):
-        cols = columns(read("views/compliance-scg-versions.yaml"))
-        want = ["SCG_9.1", "SCG_9.0", "SCG_8.0", "SCG_7.0", "SCG_6.7",
-                "none", "unknown"]
+        # Build 102 (issue #59): the five SCG columns count scored objects
+        # (scored_objects); No Benchmark and Unknown keep objects. The
+        # totals row sums the five SCG columns only, so it equals
+        # Rollup|All|scored.
+        text = read("views/compliance-scg-versions.yaml")
+        cols = columns(text)
+        scg = ["SCG_9.1", "SCG_9.0", "SCG_8.0", "SCG_7.0", "SCG_6.7"]
         self.assertEqual(
-            cols, ["VCF-CF Compliance|Rollup|Benchmark|%s|objects" % b
-                   for b in want])
+            cols,
+            ["VCF-CF Compliance|Rollup|Benchmark|%s|scored_objects" % b
+             for b in scg]
+            + ["VCF-CF Compliance|Rollup|Benchmark|%s|objects" % b
+               for b in ["none", "unknown"]])
+        summed = [int(x) for x in re.search(
+            r"^  columns:\s*\[([^\]]*)\]", text, re.M).group(1).split(",")]
+        self.assertEqual(summed, [0, 1, 2, 3, 4],
+                         "totals sum the five SCG columns only")
         for name in ["compliance-environment-overview.yaml",
                      "compliance-world-summary.yaml"]:
             with self.subTest(dashboard=name):

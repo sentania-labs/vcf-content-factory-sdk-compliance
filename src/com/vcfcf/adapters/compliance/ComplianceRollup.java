@@ -33,6 +33,11 @@ import java.util.Map;
  *                                                controls_evaluated == 0
  * VCF-CF Compliance|Rollup|VM|skipped_pods        vSphere Pod VMs (guest id crx*), out of scope
  * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|objects  objects the benchmark B was applied to
+ * VCF-CF Compliance|Rollup|Benchmark|&lt;B&gt;|scored_objects  build 102 (issue #59): of those,
+ *                                                the objects scored (the same rule as
+ *                                                Rollup|&lt;K&gt;|scored), so the per-benchmark
+ *                                                counts sum to Rollup|All|scored; 0 for none
+ *                                                and unknown, whose objects are never scored
  * </pre>
  * {@code <B>} is SCG_6.7, SCG_7.0, SCG_8.0, SCG_9.0, SCG_9.1, none and
  * unknown (always pushed, 0 when unused). {@code unknown} counts objects whose governing version could
@@ -130,6 +135,8 @@ public final class ComplianceRollup {
 	private final Map<BenchmarkSelector.Kind, Tally> byKind =
 			new EnumMap<>(BenchmarkSelector.Kind.class);
 	private final Map<String, Integer> byBucket = new LinkedHashMap<>();
+	// Build 102 (issue #59): scored objects per benchmark bucket.
+	private final Map<String, Integer> scoredByBucket = new LinkedHashMap<>();
 	// Build 88: the first UNMATCHED_LOG_CAP unmatched objects per kind.
 	private final Map<BenchmarkSelector.Kind, java.util.List<String>>
 			unmatchedNames = new EnumMap<>(BenchmarkSelector.Kind.class);
@@ -165,6 +172,7 @@ public final class ComplianceRollup {
 		}
 		for (String b : FIXED_BUCKETS) {
 			byBucket.put(b, 0);
+			scoredByBucket.put(b, 0);
 		}
 	}
 
@@ -269,6 +277,7 @@ public final class ComplianceRollup {
 			t.nonCompliant++;
 		}
 		t.scored++;
+		bumpScored(kind, bucket);
 		t.scoreSum += score;
 		// Build 95: control counts. totalCount is passed + failed
 		// (ComplianceResult), unreadable is in neither.
@@ -285,12 +294,23 @@ public final class ComplianceRollup {
 				.merge(b, 1, Integer::sum);
 	}
 
+	/** Build 102 (issue #59): one scored object in {@code bucket}. */
+	private void bumpScored(BenchmarkSelector.Kind kind, String bucket) {
+		String b = bucket == null ? BenchmarkSelector.BUCKET_NONE : bucket;
+		scoredByBucket.merge(b, 1, Integer::sum);
+		scoredBucketsByKind.computeIfAbsent(kind, k -> new LinkedHashMap<>())
+				.merge(b, 1, Integer::sum);
+	}
+
 	// ----- Build 96 (issue #16, peer review item 3) -----------------------
 
 	// Each kind's share of byBucket, so one kind's contribution can be
 	// carried across cycles (Part). byBucket stays the sum.
 	private final Map<BenchmarkSelector.Kind, Map<String, Integer>>
 			bucketsByKind = new EnumMap<>(BenchmarkSelector.Kind.class);
+	// Build 102 (issue #59): each kind's share of scoredByBucket.
+	private final Map<BenchmarkSelector.Kind, Map<String, Integer>>
+			scoredBucketsByKind = new EnumMap<>(BenchmarkSelector.Kind.class);
 
 	/**
 	 * Build 96: one kind's contribution to a rollup (its counts, its
@@ -303,13 +323,16 @@ public final class ComplianceRollup {
 	public static final class Part {
 		private final Tally tally;
 		private final Map<String, Integer> buckets;
+		private final Map<String, Integer> scoredBuckets;   // build 102
 		private final java.util.List<String> unmatchedNames;
 		private final int skippedPods;
 
 		private Part(Tally tally, Map<String, Integer> buckets,
+				Map<String, Integer> scoredBuckets,
 				java.util.List<String> unmatchedNames, int skippedPods) {
 			this.tally = tally;
 			this.buckets = buckets;
+			this.scoredBuckets = scoredBuckets;
 			this.unmatchedNames = unmatchedNames;
 			this.skippedPods = skippedPods;
 		}
@@ -323,11 +346,15 @@ public final class ComplianceRollup {
 			for (Map.Entry<String, Integer> e : more.buckets.entrySet()) {
 				b.merge(e.getKey(), e.getValue(), Integer::sum);
 			}
+			Map<String, Integer> sb = new LinkedHashMap<>(scoredBuckets);
+			for (Map.Entry<String, Integer> e : more.scoredBuckets.entrySet()) {
+				sb.merge(e.getKey(), e.getValue(), Integer::sum);
+			}
 			java.util.List<String> n = new java.util.ArrayList<>(unmatchedNames);
 			for (String x : more.unmatchedNames) {
 				if (n.size() < UNMATCHED_LOG_CAP) n.add(x);
 			}
-			return new Part(t, b, n, skippedPods + more.skippedPods);
+			return new Part(t, b, sb, n, skippedPods + more.skippedPods);
 		}
 	}
 
@@ -350,9 +377,11 @@ public final class ComplianceRollup {
 	/** Build 96: {@code kind}'s contribution so far (a copy). */
 	public Part part(BenchmarkSelector.Kind kind) {
 		Map<String, Integer> b = bucketsByKind.get(kind);
+		Map<String, Integer> sb = scoredBucketsByKind.get(kind);
 		java.util.List<String> n = unmatchedNames.get(kind);
 		return new Part(copy(byKind.get(kind)),
 				b == null ? new LinkedHashMap<>() : new LinkedHashMap<>(b),
+				sb == null ? new LinkedHashMap<>() : new LinkedHashMap<>(sb),
 				n == null ? new java.util.ArrayList<>()
 						: new java.util.ArrayList<>(n),
 				kind == BenchmarkSelector.Kind.VM ? skippedPods : 0);
@@ -369,6 +398,12 @@ public final class ComplianceRollup {
 		for (Map.Entry<String, Integer> e : p.buckets.entrySet()) {
 			byBucket.merge(e.getKey(), e.getValue(), Integer::sum);
 			bucketsByKind.computeIfAbsent(kind, k -> new LinkedHashMap<>())
+					.merge(e.getKey(), e.getValue(), Integer::sum);
+		}
+		for (Map.Entry<String, Integer> e : p.scoredBuckets.entrySet()) {
+			scoredByBucket.merge(e.getKey(), e.getValue(), Integer::sum);
+			scoredBucketsByKind.computeIfAbsent(kind,
+					k -> new LinkedHashMap<>())
 					.merge(e.getKey(), e.getValue(), Integer::sum);
 		}
 		java.util.List<String> names = unmatchedNames.computeIfAbsent(kind,
@@ -426,6 +461,11 @@ public final class ComplianceRollup {
 		for (Map.Entry<String, Integer> e : byBucket.entrySet()) {
 			out.put(PREFIX + "Benchmark|" + e.getKey() + "|objects",
 					(double) e.getValue());
+			// Build 102 (issue #59): next to objects, same buckets, same
+			// hold-back rule; 0 when no object of the bucket was scored.
+			Integer sc = scoredByBucket.get(e.getKey());
+			out.put(PREFIX + "Benchmark|" + e.getKey() + "|scored_objects",
+					sc == null ? 0.0 : (double) sc);
 		}
 		return out;
 	}
