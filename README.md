@@ -319,3 +319,7 @@ The bundled benchmarks come from VMware's
 [vcf-security-and-compliance-guidelines](https://github.com/vmware/vcf-security-and-compliance-guidelines).
 This pack is part of the
 [VCF Content Factory](https://github.com/sentania-labs/vcf-content-factory).
+
+## License
+
+MIT, see `LICENSE` in this repository (the same license as the VCF Content Factory).
