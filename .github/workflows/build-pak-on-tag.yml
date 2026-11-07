@@ -85,6 +85,8 @@ jobs:
     # runner queues silently for ~24h instead of failing. Use `runs-on: lab`
     # only for a job that must reach lab resources.
     runs-on: ubuntu-latest
+    # Release secret lives in the protected sdk-release Environment (CI5).
+    environment: sdk-release
     permissions:
       contents: read      # read-only: no step in this job can write the repo
 
