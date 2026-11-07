@@ -62,8 +62,8 @@ env:
   # cannot reach a release build until this pin and checksum are changed
   # here, in review. To move to a new kit: take the tarball's line from that
   # release's SHA256SUMS and update both values together.
-  BUILDKIT_TAG: sdk-buildkit-v1.0.24
-  BUILDKIT_SHA256: 47d9cd25a0830046579dac7bb028ae2ea8ab0d19958c03449dbef2ca990e24ff
+  BUILDKIT_TAG: sdk-buildkit-v1.0.25
+  BUILDKIT_SHA256: 816f47728be6282f1b57009cbc7737832982f984ed6907e92cea618fd27d5124
   BUILDKIT_REPO: sentania-labs/vcf-content-factory
   # The private SDK runtime repo is fetched at this exact commit, never its
   # default-branch HEAD, and the jar is checked against SDK_JAR_SHA256 before
