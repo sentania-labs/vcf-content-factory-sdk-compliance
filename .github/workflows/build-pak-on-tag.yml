@@ -32,7 +32,8 @@
 #
 # Required secret: SDK_RUNTIME_SSH_KEY
 #   A read-only ed25519 deploy key for sentania-labs/vcf-content-factory-sdk-runtime.
-#   The Broadcom SDK jar (vrops-adapters-sdk-2.2.jar) is committed at the repo root of
+#   The Broadcom SDK jar for VCF Operations 9.0.2.0 build 25137845
+#   (vrops-adapters-sdk-9.0.2.0.25137845.jar) is committed at the repo root of
 #   that private repo and is never bundled in the factory or buildkit (C2 redistribution
 #   constraint). The jar is fetched with this deploy key at the pinned
 #   SDK_RUNTIME_COMMIT and verified against SDK_JAR_SHA256 (env, below).
@@ -62,8 +63,8 @@ env:
   # cannot reach a release build until this pin and checksum are changed
   # here, in review. To move to a new kit: take the tarball's line from that
   # release's SHA256SUMS and update both values together.
-  BUILDKIT_TAG: sdk-buildkit-v1.0.25
-  BUILDKIT_SHA256: 816f47728be6282f1b57009cbc7737832982f984ed6907e92cea618fd27d5124
+  BUILDKIT_TAG: sdk-buildkit-v1.0.27
+  BUILDKIT_SHA256: 0a9aa19c212535c0e1156bfe3732be62d8d0ab323e1d7946187508bad1250641
   BUILDKIT_REPO: sentania-labs/vcf-content-factory
   # The private SDK runtime repo is fetched at this exact commit, never its
   # default-branch HEAD, and the jar is checked against SDK_JAR_SHA256 before
@@ -72,8 +73,10 @@ env:
   # To move to a new commit or jar: take the sha256 from the runtime repo's
   # README (cross-check the factory's adapter_runtime/PROVENANCE.md) and
   # update all three values together.
-  SDK_RUNTIME_COMMIT: b92956cc7c9ede5d9cfb5bc499c10b2e8e85cb9e
-  SDK_JAR: vrops-adapters-sdk-2.2.jar
+  # cff8dbd is the runtime repo's rename of its jars to
+  # vrops-adapters-sdk-<version>.<build>.jar (2026-11-11): same bytes, same sha256.
+  SDK_RUNTIME_COMMIT: cff8dbd6eab2621428ad46e25a38dc0e23187b60
+  SDK_JAR: vrops-adapters-sdk-9.0.2.0.25137845.jar
   SDK_JAR_SHA256: 2d53a91fc2b9a99d9b685ed10c1e37a471c2f71f04e7ae0fb2c53fdaa14b4f54
 
 jobs:
