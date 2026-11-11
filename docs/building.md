@@ -20,9 +20,9 @@ build the `.pak`: the toolchain is a portable tarball. You need:
   by accident:
 
   ```
-  mkdir -p ~/vcf-ops-sdk && cd ~/vcf-ops-sdk
-  scp root@<appliance>:/usr/lib/vmware-vcops/common/lib/vrops-adapters-sdk.jar .
-  sha256sum vrops-adapters-sdk.jar
+  mkdir -p ~/vcf-ops-sdk
+  scp root@<appliance>:/usr/lib/vmware-vcops/common/lib/vrops-adapters-sdk.jar ~/vcf-ops-sdk/
+  sha256sum ~/vcf-ops-sdk/vrops-adapters-sdk.jar
   ```
 
   Look the hash up in the table under "Consumer contract" in the
@@ -42,10 +42,15 @@ build the `.pak`: the toolchain is a portable tarball. You need:
 Then, from the root of this repo:
 
 ```bash
+# Run as one block. The subshell stops at the first failure, so a checksum
+# mismatch never reaches the unpack or the build, and your own shell stays open.
+(
+set -e
 # 1. Fetch the build toolchain. Pin a full sdk-buildkit-vX.Y.Z tag (the
 #    floating sdk-buildkit-v1 tag moves under you) and verify the published
-#    checksum before unpacking. 1.0.27 is the version this repo's release
-#    workflow pins.
+#    checksum before unpacking. Use the version this repo's release
+#    workflow pins (BUILDKIT_TAG in .github/workflows/build-pak-on-tag.yml);
+#    1.0.27 at the time of writing.
 BUILDKIT_VERSION=1.0.27
 gh release download "sdk-buildkit-v$BUILDKIT_VERSION" \
   --repo sentania-labs/vcf-content-factory \
@@ -55,9 +60,9 @@ gh release download "sdk-buildkit-v$BUILDKIT_VERSION" \
 #   curl -fsSLO "$base/sdk-buildkit-$BUILDKIT_VERSION.tgz"
 #   curl -fsSLO "$base/sdk-buildkit-$BUILDKIT_VERSION.tgz.sha256"
 # Verify before unpacking. The strong check is against the hash this repo
-# commits for its release builds (BUILDKIT_SHA256 in the release workflow),
+# commits for its release builds (BUILDKIT_SHA256 in the same workflow),
 # which a replaced release asset cannot match:
-echo "$(awk '/^  BUILDKIT_SHA256:/{print $2}' .github/workflows/build-pak-on-tag.yml)  sdk-buildkit-$BUILDKIT_VERSION.tgz" | sha256sum -c -   # macOS: shasum -a 256 -c -
+echo "$(awk '/^  BUILDKIT_SHA256:/{print $2; exit}' .github/workflows/build-pak-on-tag.yml)  sdk-buildkit-$BUILDKIT_VERSION.tgz" | sha256sum -c -   # macOS: shasum -a 256 -c -
 # For a version other than the pinned one, the release's own sidecar only
 # proves the download is intact:
 #   sha256sum -c "sdk-buildkit-$BUILDKIT_VERSION.tgz.sha256"
@@ -67,6 +72,7 @@ tar xzf "sdk-buildkit-$BUILDKIT_VERSION.tgz"
 export VCFCF_SDK_JAR=~/vcf-ops-sdk/vrops-adapters-sdk-9.0.2.0.25137845.jar
 python3 -m sdk_buildkit validate-sdk .   # cheap loop: compile-check
 python3 -m sdk_buildkit build-sdk .      # emits the .pak
+)
 ```
 
 **Buildkit version: use the one the release workflow pins (1.0.27).**
