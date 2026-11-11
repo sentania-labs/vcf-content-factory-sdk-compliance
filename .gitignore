@@ -2,3 +2,8 @@ dist/
 *.pak
 __pycache__/
 *.generated.md
+
+# Build toolchain fetched by the "Building from source" steps: never commit it.
+sdk-buildkit-*.tgz
+sdk-buildkit-*.tgz.sha256
+sdk_buildkit/
