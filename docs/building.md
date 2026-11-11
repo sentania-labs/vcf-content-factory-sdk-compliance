@@ -3,58 +3,68 @@
 You don't need this repo's CI or the VCF Content Factory checkout to
 build the `.pak`: the toolchain is a portable tarball. You need:
 
-- **JDK 11+** (`javac` + `jar` on PATH)
+- **JDK 17+** (`javac` + `jar` on PATH; the 9.0.2 SDK jar's class files are Java 17)
 - **python3** with `pyyaml` (`python3 -m pip install pyyaml`)
 - **The GitHub CLI** (`gh`): used to download the build toolchain
   below. The factory repo is public, so no `gh auth login` is needed
   for the download (authenticate only if you hit anonymous API rate
   limits). No `gh`? See the `curl` alternative under step 1.
-- **The Broadcom adapter SDK jar** (`vrops-adapters-sdk-2.2.jar`).
-  This is a Broadcom build artifact with no public redistribution
-  channel: it is **never** bundled in the toolchain or this repo.
-  Get it from your own VCF Operations appliance:
+- **The Broadcom adapter SDK jar for VCF Operations 9.0.2**, and
+  **JDK 17 or newer** to read it. This is a Broadcom build artifact
+  with no public redistribution channel: it is **never** bundled in
+  the toolchain or this repo. The jar is different on every platform
+  version; the build compiles against the 9.0.2 one. Get it from a VCF
+  Operations 9.0.2 appliance, where it is
+  `/usr/lib/vmware-vcops/common/lib/vrops-adapters-sdk.jar`:
 
   ```
-  scp root@<appliance>:/usr/lib/vmware-vcops/common-lib/vrops-adapters-sdk-2.2.jar .
+  scp root@<appliance>:/usr/lib/vmware-vcops/common/lib/vrops-adapters-sdk.jar .
+  sha256sum vrops-adapters-sdk.jar
   ```
 
-  (Also present at
-  `/usr/lib/vmware-vcops/suite-api/WEB-INF/lib/vrops-adapters-sdk.jar`.
-  Partners can pull it from the Broadcom TAP / partner SDK portal
-  instead.)
+  Look the hash up in the table under "Consumer contract" in the
+  buildkit release notes. It lists the builds the kit recognises and the
+  file name it uses for each, `vrops-adapters-sdk-<version>.<build>.jar`
+  (for example `vrops-adapters-sdk-9.0.2.0.25137845.jar`); rename your
+  copy to match. The kit identifies the jar by its hash, so a jar from a
+  patched appliance is a different build with a different name. The same
+  section covers the optional 8.18.7 and 9.1.1 jars for the
+  compatibility checks. Partners can pull the jar from the Broadcom TAP
+  / partner SDK portal instead.
 
 Then, from the root of this repo:
 
 ```bash
-# 1. Fetch the build toolchain (pin a full sdk-buildkit-vX.Y.Z tag for
-#    reproducibility, or use the floating major sdk-buildkit-v1)
-gh release download sdk-buildkit-v1 \
+# 1. Fetch the build toolchain. Pin a full sdk-buildkit-vX.Y.Z tag (the
+#    floating sdk-buildkit-v1 tag moves under you) and verify the published
+#    checksum before unpacking. 1.0.27 is the version this repo's release
+#    workflow pins.
+BUILDKIT_VERSION=1.0.27
+gh release download "sdk-buildkit-v$BUILDKIT_VERSION" \
   --repo sentania-labs/vcf-content-factory \
-  --pattern 'sdk-buildkit-*.tgz'
-# No gh? The asset is public. Its file name carries the full version
-# (for example sdk-buildkit-1.0.10.tgz); look it up on the release page
-#   https://github.com/sentania-labs/vcf-content-factory/releases/tag/sdk-buildkit-v1
-# and fetch it with curl:
-#   curl -sLO https://github.com/sentania-labs/vcf-content-factory/releases/download/sdk-buildkit-v1/<asset-file-name>
-tar xzf sdk-buildkit-*.tgz
+  --pattern "sdk-buildkit-$BUILDKIT_VERSION.tgz*"
+# No gh? The assets are public; fetch both with curl instead:
+#   base=https://github.com/sentania-labs/vcf-content-factory/releases/download/sdk-buildkit-v$BUILDKIT_VERSION
+#   curl -fsSLO "$base/sdk-buildkit-$BUILDKIT_VERSION.tgz"
+#   curl -fsSLO "$base/sdk-buildkit-$BUILDKIT_VERSION.tgz.sha256"
+sha256sum -c "sdk-buildkit-$BUILDKIT_VERSION.tgz.sha256"   # macOS: shasum -a 256 -c
+tar xzf "sdk-buildkit-$BUILDKIT_VERSION.tgz"
 
 # 2. Point the kit at your SDK jar and build
-export VCFCF_SDK_JAR=/path/to/vrops-adapters-sdk-2.2.jar
+export VCFCF_SDK_JAR=/path/to/vrops-adapters-sdk-9.0.2.0.25137845.jar
 python3 -m sdk_buildkit validate-sdk .   # cheap loop: compile-check
 python3 -m sdk_buildkit build-sdk .      # emits the .pak
 ```
 
-**Buildkit version: 1.0.11 or later (since build 93).** Build 93
-overrides the framework's `certificateCheckUrls` hook (the Validate
-Connection certificate accept dialog), which first ships in
-sdk-buildkit 1.0.11. The override is marked `@Override` on purpose: with
-sdk-buildkit 1.0.10 or older, `validate-sdk` and `build-sdk` fail to
-compile with "method does not override or implement a method from a
-supertype" instead of building a pak that never offers the dialog. A
-tagged release of build 93 or later therefore needs the floating
-`sdk-buildkit-v1` tag (which CI uses) to point at 1.0.11 or later, or a
-pinned 1.0.11+ tag. A build inside a VCF Content Factory checkout
-compiles the framework from the checkout and is not affected.
+**Buildkit version: use the one the release workflow pins (1.0.27).**
+Build 104 needs sdk-buildkit 1.0.24 or later for the batched Suite API
+push, and build 93 needs 1.0.11 or later for the framework's
+`certificateCheckUrls` hook (the Validate Connection certificate accept
+dialog). Both overrides are compiled against the kit's framework, so an
+older kit fails `validate-sdk` and `build-sdk` at compile time instead of
+building a pak that lacks the feature. A build inside a VCF Content
+Factory checkout compiles the framework from the checkout and is not
+affected.
 
 **Profile data contract.** The bundled profiles under
 `profiles/canonical/` follow [CANONICAL_SCHEMA.md](../CANONICAL_SCHEMA.md),
